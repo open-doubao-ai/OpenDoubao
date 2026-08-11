@@ -7,7 +7,7 @@ Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove d
 Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
 **without going through the LLM again, no more token cost**.
 
-No SQL execution path. **Writes or sensitive reads** (default: `put`, `delete`, 'gets', 'heads') wait in the Admin approval queue.
+No SQL execution path. **Writes or sensitive reads** wait in the Admin approval queue.
 
 ![](https://github.com/user-attachments/assets/27928660-ab00-41ec-ad2a-fd318eaeacf5)
 ![](https://github.com/user-attachments/assets/173aa5ac-84ce-40c3-9453-1d98051585b3)
