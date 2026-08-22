@@ -5,6 +5,15 @@
 
 import { t } from "./i18n/index.js";
 import { visitorId } from "./layout-social.js";
+import {
+  fetchAuthorFeed,
+} from "./layout-actions.js";
+import {
+  inferAuthorIdField,
+  inferDateOrderField,
+  inferItemTableForApp,
+} from "./layout-category.js";
+import { collectRowImageUrls } from "./smart-image-fields.js";
 import type { LayoutDetailHandlers } from "./layout-views.js";
 import {
   formatCount,
@@ -40,6 +49,7 @@ export type UserProfileOpts = {
   handlers: LayoutDetailHandlers;
   primaryTable?: string | null;
   recordId?: string | number | null;
+  comments?: SchemaComments | null;
 };
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -359,10 +369,8 @@ export function renderUserProfile(host: HTMLElement, opts: UserProfileOpts): voi
       renderJjAuthor(app, opts);
       break;
     case "social":
-      renderWxProfile(app, opts);
-      break;
     case "chat":
-      renderChatProfile(app, opts);
+      renderPersonProfile(app, opts);
       break;
     case "campaign":
       renderCampHost(app, opts);
@@ -396,6 +404,10 @@ function bindPersonActions(
   if (messageBtn) {
     messageBtn.onclick = () => {
       if (id == null) return;
+      if (opts.handlers.onOpenChat) {
+        opts.handlers.onOpenChat(id);
+        return;
+      }
       void opts.handlers.onActionSlot?.("message", {
         record: opts.row.cells,
         visitorId: visitorId(),
@@ -531,41 +543,356 @@ function renderJjAuthor(app: HTMLElement, opts: UserProfileOpts) {
   app.appendChild(page);
 }
 
-function renderWxProfile(app: HTMLElement, opts: UserProfileOpts) {
-  const page = el("div", "up-wx-page");
-  page.appendChild(thumb(opts.pres.coverUrl, opts.apijsonBase, "up-wx-cover", ""));
+function cellValue(row: FlatRow, names: string[]): string {
+  for (const [path, raw] of Object.entries(row.cells)) {
+    const col = (path.includes(".") ? path.slice(path.lastIndexOf(".") + 1) : path)
+      .replace(/[^a-z0-9\u4e00-\u9fff]/gi, "")
+      .toLowerCase();
+    if (!names.some((n) => col === n || col.endsWith(n))) continue;
+    if (raw == null) continue;
+    const text = typeof raw === "string" ? raw.trim() : String(raw).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function sexMark(sex: string): string {
+  if (sex === t("layout.me.sexFemale")) return "♀";
+  if (sex === t("layout.me.sexMale")) return "♂";
+  return "";
+}
+
+type ProfileRel = {
+  remark?: string;
+  tags?: string;
+  blocked?: boolean;
+  hideTheirFeed?: boolean;
+  hideMine?: boolean;
+};
+
+const REL_KEY = "a2api.profile.rel";
+
+function relStore(): Record<string, ProfileRel> {
+  try {
+    return JSON.parse(localStorage.getItem(REL_KEY) || "{}") as Record<
+      string,
+      ProfileRel
+    >;
+  } catch {
+    return {};
+  }
+}
+
+function relKey(target: string | number): string {
+  return `${visitorId() ?? "anon"}:${target}`;
+}
+
+function readRel(target: string | number): ProfileRel {
+  return relStore()[relKey(target)] || {};
+}
+
+function writeRel(target: string | number, patch: ProfileRel) {
+  const all = relStore();
+  all[relKey(target)] = { ...readRel(target), ...patch };
+  localStorage.setItem(REL_KEY, JSON.stringify(all));
+}
+
+function profileNote(text: string) {
+  document.getElementById("layout-toast")?.remove();
+  const toast = el("div", "layout-toast", text);
+  toast.id = "layout-toast";
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 1600);
+}
+
+function askLine(
+  title: string,
+  placeholder: string,
+  initial = "",
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const mask = el("div", "layout-ask-mask");
+    const box = el("div", "layout-ask");
+    box.appendChild(el("div", "layout-ask-title", title));
+    const input = document.createElement("input");
+    input.className = "layout-ask-input";
+    input.placeholder = placeholder;
+    input.value = initial;
+    const row = el("div", "layout-ask-actions");
+    const cancel = el("button", "app-chip", t("common.cancel"));
+    cancel.type = "button";
+    const ok = el("button", "layout-btn layout-btn-primary", t("common.save"));
+    ok.type = "button";
+    const finish = (value: string | null) => {
+      mask.remove();
+      resolve(value);
+    };
+    cancel.onclick = () => finish(null);
+    ok.onclick = () => finish(input.value.trim());
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        finish(input.value.trim());
+      }
+      if (ev.key === "Escape") finish(null);
+    });
+    row.append(cancel, ok);
+    box.append(input, row);
+    mask.appendChild(box);
+    mask.addEventListener("click", (ev) => {
+      if (ev.target === mask) finish(null);
+    });
+    document.body.appendChild(mask);
+    input.focus();
+    input.select();
+  });
+}
+
+function actionCell(
+  label: string,
+  value: string,
+  onClick: () => void,
+): HTMLButtonElement {
+  const row = el("button", "up-wx-cell") as HTMLButtonElement;
+  row.type = "button";
+  row.append(
+    el("div", "up-wx-cell-k", label),
+    el("div", "up-wx-cell-v", value || t("layout.me.empty")),
+    el("div", "up-wx-cell-go", "›"),
+  );
+  row.onclick = onClick;
+  return row;
+}
+
+function toggleCell(
+  label: string,
+  on: boolean,
+  change: (next: boolean) => void,
+): HTMLElement {
+  const row = el("label", "me-toggle up-wx-toggle");
+  row.appendChild(el("span", "me-lab", label));
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = on;
+  input.onchange = () => change(input.checked);
+  row.appendChild(input);
+  return row;
+}
+
+function renderPersonProfile(app: HTMLElement, opts: UserProfileOpts) {
+  const target = opts.recordId ?? opts.pres.id ?? opts.pres.authorId;
+  const page = el("div", "up-chat-page up-wx-contact up-wx-profile");
+  page.appendChild(el("div", "layout-kicker", t("layout.page.profile")));
   const ident = el("div", "up-wx-ident");
   ident.appendChild(thumb(opts.pres.coverUrl, opts.apijsonBase, "up-wx-av-lg", ""));
   const who = el("div");
-  who.appendChild(el("h1", "layout-title", opts.pres.title));
-  who.appendChild(el("div", "layout-meta", opts.pres.subtitle || opts.pres.date));
+  const nameRow = el("div", "up-wx-name-row");
+  nameRow.appendChild(el("h1", "layout-title", opts.pres.title));
+  const mark = sexMark(opts.pres.sex);
+  if (mark) nameRow.appendChild(el("span", "up-wx-sex", mark));
+  who.appendChild(nameRow);
+  if (opts.pres.sex) who.appendChild(el("div", "layout-meta", opts.pres.sex));
   ident.appendChild(who);
   page.appendChild(ident);
-  if (opts.pres.body) page.appendChild(el("div", "up-wx-sign", opts.pres.body));
+
+  const sign =
+    opts.pres.body ||
+    cellValue(opts.row, ["tag", "sign", "signature", "motto", "bio", "intro"]);
+  const phone = opts.pres.phone || cellValue(opts.row, ["phone", "mobile", "tel"]);
+  const info = el("div", "up-wx-cells");
+  const addInfo = (label: string, value: string) => {
+    if (!value) return;
+    const row = el("div", "up-wx-cell");
+    row.append(el("div", "up-wx-cell-k", label), el("div", "up-wx-cell-v", value));
+    info.appendChild(row);
+  };
+  addInfo(t("layout.users.signature"), sign);
+  addInfo(t("layout.users.phone"), phone);
+  addInfo(t("layout.me.age"), opts.pres.age);
+  if (info.childElementCount) page.appendChild(info);
+
+  const rel = target != null ? readRel(target) : {};
+  const relBox = el("div", "up-wx-cells");
+  const remarkCell = actionCell(
+    t("layout.users.remark"),
+    rel.remark || "",
+    () => {
+      if (target == null) return;
+      void askLine(
+        t("layout.users.remark"),
+        t("layout.users.addRemark"),
+        readRel(target).remark || "",
+      ).then((next) => {
+        if (next == null) return;
+        writeRel(target, { remark: next });
+        remarkCell.querySelector(".up-wx-cell-v")!.textContent =
+          next || t("layout.me.empty");
+      });
+    },
+  );
+  const tagsCell = actionCell(
+    t("layout.users.tags"),
+    rel.tags || "",
+    () => {
+      if (target == null) return;
+      void askLine(
+        t("layout.users.tags"),
+        t("layout.users.addTags"),
+        readRel(target).tags || "",
+      ).then((next) => {
+        if (next == null) return;
+        writeRel(target, { tags: next });
+        tagsCell.querySelector(".up-wx-cell-v")!.textContent =
+          next || t("layout.me.empty");
+      });
+    },
+  );
+  relBox.append(remarkCell, tagsCell);
+  page.appendChild(relBox);
+
+  const feedHost = el("div", "up-wx-moments");
+  feedHost.appendChild(el("h3", "up-h", t("layout.users.moments")));
+  page.appendChild(feedHost);
+  void paintAuthorFeed(feedHost, opts, target);
+
+  const more = el("div", "up-wx-cells");
+  const share = el("button", "up-wx-cell");
+  share.type = "button";
+  share.append(
+    el("div", "up-wx-cell-k", t("layout.share")),
+    el("div", "up-wx-cell-v", ""),
+    el("div", "up-wx-cell-go", "›"),
+  );
+  share.onclick = () => {
+    void navigator.clipboard?.writeText(location.href).catch(() => undefined);
+    if (target != null) {
+      void opts.handlers.onActionSlot?.("share", {
+        record: opts.row.cells,
+        visitorId: visitorId(),
+        authorId: target,
+      });
+    }
+    profileNote(t("layout.shared"));
+  };
+  more.appendChild(share);
+  more.appendChild(
+    toggleCell(t("layout.users.hideTheirFeed"), !!rel.hideTheirFeed, (v) => {
+      if (target == null) return;
+      writeRel(target, { hideTheirFeed: v });
+    }),
+  );
+  more.appendChild(
+    toggleCell(t("layout.users.hideMine"), !!rel.hideMine, (v) => {
+      if (target == null) return;
+      writeRel(target, { hideMine: v });
+    }),
+  );
+  const block = el("button", "up-wx-cell up-wx-cell-danger");
+  block.type = "button";
+  const setBlockLabel = () => {
+    const now = target != null ? readRel(target).blocked : rel.blocked;
+    block.replaceChildren(
+      el("div", "up-wx-cell-k", now ? t("layout.users.unblock") : t("layout.users.block")),
+      el("div", "up-wx-cell-v", ""),
+      el("div", "up-wx-cell-go", "›"),
+    );
+  };
+  setBlockLabel();
+  block.onclick = () => {
+    if (target == null) return;
+    const next = !readRel(target).blocked;
+    writeRel(target, { blocked: next });
+    setBlockLabel();
+    profileNote(next ? t("layout.users.blocked") : t("layout.users.unblocked"));
+  };
+  more.appendChild(block);
+  page.appendChild(more);
+
   const actions = el("div", "up-wx-actions");
   const follow = el("button", "layout-btn", t("layout.follow"));
   follow.type = "button";
-  const msg = el("button", "layout-btn layout-btn-primary", t("layout.message"));
+  const msg = el("button", "wx-send", t("layout.message"));
   msg.type = "button";
   actions.append(follow, msg);
   page.appendChild(actions);
-  const related = relatedBlock(opts, t("layout.page.feed"), "up-wx-moments");
-  if (related) page.appendChild(related);
   bindPersonActions(opts, follow, msg);
   app.appendChild(page);
 }
 
-function renderChatProfile(app: HTMLElement, opts: UserProfileOpts) {
-  const page = el("div", "up-chat-page");
-  page.appendChild(thumb(opts.pres.coverUrl, opts.apijsonBase, "up-chat-av-xl", ""));
-  page.appendChild(el("h1", "layout-title", opts.pres.title));
-  page.appendChild(el("div", "layout-meta", opts.pres.subtitle || t("layout.users.addressBook")));
-  if (opts.pres.body) page.appendChild(el("div", "up-bio", opts.pres.body));
-  const msg = el("button", "wx-send", t("layout.message"));
-  msg.type = "button";
-  page.appendChild(msg);
-  bindPersonActions(opts, undefined, msg);
-  app.appendChild(page);
+async function paintAuthorFeed(
+  host: HTMLElement,
+  opts: UserProfileOpts,
+  authorId: string | number | null,
+) {
+  const table = inferItemTableForApp("social", opts.comments);
+  const authorField = table
+    ? inferAuthorIdField(table, opts.comments)
+    : null;
+  const openFeed = () => {
+    if (authorId == null || !table || !authorField) {
+      profileNote(t("layout.users.momentsEmpty"));
+      return;
+    }
+    opts.handlers.onOpenFkList?.({
+      table,
+      ids: [authorId],
+      field: authorField,
+    });
+  };
+  const mount = (urls: string[]) => {
+    host.replaceChildren();
+    const hit = el("button", "up-wx-moments-hit");
+    hit.type = "button";
+    hit.onclick = openFeed;
+    const head = el("div", "up-wx-moments-head");
+    head.append(
+      el("h3", "up-h", t("layout.users.moments")),
+      el("span", "up-wx-cell-go", "›"),
+    );
+    hit.appendChild(head);
+    if (!urls.length) {
+      hit.appendChild(el("div", "layout-meta", t("layout.users.momentsEmpty")));
+    } else {
+      const row = el("div", "up-wx-moments-row");
+      for (const url of urls.slice(0, 3)) {
+        row.appendChild(thumb(url, opts.apijsonBase, "up-wx-moments-pic", ""));
+      }
+      hit.appendChild(row);
+    }
+    host.appendChild(hit);
+  };
+
+  if (authorId == null || !opts.apijsonBase || !table || !authorField) {
+    mount([]);
+    return;
+  }
+  try {
+    const rows = await fetchAuthorFeed({
+      base: opts.apijsonBase,
+      table,
+      authorField,
+      authorId,
+      dateField: inferDateOrderField(table, opts.comments),
+      count: 8,
+    });
+    const urls: string[] = [];
+    for (const row of rows) {
+      for (const url of collectRowImageUrls(
+        row.cells,
+        table,
+        Object.keys(row.cells),
+        opts.comments,
+      )) {
+        if (urls.includes(url)) continue;
+        urls.push(url);
+        if (urls.length >= 3) break;
+      }
+      if (urls.length >= 3) break;
+    }
+    mount(urls);
+  } catch {
+    mount([]);
+  }
 }
 
 function renderCampHost(app: HTMLElement, opts: UserProfileOpts) {

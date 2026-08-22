@@ -14,6 +14,7 @@ import {
 import { collectRowImageUrls } from "./smart-image-fields.js";
 import { renderUserList, renderUserProfile } from "./layout-users.js";
 import { renderMeSurface } from "./layout-me.js";
+import { fillChatBubble, mountChatComposer } from "./layout-chat.js";
 import {
   parseCommentsFromResponse,
   type ActionRunContext,
@@ -95,7 +96,13 @@ export type LayoutDetailHandlers = {
   onBuyNow?: () => void;
   onCheckout?: (info: LayoutCheckoutInfo) => void;
   onOpenCheckout?: () => void;
-  onOpenRelated?: (id: string | number) => void;
+  onOpenRelated?: (id: string | number, table?: string) => void;
+  onOpenChat?: (userId: string | number) => void;
+  onOpenFkList?: (info: {
+    table: string;
+    ids: Array<string | number>;
+    field?: string;
+  }) => void;
   onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
   onOpenAuthor?: (userId: string | number) => void;
   onSearch?: (q: string) => void;
@@ -836,8 +843,12 @@ export function renderLayoutDetailHero(
   const specPage = opts.spec?.page;
   const specApp = listApp(opts);
 
-  if (specPage === "profile") return;
-  if (isUserLayoutPage(specPage)) {
+  if (specPage === "profile") {
+    const me = visitorId();
+    const self =
+      me != null &&
+      String(opts.recordId ?? pres.id ?? "") === String(me);
+    if (opts.kind === "data" && self) return;
     renderUserProfile(host, {
       app: specApp,
       pres,
@@ -847,6 +858,25 @@ export function renderLayoutDetailHero(
       handlers: opts.handlers,
       primaryTable: opts.primaryTable,
       recordId: opts.recordId ?? pres.id,
+      comments: opts.comments,
+    });
+    const titleEl = document.getElementById("page-title-input");
+    if (titleEl instanceof HTMLInputElement) {
+      titleEl.value = t("layout.page.profile");
+    }
+    return;
+  }
+  if (specPage === "users" || isUserLayoutPage(specPage)) {
+    renderUserProfile(host, {
+      app: specApp,
+      pres,
+      row: opts.row,
+      related,
+      apijsonBase: opts.apijsonBase,
+      handlers: opts.handlers,
+      primaryTable: opts.primaryTable,
+      recordId: opts.recordId ?? pres.id,
+      comments: opts.comments,
     });
     return;
   }
@@ -1799,17 +1829,36 @@ function renderWechatThread(
 ) {
   const page = el("div", "wx-page");
   const head = el("div", "wx-head");
-  head.appendChild(el("div", "wx-head-title", pres.author || pres.title));
+  const headTitle = el("div", "wx-head-title", pres.author || pres.title);
+  if (pres.authorId != null) {
+    headTitle.classList.add("author-link");
+    headTitle.setAttribute("role", "button");
+    headTitle.onclick = () => opts.handlers.onOpenAuthor?.(pres.authorId!);
+  }
+  head.appendChild(headTitle);
+  const headTools = el("div", "wx-head-tools");
+  const voiceHead = el("button", "wx-head-btn", "📞");
+  voiceHead.type = "button";
+  voiceHead.title = t("layout.im.voiceCall");
+  const videoHead = el("button", "wx-head-btn", "📹");
+  videoHead.type = "button";
+  videoHead.title = t("layout.im.videoCall");
+  headTools.append(voiceHead, videoHead);
+  head.appendChild(headTools);
   page.appendChild(head);
   const thread = el("div", "wx-thread");
   const msgs = [
     { pres, mine: false },
     ...related.slice(0, 16).map((r, i) => ({ pres: r.pres, mine: i % 2 === 0 })),
   ];
-  for (const m of msgs) {
-    const row = el("div", "wx-row" + (m.mine ? " is-mine" : ""));
-    const personId = m.mine ? visitorId() : m.pres.authorId;
-    const av = thumb(m.pres.coverUrl, opts.apijsonBase, "wx-av", "");
+  const pushBubble = (
+    text: string,
+    mine: boolean,
+    meta?: { author?: string; date?: string; cover?: string | null; personId?: string | number | null },
+  ) => {
+    const row = el("div", "wx-row" + (mine ? " is-mine" : ""));
+    const personId = meta?.personId ?? (mine ? visitorId() : null);
+    const av = thumb(meta?.cover ?? pres.coverUrl, opts.apijsonBase, "wx-av", "");
     if (personId != null) {
       av.classList.add("author-link");
       av.setAttribute("role", "button");
@@ -1817,64 +1866,44 @@ function renderWechatThread(
     }
     row.appendChild(av);
     const bubble = el("div", "wx-bubble");
-    bubble.appendChild(el("div", "wx-name", m.pres.author || ""));
-    bubble.appendChild(el("div", "wx-text", m.pres.body || m.pres.title));
-    if (m.pres.date) bubble.appendChild(el("div", "wx-time", m.pres.date));
-    row.appendChild(bubble);
-    thread.appendChild(row);
-  }
-  page.appendChild(thread);
-  const composer = el("div", "wx-composer");
-  const input = document.createElement("input");
-  input.className = "wx-input";
-  input.placeholder = t("layout.composerHint");
-  const send = el("button", "wx-send", t("layout.send"));
-  send.type = "button";
-  const pushMine = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    const row = el("div", "wx-row is-mine");
-    const mineAv = thumb(pres.coverUrl, opts.apijsonBase, "wx-av", "");
-    const mineId = visitorId();
-    if (mineId != null) {
-      mineAv.classList.add("author-link");
-      mineAv.onclick = () => opts.handlers.onOpenAuthor?.(mineId);
-    }
-    row.appendChild(mineAv);
-    const bubble = el("div", "wx-bubble");
-    bubble.appendChild(el("div", "wx-text", trimmed));
+    if (meta?.author) bubble.appendChild(el("div", "wx-name", meta.author));
+    fillChatBubble(bubble, text, opts.apijsonBase);
+    if (meta?.date) bubble.appendChild(el("div", "wx-time", meta.date));
     row.appendChild(bubble);
     thread.appendChild(row);
     thread.scrollTop = thread.scrollHeight;
   };
-  send.onclick = () => {
-    void (async () => {
-      const text = input.value.trim();
-      if (!text) return;
-      const result = await runActionSlot(
-        opts.handlers,
-        "message",
-        {
-          record: { ...(opts.row?.cells ?? {}), id: opts.recordId ?? pres.id },
-          visitorId: visitorId(),
-          authorId: pres.authorId,
-          input: text,
-        },
-      );
-      if (!result.ok) return;
-      pushMine(text);
-      input.value = "";
+  for (const m of msgs) {
+    pushBubble(m.pres.body || m.pres.title, m.mine, {
+      author: m.pres.author,
+      date: m.pres.date,
+      cover: m.pres.coverUrl,
+      personId: m.mine ? visitorId() : m.pres.authorId,
+    });
+  }
+  page.appendChild(thread);
+  const composer = mountChatComposer({
+    apijsonBase: opts.apijsonBase,
+    onNote: (msg) => flashLayoutNote(msg),
+    onSend: async (text) => {
+      const result = await runActionSlot(opts.handlers, "message", {
+        record: { ...(opts.row?.cells ?? {}), id: opts.recordId ?? pres.id },
+        visitorId: visitorId(),
+        authorId: pres.authorId,
+        input: text,
+      });
+      if (!result.ok) return false;
+      pushBubble(text, true, { cover: pres.coverUrl, personId: visitorId() });
       flashLayoutNote(t("layout.messageSent"));
-    })();
-  };
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-      ev.preventDefault();
-      send.click();
-    }
+      return true;
+    },
   });
-  composer.append(input, send);
   page.appendChild(composer);
+  const clickTool = (id: string) => {
+    composer.querySelector<HTMLButtonElement>(`[data-chat-tool="${id}"]`)?.click();
+  };
+  voiceHead.onclick = () => clickTool("voiceCall");
+  videoHead.onclick = () => clickTool("videoCall");
   app.appendChild(page);
 }
 
@@ -2546,5 +2575,9 @@ export function shouldHideDetailForm(
 ): boolean {
   if (isCartOrOrder(kind) || isCartOrOrder(spec)) return true;
   if (isOrdersPage(spec?.page) || isAddressPage(spec?.page)) return true;
+  if (spec?.page === "users" && spec.app !== "data") return true;
+  if (spec?.page === "profile" && spec.app !== "data" && kind !== "data") {
+    return true;
+  }
   return false;
 }

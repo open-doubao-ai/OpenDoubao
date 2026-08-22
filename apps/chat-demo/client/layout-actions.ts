@@ -347,7 +347,56 @@ function pickId(obj: Record<string, unknown>): string | number | null {
   return null;
 }
 
-/** Parse a bound comment-list GET — any table shape, scored fields. */
+export type AuthorFeedItem = {
+  id: string | number;
+  cells: Record<string, unknown>;
+};
+
+/** Latest posts by one author — table/field names come from comments. */
+export async function fetchAuthorFeed(opts: {
+  base: string;
+  table: string;
+  authorField: string;
+  authorId: string | number;
+  dateField?: string | null;
+  count?: number;
+}): Promise<AuthorFeedItem[]> {
+  const item: Record<string, unknown> = {
+    [opts.authorField]: opts.authorId,
+  };
+  if (opts.dateField) item["@order"] = `${opts.dateField}-`;
+  const json = await fetchBoundGet(opts.base, {
+    "[]": {
+      [opts.table]: item,
+      count: opts.count ?? 6,
+      query: 2,
+    },
+  });
+  if (!json) return [];
+  const list = Array.isArray(json["[]"])
+    ? json["[]"]
+    : Array.isArray(json.list)
+      ? json.list
+      : [];
+  const out: AuthorFeedItem[] = [];
+  for (const raw of list) {
+    const row = asRecord(raw);
+    if (!row) continue;
+    const rec =
+      asRecord(row[opts.table]) ||
+      firstNestedRecords(row)[0] ||
+      row;
+    const id = pickId(rec);
+    if (id == null) continue;
+    const cells: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      cells[`${opts.table}.${k}`] = v;
+    }
+    out.push({ id, cells });
+  }
+  return out;
+}
+
 export function parseCommentsFromResponse(json: unknown): SocialComment[] {
   if (!json || typeof json !== "object") return [];
   const root = json as Record<string, unknown>;

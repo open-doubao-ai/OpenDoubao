@@ -197,6 +197,61 @@ export function inferAppScopeField(
   return pickField(table, comments, APP_SCOPE_TOKENS, extra);
 }
 
+const AUTHOR_ID_TOKENS = [
+  "userid",
+  "authorid",
+  "ownerid",
+  "uid",
+  "publisherid",
+  "作者",
+];
+
+const DATE_ORDER_TOKENS = [
+  "date",
+  "time",
+  "created",
+  "createtime",
+  "createdat",
+  "published",
+  "publishtime",
+  "updatetime",
+  "时间",
+  "日期",
+];
+
+export function inferAuthorIdField(
+  table: string,
+  comments: SchemaComments | null | undefined,
+  extra?: string[],
+): string | null {
+  return pickField(table, comments, AUTHOR_ID_TOKENS, extra);
+}
+
+export function inferDateOrderField(
+  table: string,
+  comments: SchemaComments | null | undefined,
+  extra?: string[],
+): string | null {
+  return pickField(table, comments, DATE_ORDER_TOKENS, extra);
+}
+
+const PEER_ID_TOKENS = [
+  "toid",
+  "touserid",
+  "receiverid",
+  "targetid",
+  "peerid",
+  "对方",
+];
+
+export function inferPeerIdField(
+  table: string,
+  comments: SchemaComments | null | undefined,
+  extra?: string[],
+): string | null {
+  return pickField(table, comments, PEER_ID_TOKENS, extra);
+}
+
 function inferSortField(
   table: string,
   comments: SchemaComments | null | undefined,

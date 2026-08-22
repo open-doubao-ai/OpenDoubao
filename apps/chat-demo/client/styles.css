@@ -4754,11 +4754,17 @@ button.linkish.danger-link {
 .yt-avatar-lg,
 .jj-av,
 .jj-av-lg,
-.wx-av,
 .tt-av {
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 50%;
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.wx-av {
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--line) 40%, transparent);
 }
 
@@ -5757,11 +5763,53 @@ button.linkish.danger-link {
 
 .wx-head {
   flex: 0 0 auto;
-  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: relative;
+  padding: 10px 72px 10px 14px;
   text-align: center;
   font-weight: 700;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.wx-head-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wx-head-tools {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 4px;
+}
+
+.wx-head-btn,
+.wx-tool {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.wx-tool.is-on,
+.wx-head-btn:hover,
+.wx-tool:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .wx-thread {
@@ -5818,20 +5866,238 @@ button.linkish.danger-link {
   word-break: break-word;
 }
 
-.wx-composer {
-  display: flex;
-  gap: 8px;
-  padding: 8px 10px 10px;
+.wx-dock {
+  flex: 0 0 auto;
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 94%, transparent);
 }
 
+.wx-composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
 .wx-input {
   flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.wx-hold {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 650;
+  user-select: none;
+  touch-action: none;
+}
+
+.wx-hold.is-rec {
+  background: #e54d42;
+  color: #fff;
+  border-color: #e54d42;
+}
+
+.wx-panel {
+  padding: 8px 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.wx-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.wx-emoji {
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.2rem;
+}
+
+.wx-emoji:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.wx-plus-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px 8px;
+}
+
+.wx-plus {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.wx-plus-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-size: 1.2rem;
+}
+
+.wx-plus-lab {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.wx-img {
+  display: block;
+  max-width: min(220px, 56vw);
+  max-height: 220px;
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+
+.wx-voice,
+.wx-file,
+.wx-loc,
+.wx-pack,
+.wx-xfer,
+.wx-call-rec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.wx-voice {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.wx-pack,
+.wx-xfer {
+  padding: 8px 4px;
+  min-width: 160px;
   border-radius: 6px;
 }
 
+.wx-pack {
+  background: #e54d42;
+  color: #fff6e8;
+}
+
+.wx-xfer {
+  background: #f2a73b;
+  color: #3b2208;
+}
+
+.wx-pack-amt {
+  font-weight: 700;
+}
+
+.wx-pack-note,
+.wx-pack-ico {
+  font-size: 0.85rem;
+}
+
+.wx-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.wx-sheet-box {
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 16px 16px 0 0;
+  background: var(--panel);
+}
+
+.wx-sheet-title {
+  font-weight: 700;
+}
+
+.wx-sheet-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.wx-call {
+  position: fixed;
+  inset: 0;
+  z-index: 92;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #11181c;
+  color: #fff;
+}
+
+.wx-call-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.wx-call-time {
+  color: #b7c0c8;
+}
+
+.wx-call-video {
+  width: min(360px, 80vw);
+  max-height: 40vh;
+  border-radius: 12px;
+  background: #000;
+}
+
+.wx-call-hang {
+  width: 64px;
+  height: 64px;
+  border: none;
+  border-radius: 32px;
+  background: #e54d42;
+  color: #fff;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 .wx-send {
+  flex: 0 0 auto;
+  height: 36px;
   background: #07c160;
   color: #fff;
   border: none;
@@ -5839,6 +6105,12 @@ button.linkish.danger-link {
   padding: 0 14px;
   font-weight: 650;
   cursor: pointer;
+}
+
+.wx-file-ico,
+.wx-loc-pin {
+  flex: 0 0 auto;
+  font-size: 1.25rem;
 }
 
 .wx-conv-list .layout-chat-row {
@@ -6509,6 +6781,12 @@ button.linkish.danger-link {
   resize: vertical;
 }
 
+input.layout-ask-input {
+  min-height: 36px;
+  height: 36px;
+  resize: none;
+}
+
 .layout-ask-actions {
   display: flex;
   justify-content: flex-end;
@@ -6733,13 +7011,20 @@ button.linkish.danger-link {
 .up-sp-av,
 .up-news-av,
 .up-jj-av,
-.up-wx-av,
-.up-chat-av,
 .up-data-av {
   width: 48px;
   height: 48px;
   flex: 0 0 48px;
   border-radius: 50%;
+  overflow: hidden;
+}
+
+.up-wx-av,
+.up-chat-av {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border-radius: 10px;
   overflow: hidden;
 }
 
@@ -6815,13 +7100,20 @@ button.linkish.danger-link {
 .up-az-av-lg,
 .up-news-av-lg,
 .up-jj-av-lg,
-.up-wx-av-lg,
-.up-chat-av-xl,
 .up-camp-av-lg,
 .up-data-av-lg {
   width: 88px;
   height: 88px;
   border-radius: 50%;
+  overflow: hidden;
+  flex: 0 0 88px;
+}
+
+.up-wx-av-lg,
+.up-chat-av-xl {
+  width: 88px;
+  height: 88px;
+  border-radius: 16px;
   overflow: hidden;
   flex: 0 0 88px;
 }
@@ -6846,6 +7138,51 @@ button.linkish.danger-link {
 .up-wx-moments,
 .up-camp-more {
   margin-top: 16px;
+}
+
+.up-wx-moments-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.up-wx-moments-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.up-wx-moments-head .up-h {
+  margin: 0;
+}
+
+.up-wx-moments-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.up-wx-moments-pic {
+  flex: 1 1 0;
+  aspect-ratio: 1;
+  max-width: calc((100% - 12px) / 3);
+  border-radius: 8px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.up-wx-moments-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .up-related {
@@ -6874,6 +7211,85 @@ button.linkish.danger-link {
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+.up-wx-contact {
+  width: 100%;
+  max-width: 520px;
+}
+
+.up-wx-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.up-wx-sex {
+  color: var(--accent);
+  font-size: 1.1rem;
+}
+
+.up-wx-cells {
+  width: 100%;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.up-wx-cell {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 12px 0;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: default;
+}
+
+button.up-wx-cell {
+  cursor: pointer;
+}
+
+button.up-wx-cell:hover .up-wx-cell-go {
+  color: var(--accent);
+}
+
+.up-wx-cell-go {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.up-wx-cell-danger .up-wx-cell-k {
+  color: #e54d42;
+}
+
+.up-wx-profile .up-wx-toggle {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.up-wx-cell-k {
+  flex: 0 0 88px;
+  color: var(--muted);
+}
+
+.up-wx-cell-v {
+  flex: 1;
+  word-break: break-word;
+}
+
+.up-wx-contact .up-wx-actions {
+  flex-direction: column;
+  width: 100%;
+  margin-top: 20px;
+}
+
+.up-wx-contact .wx-send {
+  width: 100%;
 }
 
 .up-chat-page,
@@ -7198,13 +7614,13 @@ button.linkish.danger-link {
 .me-fav-img {
   width: 56px;
   height: 56px;
-  border-radius: 50%;
+  border-radius: 12px;
 }
 
 .me-av-lg {
   width: 88px;
   height: 88px;
-  border-radius: 50%;
+  border-radius: 16px;
   margin: 0 auto;
 }
 

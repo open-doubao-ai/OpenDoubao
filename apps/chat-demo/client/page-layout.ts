@@ -365,6 +365,33 @@ const USER_DETAIL_I18N: Partial<Record<LayoutApp, `layout.users.detail.${LayoutA
   data: "layout.users.detail.data",
 };
 
+export function layoutUserDetailLabel(app?: LayoutApp): string {
+  if (app) {
+    const key = USER_DETAIL_I18N[app];
+    if (key) return t(key);
+  }
+  return t("layout.users.detail.data");
+}
+
+/** Contact / channel / store page — not the “Me” hub (`user`). */
+export function contactLayoutFor(
+  from: { layoutKind?: LayoutKind; layoutSpec?: LayoutSpec },
+): { layoutKind: LayoutKind; layoutSpec: LayoutSpec } {
+  const hinted = from.layoutSpec?.app;
+  const app =
+    hinted && hinted !== "data"
+      ? hinted
+      : appFromKind(from.layoutKind);
+  const kind: LayoutKind =
+    from.layoutKind &&
+    from.layoutKind !== "data" &&
+    from.layoutKind !== "cart" &&
+    from.layoutKind !== "order"
+      ? from.layoutKind
+      : app;
+  return { layoutKind: kind, layoutSpec: { app, page: "profile" } };
+}
+
 export function layoutSpecLabel(spec: LayoutSpec): string {
   return `${layoutAppLabel(spec.app)} / ${layoutPageLabel(spec.page, spec.app)}`;
 }

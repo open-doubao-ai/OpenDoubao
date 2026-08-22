@@ -127,6 +127,7 @@ import {
   specFromLegacy,
   specsEqual,
   isUserLayoutPage,
+  contactLayoutFor,
   type ActionBinding,
   type ActionSlot,
   type LayoutKind,
@@ -134,7 +135,13 @@ import {
   type LayoutSpec,
 } from "./page-layout.js";
 import type { ActionRunContext, ActionSlotResult } from "./layout-actions.js";
-import { inferPersonTable } from "./layout-actions.js";
+import { fetchAuthorFeed, inferPersonTable } from "./layout-actions.js";
+import {
+  inferAuthorIdField,
+  inferDateOrderField,
+  inferItemTableForApp,
+  inferPeerIdField,
+} from "./layout-category.js";
 import { visitorId } from "./layout-social.js";
 import {
   addRowToCart,
@@ -1566,6 +1573,7 @@ export function renderResultView(
             flashLayoutNote(t("layout.noAuthor"));
             return;
           }
+          const contact = contactLayoutFor({ layoutKind, layoutSpec });
           void openFkDetail(container, {
             table: personTable,
             id: userId,
@@ -1574,6 +1582,7 @@ export function renderResultView(
             fkExpand: opts.fkExpand ?? null,
             apijsonBase,
             mode: "view",
+            pageTitle: t("layout.page.profile"),
             onBack: opts.onBackToList,
             onWrite: write,
             onRelateSync: opts.onRelateSync,
@@ -1581,8 +1590,8 @@ export function renderResultView(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
-            layoutKind: layoutKind,
-            layoutSpec: { app: layoutSpec.app, page: "user" },
+            layoutKind: contact.layoutKind,
+            layoutSpec: contact.layoutSpec,
             onRequestLayoutKind: opts.onRequestLayoutKind,
             actionBindings: opts.actionBindings,
             onActionSlot: opts.onActionSlot,
@@ -7116,7 +7125,7 @@ function renderDetailForm(
     setDetailChrome({
       kind: "detail",
       recordId: recordId as string | number,
-      showId: true,
+      showId: !formHidden,
       showRaw: !formHidden,
       rawMode,
       showSave: !formHidden && !!(writeFn && primary && editableMode),
@@ -7145,7 +7154,8 @@ function renderDetailForm(
   const detailLayout = opts.layoutKind;
   const showHero =
     (detailLayout && detailLayout !== "data") ||
-    isUserLayoutPage(opts.layoutSpec?.page);
+    isUserLayoutPage(opts.layoutSpec?.page) ||
+    opts.layoutSpec?.page === "profile";
   if (showHero && detailLayout) {
     renderLayoutDetailHero(card, {
       kind: detailLayout,
@@ -7163,6 +7173,109 @@ function renderDetailForm(
         onCheckout: opts.onLayoutCheckout,
         onOpenCheckout: opts.onLayoutBuyNow,
         onWrite: writeFn,
+        onOpenFkList: opts.onOpenFkList,
+        onOpenChat: (userId) => {
+          void (async () => {
+            const base = opts.apijsonBase;
+            const msgTable = inferItemTableForApp("chat", comments);
+            if (!base || !msgTable) {
+              if (opts.onBack) opts.onBack();
+              else flashLayoutNote(t("layout.users.noChat"));
+              return;
+            }
+            const fields = [
+              inferAuthorIdField(msgTable, comments),
+              inferPeerIdField(msgTable, comments),
+            ].filter((f): f is string => !!f);
+            const dateField = inferDateOrderField(msgTable, comments);
+            let threadId: string | number | null = null;
+            for (const field of fields) {
+              const rows = await fetchAuthorFeed({
+                base,
+                table: msgTable,
+                authorField: field,
+                authorId: userId,
+                dateField,
+                count: 1,
+              });
+              if (rows[0]) {
+                threadId = rows[0].id;
+                break;
+              }
+            }
+            if (threadId == null) {
+              if (fields[0]) {
+                opts.onOpenFkList?.({
+                  table: msgTable,
+                  ids: [userId],
+                  field: fields[0],
+                });
+                return;
+              }
+              if (opts.onBack) opts.onBack();
+              else flashLayoutNote(t("layout.users.noChat"));
+              return;
+            }
+            const personTable = inferPersonTable(comments);
+            void openFkDetail(switchHost, {
+              table: msgTable,
+              id: threadId,
+              comments,
+              columnMetas,
+              fkExpand: opts.fkExpand ?? null,
+              apijsonBase: base,
+              mode: "view",
+              pageTitle: pageTitleForTable(msgTable, "detail", threadId),
+              onBack: () => {
+                if (!personTable) {
+                  opts.onBack?.();
+                  return;
+                }
+                const contact = contactLayoutFor({
+                  layoutKind: "chat",
+                  layoutSpec: { app: "chat", page: "profile" },
+                });
+                void openFkDetail(switchHost, {
+                  table: personTable,
+                  id: userId,
+                  comments,
+                  columnMetas,
+                  fkExpand: opts.fkExpand ?? null,
+                  apijsonBase: base,
+                  mode: "view",
+                  pageTitle: t("layout.page.profile"),
+                  onBack: opts.onBack || undefined,
+                  onWrite: writeFn,
+                  onRelateSync: opts.onRelateSync,
+                  onColumnMetasChange: opts.onColumnMetasChange,
+                  onPageTitleChange: opts.onPageTitleChange,
+                  onDetailSlotsChange: opts.onDetailSlotsChange,
+                  onOpenFkList: opts.onOpenFkList,
+                  layoutKind: contact.layoutKind,
+                  layoutSpec: contact.layoutSpec,
+                  onRequestLayoutKind: opts.onRequestLayoutKind,
+                  actionBindings: opts.actionBindings,
+                  onActionSlot: opts.onActionSlot,
+                  onAppSearch: opts.onAppSearch,
+                  onOpenAppSearch: opts.onOpenAppSearch,
+                });
+              },
+              onWrite: writeFn,
+              onRelateSync: opts.onRelateSync,
+              onColumnMetasChange: opts.onColumnMetasChange,
+              onPageTitleChange: opts.onPageTitleChange,
+              onDetailSlotsChange: opts.onDetailSlotsChange,
+              onOpenFkList: opts.onOpenFkList,
+              layoutKind: "chat",
+              layoutSpec: { app: "chat", page: "detail" },
+              onRequestLayoutKind: opts.onRequestLayoutKind,
+              actionBindings: opts.actionBindings,
+              onActionSlot: opts.onActionSlot,
+              onAppSearch: opts.onAppSearch,
+              onOpenAppSearch: opts.onOpenAppSearch,
+            });
+          })();
+        },
         onActionSlot: opts.onActionSlot,
         actionBindings: opts.actionBindings,
         onSearch: opts.onAppSearch,
@@ -7173,6 +7286,10 @@ function renderDetailForm(
             flashLayoutNote(t("layout.noAuthor"));
             return;
           }
+          const contact = contactLayoutFor({
+            layoutKind: opts.layoutKind,
+            layoutSpec: opts.layoutSpec,
+          });
           void openFkDetail(switchHost, {
             table: personTable,
             id: userId,
@@ -7181,6 +7298,7 @@ function renderDetailForm(
             fkExpand: opts.fkExpand ?? null,
             apijsonBase: opts.apijsonBase,
             mode: "view",
+            pageTitle: t("layout.page.profile"),
             onBack: opts.onBack || undefined,
             onWrite: writeFn,
             onRelateSync: opts.onRelateSync,
@@ -7188,11 +7306,8 @@ function renderDetailForm(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
-            layoutKind: "data",
-            layoutSpec: {
-              app: opts.layoutSpec?.app ?? "data",
-              page: "user",
-            },
+            layoutKind: contact.layoutKind,
+            layoutSpec: contact.layoutSpec,
             onRequestLayoutKind: opts.onRequestLayoutKind,
             actionBindings: opts.actionBindings,
             onActionSlot: opts.onActionSlot,
@@ -7200,18 +7315,28 @@ function renderDetailForm(
             onOpenAppSearch: opts.onOpenAppSearch,
           });
         },
-        onOpenRelated: (id) => {
-          if (!primary || !opts.apijsonBase) return;
+        onOpenRelated: (id, table) => {
+          const target = table || primary;
+          if (!target || !opts.apijsonBase) return;
+          const spec = table
+            ? inferLayoutSpec({
+                table,
+                comments,
+                pageKind: "detail",
+              })
+            : opts.layoutSpec;
           void openFkDetail(switchHost, {
-            table: primary,
+            table: target,
             id,
             comments,
             columnMetas,
             fkExpand: opts.fkExpand ?? null,
             apijsonBase: opts.apijsonBase,
-            mode: editableMode ? "edit" : "view",
-            pageTitle: opts.pageTitle,
-            initialSlots: opts.initialSlots,
+            mode: table ? "view" : editableMode ? "edit" : "view",
+            pageTitle: table
+              ? pageTitleForTable(table, "detail", id)
+              : opts.pageTitle,
+            initialSlots: table ? undefined : opts.initialSlots,
             onBack: opts.onBack || undefined,
             onWrite: writeFn,
             onRelateSync: opts.onRelateSync,
@@ -7219,8 +7344,8 @@ function renderDetailForm(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
-            layoutKind: opts.layoutKind,
-            layoutSpec: opts.layoutSpec,
+            layoutKind: spec?.app ?? opts.layoutKind,
+            layoutSpec: spec ?? opts.layoutSpec,
             onRequestLayoutKind: opts.onRequestLayoutKind,
             actionBindings: opts.actionBindings,
             onActionSlot: opts.onActionSlot,
