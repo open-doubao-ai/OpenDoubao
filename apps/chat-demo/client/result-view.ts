@@ -4,6 +4,7 @@ import { loadSettings, logoutIfApijsonAuthFailed } from "./account.js";
 import { APIJSON_BROWSER_BASE } from "./aj-base.js";
 import { withApijsonAuth } from "./aj-auth.js";
 import { t } from "./i18n/index.js";
+import { openImageLightbox } from "./image-lightbox.js";
 import {
   buildPoints,
   CHART_KIND_OPTIONS,
@@ -118,12 +119,23 @@ import {
 import { pageTitleForTable } from "./saved-pages.js";
 import {
   clearCart,
-  inferLayoutKind,
+  inferLayoutSpec,
   isCartOrOrder,
   isLayoutKind,
+  legacyKindFromSpec,
   pickRowPresentation,
+  specFromLegacy,
+  specsEqual,
+  isUserLayoutPage,
+  type ActionBinding,
+  type ActionSlot,
   type LayoutKind,
+  type LayoutPage,
+  type LayoutSpec,
 } from "./page-layout.js";
+import type { ActionRunContext, ActionSlotResult } from "./layout-actions.js";
+import { inferPersonTable } from "./layout-actions.js";
+import { visitorId } from "./layout-social.js";
 import {
   addRowToCart,
   flashLayoutNote,
@@ -132,6 +144,11 @@ import {
   shouldHideDetailForm,
   shouldReplaceList,
 } from "./layout-views.js";
+import {
+  mountAppSearchChrome,
+  shouldShowAppSearch,
+} from "./layout-explore.js";
+import { openAppFilterSheet } from "./layout-filter.js";
 import { stripApiJsonRole, type SchemaComments } from "./schema-types.js";
 import {
   isAuthVerifyField,
@@ -182,6 +199,37 @@ function showMapFromMetas(
 
 /** Registered by list render; toolbar Add calls this. */
 let listCreateAction: (() => void) | null = null;
+let pendingOpenScan: (() => void) | null = null;
+
+function appendResultSearchChrome(
+  host: HTMLElement,
+  spec: LayoutSpec | undefined,
+  surface: "list" | "detail",
+  handlers: {
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    onOpenAppScan?: () => void;
+    onOpenFilter?: (anchor: HTMLElement) => void;
+    filterActive?: boolean;
+  },
+) {
+  if (!shouldShowAppSearch(spec?.page, surface)) return;
+  if (!handlers.onAppSearch && !handlers.onOpenAppSearch) return;
+  const search = handlers.onAppSearch ?? handlers.onOpenAppSearch!;
+  const open = handlers.onOpenAppSearch ?? handlers.onAppSearch!;
+  host.appendChild(
+    mountAppSearchChrome({
+      app: spec?.app ?? "data",
+      page: spec?.page ?? (surface === "detail" ? "detail" : "list"),
+      surface,
+      onSearch: search,
+      onOpenSearch: open,
+      onOpenScan: handlers.onOpenAppScan ?? pendingOpenScan ?? undefined,
+      onOpenFilter: handlers.onOpenFilter,
+      filterActive: handlers.filterActive,
+    }),
+  );
+}
 
 /** Table list: false = smart (images/gender…), true = raw text. Survives re-renders. */
 let tableValueRawMode = false;
@@ -245,7 +293,7 @@ export function mountCreateView(
   });
 }
 
-function makeBackIconButton(onClick: () => void): HTMLButtonElement {
+export function makeBackIconButton(onClick: () => void): HTMLButtonElement {
   const back = document.createElement("button");
   back.type = "button";
   back.className = "detail-back-icon";
@@ -348,6 +396,103 @@ function mountDetailRecordIdControl(
   wrap.append(hash, input);
   host.appendChild(wrap);
   return input;
+}
+
+/** List + detail share `#filters`; this spec fills the right side on form pages. */
+export type DetailChromeSpec = {
+  kind: "detail" | "create";
+  recordId?: string | number | null;
+  showId?: boolean;
+  showRaw?: boolean;
+  rawMode?: boolean;
+  showSave?: boolean;
+  showDelete?: boolean;
+  showCancel?: boolean;
+  saveDisabled?: boolean;
+  onBack?: () => void;
+  onSwitchId?: (id: string | number) => void;
+  onToggleRaw?: () => void;
+  onSave?: () => void;
+  onDelete?: () => void;
+  onCancel?: () => void;
+};
+
+let detailChromeSpec: DetailChromeSpec | null = null;
+
+export function setDetailChrome(spec: DetailChromeSpec | null) {
+  detailChromeSpec = spec;
+  paintDetailChrome();
+}
+
+export function updateDetailChromeRaw(rawMode: boolean) {
+  if (detailChromeSpec) detailChromeSpec.rawMode = rawMode;
+  const btn = document.getElementById("btn-detail-raw");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.textContent = rawMode ? t("result.smart") : t("result.raw");
+  btn.classList.toggle("is-raw", rawMode);
+}
+
+export function flashDetailChromeSave(msg: string, ms = 1400) {
+  const btn = document.getElementById("btn-detail-save");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.textContent = msg;
+  window.setTimeout(() => {
+    if (btn.isConnected) btn.textContent = t("common.save");
+  }, ms);
+}
+
+/** Paint Back / #id / Raw / Save into `#detail-chrome` (workspace top-right). */
+export function paintDetailChrome() {
+  const host =
+    document.getElementById("detail-chrome") ??
+    document.getElementById("detail-chrome-fallback");
+  if (!host) return;
+  host.replaceChildren();
+  const spec = detailChromeSpec;
+  if (!spec) return;
+  if (spec.showId && spec.recordId != null && String(spec.recordId) !== "") {
+    mountDetailRecordIdControl(host, {
+      id: spec.recordId,
+      onSwitch: spec.onSwitchId,
+    });
+  }
+  if (spec.showRaw) {
+    const raw = document.createElement("button");
+    raw.type = "button";
+    raw.id = "btn-detail-raw";
+    raw.className = "detail-raw-toggle" + (spec.rawMode ? " is-raw" : "");
+    raw.textContent = spec.rawMode ? t("result.smart") : t("result.raw");
+    raw.title = t("result.smartToggle");
+    raw.onclick = () => spec.onToggleRaw?.();
+    host.appendChild(raw);
+  }
+  if (spec.showSave) {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.id = "btn-detail-save";
+    save.className = "primary";
+    save.textContent = t("common.save");
+    save.disabled = spec.saveDisabled === true;
+    save.onclick = () => spec.onSave?.();
+    host.appendChild(save);
+  }
+  if (spec.showDelete) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.id = "btn-detail-delete";
+    del.className = "danger";
+    del.textContent = t("common.delete");
+    del.onclick = () => spec.onDelete?.();
+    host.appendChild(del);
+  }
+  if (spec.showCancel) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.id = "btn-detail-cancel";
+    cancel.textContent = t("common.cancel");
+    cancel.onclick = () => spec.onCancel?.();
+    host.appendChild(cancel);
+  }
 }
 
 export type FlatRow = {
@@ -952,12 +1097,29 @@ export function renderResultView(
     onDetailSlotsChange?: (slots: DetailTableSlot[]) => void;
     /** Business layout (data / social / video / cart …). */
     layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
     /** User picked a layout — do not auto-replace. */
     layoutKindManual?: boolean;
     onLayoutKindResolved?: (kind: LayoutKind) => void;
+    onLayoutSpecResolved?: (spec: LayoutSpec) => void;
     onRequestLayoutKind?: (kind: LayoutKind) => void;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    layoutPrompt?: string;
+    onSelectAppPage?: (page: LayoutPage) => void;
+    onOpenAppScan?: () => void;
+    onOpenCategory?: (id: string | number) => void;
+    onComments?: (comments: SchemaComments) => void;
+    onReplaceFilters?: (filters: ColumnFilter[]) => void;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
   },
 ): ResultViewState {
+  if (opts.onOpenAppScan) pendingOpenScan = opts.onOpenAppScan;
   const preferred = opts.viewMode;
   const parsed = parseResponse(opts.response);
   const mode: ViewMode =
@@ -979,6 +1141,7 @@ export function renderResultView(
   container.innerHTML = "";
   container.classList.remove("hidden");
   listCreateAction = null;
+  if (mode === "list") setDetailChrome(null);
 
   const state: ResultViewState = {
     viewMode: mode,
@@ -1013,24 +1176,53 @@ export function renderResultView(
   const ambiguous = ambiguousColumnNames(parsed.columns);
   const visibleCols = order.filter((p) => metas[p]?.visible !== false);
 
-  const inferredLayout = inferLayoutKind({
+  const pageKind = mode === "detail" ? "detail" : "list";
+  const inferredSpec = inferLayoutSpec({
     table: primaryTable,
     columns: parsed.columns,
     comments,
-    pageKind: mode === "detail" ? "detail" : "list",
+    pageKind,
+    prompt: opts.layoutPrompt,
   });
-  const layoutKind: LayoutKind =
-    opts.layoutKindManual && isLayoutKind(opts.layoutKind)
-      ? opts.layoutKind
-      : inferredLayout;
-  if (!opts.layoutKindManual && layoutKind !== opts.layoutKind) {
-    opts.onLayoutKindResolved?.(layoutKind);
+  const layoutSpec: LayoutSpec = opts.layoutKindManual && opts.layoutSpec
+    ? opts.layoutSpec
+    : opts.layoutPrompt
+      ? inferredSpec
+      : opts.layoutSpec
+        ? opts.layoutSpec
+        : inferredSpec;
+  const layoutKind: LayoutKind = legacyKindFromSpec(layoutSpec);
+  const openLayoutFilter = opts.onReplaceFilters
+    ? (anchor: HTMLElement) => {
+        openAppFilterSheet({
+          anchor,
+          columns: parsed.columns,
+          comments,
+          metas,
+          rows: parsed.rows,
+          filters,
+          onApply: opts.onReplaceFilters!,
+        });
+      }
+    : undefined;
+  const filterActive = filters.some((f) => filterHasValue(f));
+  if (!opts.layoutKindManual) {
+    if (!opts.layoutSpec || !specsEqual(layoutSpec, opts.layoutSpec)) {
+      opts.onLayoutSpecResolved?.(layoutSpec);
+    }
+    if (layoutKind !== opts.layoutKind) {
+      opts.onLayoutKindResolved?.(layoutKind);
+    }
   }
 
   const layoutDetailHandlers = (
     row: { key: string; cells: Record<string, unknown> },
     table: string | null,
   ) => ({
+    onActionSlot: opts.onActionSlot,
+    actionBindings: opts.actionBindings,
+    onSearch: opts.onAppSearch,
+    onOpenSearch: opts.onOpenAppSearch,
     onAddToCart: () => {
       const pres = pickRowPresentation(row.cells, {
         primaryTable: table,
@@ -1114,6 +1306,9 @@ export function renderResultView(
         pageTitle: opts.pageTitle,
         initialSlots: detailNavSlots,
         layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -1122,6 +1317,8 @@ export function renderResultView(
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
         onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
       });
       return state;
     }
@@ -1137,6 +1334,9 @@ export function renderResultView(
       pageTitle: opts.pageTitle,
       initialSlots: detailNavSlots,
       layoutKind,
+      layoutSpec,
+      actionBindings: opts.actionBindings,
+      onActionSlot: opts.onActionSlot,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
@@ -1157,6 +1357,11 @@ export function renderResultView(
       onLayoutBuyNow: layoutDetailHandlers(detailRow, detailTable).onBuyNow,
       onLayoutCheckout: layoutDetailHandlers(detailRow, detailTable).onCheckout,
       onRequestLayoutKind: opts.onRequestLayoutKind,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
+      onOpenAppScan: opts.onOpenAppScan,
+      onOpenFilter: openLayoutFilter,
+      filterActive,
     });
     return state;
   }
@@ -1192,6 +1397,9 @@ export function renderResultView(
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
         layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -1200,6 +1408,8 @@ export function renderResultView(
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
         onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
         fkExpand: opts.fkExpand,
       });
     }
@@ -1240,16 +1450,23 @@ export function renderResultView(
     }
     if (opts.response == null) {
       mountWorkspaceGuide(container);
-    } else {
+      return state;
+    }
+    if (!shouldReplaceList(layoutKind, layoutSpec)) {
+      appendResultSearchChrome(container, layoutSpec, "list", {
+        ...opts,
+        onOpenFilter: openLayoutFilter,
+        filterActive,
+      });
       const empty = document.createElement("div");
       empty.className = "result-empty";
       empty.textContent = t("result.noMatching");
       container.appendChild(empty);
+      return state;
     }
-    return state;
   }
 
-  if (shouldReplaceList(layoutKind)) {
+  if (shouldReplaceList(layoutKind, layoutSpec)) {
     if (primaryTable && write) {
       listCreateAction = () => {
         const fromParent = opts.onOpenDetail?.({
@@ -1280,6 +1497,7 @@ export function renderResultView(
     }
     renderLayoutList(container, {
       kind: layoutKind,
+      spec: layoutSpec,
       rows: parsed.rows,
       columns: parsed.columns,
       primaryTable,
@@ -1299,6 +1517,79 @@ export function renderResultView(
           layoutDetailHandlers(parsed.rows[0] ?? { key: "", cells: {} }, primaryTable).onCheckout(info);
         },
         onOpenCheckout: () => opts.onRequestLayoutKind?.("order"),
+        onSearch: opts.onAppSearch,
+        onOpenSearch: opts.onOpenAppSearch,
+        onOpenScan: opts.onOpenAppScan,
+        onOpenFilter: openLayoutFilter,
+        filterActive,
+        onSelectPage: opts.onSelectAppPage,
+        onOpenProfile: () => {
+          const table = inferPersonTable(comments) || primaryTable;
+          const id = visitorId();
+          if (!table || id == null) {
+            flashLayoutNote(t("layout.me.needLogin"));
+            return;
+          }
+          opts.onSelectAppPage?.("profile");
+          const fromParent = opts.onOpenDetail?.({ table, id });
+          const navSlots = Array.isArray(fromParent) ? fromParent : undefined;
+          void openFkDetail(container, {
+            table,
+            id,
+            comments,
+            columnMetas: metas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase,
+            mode: write ? "edit" : "view",
+            initialSlots: navSlots,
+            onBack: opts.onBackToList,
+            onWrite: write,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: "data",
+            layoutSpec: { app: layoutSpec.app, page: "profile" },
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
+        onOpenCategory: opts.onOpenCategory,
+        onComments: opts.onComments,
+        onOpenAuthor: (userId) => {
+          const personTable = inferPersonTable(comments);
+          if (!apijsonBase || !personTable) {
+            flashLayoutNote(t("layout.noAuthor"));
+            return;
+          }
+          void openFkDetail(container, {
+            table: personTable,
+            id: userId,
+            comments,
+            columnMetas: metas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase,
+            mode: "view",
+            onBack: opts.onBackToList,
+            onWrite: write,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: layoutKind,
+            layoutSpec: { app: layoutSpec.app, page: "user" },
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
       },
     });
     const themedDetailHost = document.createElement("div");
@@ -1309,6 +1600,11 @@ export function renderResultView(
   }
 
   // Table | Grid | Charts (configured combo) | specific type (that type only)
+  appendResultSearchChrome(container, layoutSpec, "list", {
+    ...opts,
+    onOpenFilter: openLayoutFilter,
+    filterActive,
+  });
   const viewTabs = document.createElement("div");
   viewTabs.className = "display-tabs";
   for (const [kind, label] of [
@@ -2215,6 +2511,9 @@ export function renderResultView(
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
         layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -2223,6 +2522,8 @@ export function renderResultView(
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
         onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
         fkExpand: opts.fkExpand,
       });
       return;
@@ -2517,6 +2818,8 @@ export function renderResultView(
               onPageTitleChange: opts.onPageTitleChange,
               onDetailSlotsChange: opts.onDetailSlotsChange,
               onOpenFkList: opts.onOpenFkList,
+              onAppSearch: opts.onAppSearch,
+              onOpenAppSearch: opts.onOpenAppSearch,
               fkExpand: opts.fkExpand,
             });
           },
@@ -2559,6 +2862,8 @@ export function renderResultView(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
             fkExpand: opts.fkExpand,
           });
         };
@@ -3100,153 +3405,6 @@ function pickGridCaption(
     if (text) return text;
   }
   return "";
-}
-
-function openImageLightbox(
-  getUrls: () => string[],
-  startIndex: number,
-): void {
-  document.getElementById("detail-image-lightbox")?.remove();
-  let urls = getUrls().filter(Boolean);
-  if (!urls.length) return;
-  let idx = Math.max(0, Math.min(startIndex, urls.length - 1));
-
-  // Mount on <body> as a true viewport overlay (not in-page flow / bottom bar)
-  const modal = document.createElement("div");
-  modal.id = "detail-image-lightbox";
-  modal.className = "detail-lightbox";
-  modal.setAttribute("role", "dialog");
-  modal.setAttribute("aria-modal", "true");
-  // Inline critical geometry so overlay cannot collapse into page layout
-  Object.assign(modal.style, {
-    position: "fixed",
-    top: "0",
-    left: "0",
-    right: "0",
-    bottom: "0",
-    width: "100vw",
-    height: "100vh",
-    zIndex: "2147483646",
-    margin: "0",
-    display: "flex",
-    flexDirection: "column",
-    background: "rgba(0, 0, 0, 0.88)",
-    boxSizing: "border-box",
-  });
-
-  const body = document.createElement("div");
-  body.className = "detail-lightbox-body";
-
-  const stage = document.createElement("div");
-  stage.className = "detail-lightbox-stage";
-  const img = document.createElement("img");
-  img.className = "detail-lightbox-img";
-  img.referrerPolicy = "no-referrer";
-  stage.appendChild(img);
-
-  const prev = document.createElement("button");
-  prev.type = "button";
-  prev.className = "detail-lightbox-nav";
-  prev.textContent = "<";
-  prev.title = t("common.previous");
-  prev.setAttribute("aria-label", "Previous");
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = "detail-lightbox-nav detail-lightbox-nav-next";
-  next.textContent = ">";
-  next.title = t("common.next");
-  next.setAttribute("aria-label", "Next");
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "detail-lightbox-close";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close");
-
-  const caption = document.createElement("div");
-  caption.className = "detail-lightbox-caption";
-
-  const strip = document.createElement("div");
-  strip.className = "detail-lightbox-strip";
-
-  const prevOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
-
-  const teardown = () => {
-    document.body.style.overflow = prevOverflow;
-    document.removeEventListener("keydown", onKey);
-    modal.remove();
-  };
-
-  const paint = () => {
-    urls = getUrls().filter(Boolean);
-    if (!urls.length) {
-      teardown();
-      return;
-    }
-    if (idx >= urls.length) idx = urls.length - 1;
-    if (idx < 0) idx = 0;
-    img.src = urls[idx] || "";
-    caption.textContent = `${idx + 1} / ${urls.length}`;
-    prev.style.visibility = urls.length > 1 ? "visible" : "hidden";
-    next.style.visibility = urls.length > 1 ? "visible" : "hidden";
-    strip.innerHTML = "";
-    urls.forEach((u, i) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className =
-        "detail-lightbox-strip-item" + (i === idx ? " is-active" : "");
-      const t = document.createElement("img");
-      t.src = u;
-      t.alt = "";
-      t.referrerPolicy = "no-referrer";
-      t.loading = "lazy";
-      b.appendChild(t);
-      b.onclick = (e) => {
-        e.stopPropagation();
-        idx = i;
-        paint();
-      };
-      strip.appendChild(b);
-    });
-    const active = strip.querySelector(".is-active");
-    active?.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-  };
-
-  prev.onclick = (e) => {
-    e.stopPropagation();
-    idx = (idx - 1 + urls.length) % urls.length;
-    paint();
-  };
-  next.onclick = (e) => {
-    e.stopPropagation();
-    idx = (idx + 1) % urls.length;
-    paint();
-  };
-  close.onclick = (e) => {
-    e.stopPropagation();
-    teardown();
-  };
-  modal.onclick = (e) => {
-    if (e.target === modal || e.target === body) teardown();
-  };
-  stage.onclick = (e) => e.stopPropagation();
-  strip.onclick = (e) => e.stopPropagation();
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") teardown();
-    if (e.key === "ArrowLeft") prev.click();
-    if (e.key === "ArrowRight") next.click();
-  }
-  document.addEventListener("keydown", onKey);
-
-  body.append(stage, caption, strip);
-  modal.append(close, prev, next, body);
-  document.body.appendChild(modal);
-  paint();
 }
 
 /** Pick images → POST /upload → absolute http URLs (host + path). */
@@ -3940,6 +4098,12 @@ export type WritePayload = {
   table: string;
   /** Request.structure fragments (UPDATE field@) for multi-table Apply */
   structure?: Record<string, unknown>;
+  /** Like / comment / follow stay on the detail page after success. */
+  stayOnPage?: boolean;
+  /** Keep body.tag (Video / Comment / User) instead of rewriting from the page title. */
+  keepTag?: boolean;
+  /** Do not merge a saved Data-API write template (social ops are exact). */
+  skipTemplate?: boolean;
 };
 
 export type { CrudOp, DetailTableSlot, RelateSyncPayload } from "./detail-crud.js";
@@ -4067,7 +4231,7 @@ export function createRequiredColumns(table: string): string[] {
     case "Moment":
       return ["content"];
     case "Comment":
-      return ["content", "momentId"];
+      return ["content"];
     case "User":
       return ["name"];
     case "Employee":
@@ -6043,9 +6207,14 @@ function openCreateForm(
 
   const card = document.createElement("div");
   card.className = "detail-form";
-  const header = document.createElement("div");
-  header.className = "detail-form-header";
+  if (!document.getElementById("detail-chrome")) {
+    const header = document.createElement("div");
+    header.id = "detail-chrome-fallback";
+    header.className = "detail-form-header";
+    card.appendChild(header);
+  }
   const goBack = () => {
+    setDetailChrome(null);
     detailHost!.classList.add("hidden");
     detailHost!.innerHTML = "";
     for (const el of Array.from(container.querySelectorAll(LIST_HIDE_SEL))) {
@@ -6053,16 +6222,6 @@ function openCreateForm(
     }
     opts.onBack();
   };
-  header.appendChild(makeBackIconButton(goBack));
-  const defaultTitle = opts.pageTitle?.trim() || `Create ${opts.table}`;
-  const titleInput = mountDetailPageTitleInput(header, {
-    value: defaultTitle,
-    placeholder: `Create ${opts.table}`,
-    onCommit: (title) => {
-      opts.onPageTitleChange?.(title);
-    },
-  });
-  card.appendChild(header);
 
   const slots: DetailTableSlot[] = resolveNavDetailSlots(
     opts.table,
@@ -6090,25 +6249,24 @@ function openCreateForm(
   slotsHost.className = "detail-slots-host";
   card.appendChild(slotsHost);
 
-  const actions = document.createElement("div");
-  actions.className = "detail-form-actions";
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "button";
-  saveBtn.className = "primary";
-  saveBtn.textContent = t("common.save");
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.textContent = t("common.cancel");
-  cancel.onclick = goBack;
-  actions.append(saveBtn, cancel);
-  card.appendChild(actions);
   detailHost.appendChild(card);
 
+  let runCreateSave: (() => void) | null = null;
+  const syncCreateChrome = () => {
+    setDetailChrome({
+      kind: "create",
+      showSave: true,
+      showCancel: true,
+      saveDisabled: !runCreateSave,
+      onBack: goBack,
+      onCancel: goBack,
+      onSave: () => runCreateSave?.(),
+    });
+  };
+  syncCreateChrome();
+
   const flashSave = (msg: string, ms = 1400) => {
-    saveBtn.textContent = msg;
-    setTimeout(() => {
-      saveBtn.textContent = t("common.save");
-    }, ms);
+    flashDetailChromeSave(msg, ms);
   };
 
   const paintCreateSlotFields = (
@@ -6341,18 +6499,6 @@ function openCreateForm(
     liveComments = comments;
     slotsHost.innerHTML = "";
     collectors = [];
-    // Keep editable page title; only hint when still the default Create X
-    if (
-      !titleInput.value.trim() ||
-      /^Create\s/i.test(titleInput.value) ||
-      /^Add\s/i.test(titleInput.value)
-    ) {
-      const hint =
-        slots.length > 1
-          ? `Create ${slots.map((s) => s.table).join(" + ")}`
-          : `Create ${slots[0]?.table ?? opts.table}`;
-      if (!opts.pageTitle?.trim()) titleInput.value = hint;
-    }
     emitSlots();
 
     for (let i = 0; i < slots.length; i++) {
@@ -6472,7 +6618,7 @@ function openCreateForm(
     addRow.appendChild(hint);
     slotsHost.appendChild(addRow);
 
-    saveBtn.onclick = () => {
+    runCreateSave = () => {
       void (async () => {
         // Persist slots / field visibility / DDL before write
         opts.onColumnMetasChange?.(columnMetas ?? {});
@@ -6598,6 +6744,7 @@ function openCreateForm(
         void opts.onSubmit(payload);
       })();
     };
+    syncCreateChrome();
   };
 
   const boot = async () => {
@@ -6664,7 +6811,16 @@ async function openFkDetail(
       field?: string;
     }) => void;
     layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
     onRequestLayoutKind?: (kind: LayoutKind) => void;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
   },
 ) {
   for (const el of Array.from(container.querySelectorAll(LIST_HIDE_SEL))) {
@@ -6731,6 +6887,11 @@ async function openFkDetail(
       pageTitle: opts.pageTitle,
       initialSlots: opts.initialSlots,
       layoutKind: opts.layoutKind,
+      layoutSpec: opts.layoutSpec,
+      actionBindings: opts.actionBindings,
+      onActionSlot: opts.onActionSlot,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
@@ -6861,7 +7022,19 @@ function renderDetailForm(
       field?: string;
     }) => void;
     layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
     onRequestLayoutKind?: (kind: LayoutKind) => void;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    onOpenAppScan?: () => void;
+    onOpenFilter?: (anchor: HTMLElement) => void;
+    filterActive?: boolean;
     onLayoutAddToCart?: () => void;
     onLayoutBuyNow?: () => void;
     onLayoutCheckout?: (info: {
@@ -6885,69 +7058,98 @@ function renderDetailForm(
   /** Avoid overlapping schema fetches when switching tables quickly. */
   let schemaLoadGen = 0;
 
-  const header = document.createElement("div");
-  header.className = "detail-form-header";
-  if (opts.onBack) {
-    header.appendChild(makeBackIconButton(opts.onBack));
-  }
-  const fallbackTitle = primary
-    ? `${primary} ${editableMode ? "Edit" : "View"}`
-    : `${editableMode ? "Edit" : "View"}`;
-  const titleValue =
-    stripTitleRecordId(opts.pageTitle?.trim() || "") || fallbackTitle;
-  mountDetailPageTitleInput(header, {
-    value: titleValue,
-    placeholder: fallbackTitle,
-    onCommit: (title) => opts.onPageTitleChange?.(title),
-  });
   const recordId =
     (primary ? row.cells[`${primary}.id`] : undefined) ?? row.key;
   const switchHost =
     container.id === "result-detail-host"
       ? container.parentElement ?? container
       : container;
-  mountDetailRecordIdControl(header, {
-    id: recordId as string | number,
-    onSwitch:
-      primary && opts.apijsonBase
-        ? (id) => {
-            void openFkDetail(switchHost, {
-              table: primary,
-              id,
-              comments,
-              columnMetas,
-              fkExpand: opts.fkExpand ?? null,
-              apijsonBase: opts.apijsonBase!,
-              mode: editableMode ? "edit" : "view",
-              pageTitle: opts.pageTitle,
-              initialSlots: opts.initialSlots,
-              onBack: opts.onBack || undefined,
-              onWrite: writeFn,
-              onRelateSync: opts.onRelateSync,
-              onColumnMetasChange: opts.onColumnMetasChange,
-              onPageTitleChange: opts.onPageTitleChange,
-              onDetailSlotsChange: opts.onDetailSlotsChange,
-              onOpenFkList: opts.onOpenFkList,
-              layoutKind: opts.layoutKind,
-              onRequestLayoutKind: opts.onRequestLayoutKind,
-            });
-          }
-        : undefined,
-  });
+  const switchRecordId =
+    primary && opts.apijsonBase
+      ? (id: string | number) => {
+          void openFkDetail(switchHost, {
+            table: primary,
+            id,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase!,
+            mode: editableMode ? "edit" : "view",
+            pageTitle: opts.pageTitle,
+            initialSlots: opts.initialSlots,
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: opts.layoutKind,
+            layoutSpec: opts.layoutSpec,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        }
+      : undefined;
 
   let rawMode = false;
-  const modeToggle = document.createElement("button");
-  modeToggle.type = "button";
-  modeToggle.className = "detail-raw-toggle";
-  modeToggle.textContent = t("result.raw");
-  modeToggle.title = t("result.smartToggle");
-  header.appendChild(modeToggle);
-  card.appendChild(header);
+  let paintFieldsFn: (() => void) | null = null;
+  let runDetailSave: (() => void) | null = null;
+  let runDetailDelete: (() => void) | null = null;
+  const hideForm = !!(
+    opts.layoutKind &&
+    opts.layoutKind !== "data" &&
+    shouldHideDetailForm(opts.layoutKind, opts.layoutSpec)
+  );
+  if (!document.getElementById("detail-chrome")) {
+    const header = document.createElement("div");
+    header.id = "detail-chrome-fallback";
+    header.className = "detail-form-header";
+    card.appendChild(header);
+  }
+  const goBack = () => {
+    setDetailChrome(null);
+    opts.onBack?.();
+  };
+  const syncDetailChrome = (formHidden = hideForm) => {
+    setDetailChrome({
+      kind: "detail",
+      recordId: recordId as string | number,
+      showId: true,
+      showRaw: !formHidden,
+      rawMode,
+      showSave: !formHidden && !!(writeFn && primary && editableMode),
+      showDelete: !formHidden && !!opts.onDelete,
+      onBack: opts.onBack ? goBack : undefined,
+      onSwitchId: switchRecordId,
+      onToggleRaw: () => {
+        rawMode = !rawMode;
+        updateDetailChromeRaw(rawMode);
+        paintFieldsFn?.();
+      },
+      onSave: () => runDetailSave?.(),
+      onDelete: () => runDetailDelete?.(),
+    });
+  };
+  syncDetailChrome();
+
+  appendResultSearchChrome(card, opts.layoutSpec, "detail", {
+    onAppSearch: opts.onAppSearch,
+    onOpenAppSearch: opts.onOpenAppSearch,
+    onOpenAppScan: opts.onOpenAppScan,
+    onOpenFilter: opts.onOpenFilter,
+    filterActive: opts.filterActive,
+  });
 
   const detailLayout = opts.layoutKind;
-  if (detailLayout && detailLayout !== "data") {
+  const showHero =
+    (detailLayout && detailLayout !== "data") ||
+    isUserLayoutPage(opts.layoutSpec?.page);
+  if (showHero && detailLayout) {
     renderLayoutDetailHero(card, {
       kind: detailLayout,
+      spec: opts.layoutSpec,
       row,
       columns,
       primaryTable: primary,
@@ -6960,6 +7162,44 @@ function renderDetailForm(
         onBuyNow: opts.onLayoutBuyNow,
         onCheckout: opts.onLayoutCheckout,
         onOpenCheckout: opts.onLayoutBuyNow,
+        onWrite: writeFn,
+        onActionSlot: opts.onActionSlot,
+        actionBindings: opts.actionBindings,
+        onSearch: opts.onAppSearch,
+        onOpenSearch: opts.onOpenAppSearch,
+        onOpenAuthor: (userId) => {
+          const personTable = inferPersonTable(comments);
+          if (!opts.apijsonBase || !personTable) {
+            flashLayoutNote(t("layout.noAuthor"));
+            return;
+          }
+          void openFkDetail(switchHost, {
+            table: personTable,
+            id: userId,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase,
+            mode: "view",
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: "data",
+            layoutSpec: {
+              app: opts.layoutSpec?.app ?? "data",
+              page: "user",
+            },
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
         onOpenRelated: (id) => {
           if (!primary || !opts.apijsonBase) return;
           void openFkDetail(switchHost, {
@@ -6980,12 +7220,17 @@ function renderDetailForm(
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
             layoutKind: opts.layoutKind,
+            layoutSpec: opts.layoutSpec,
             onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
           });
         },
       },
     });
-    if (shouldHideDetailForm(detailLayout)) {
+    if (shouldHideDetailForm(detailLayout, opts.layoutSpec)) {
       container.appendChild(card);
       return;
     }
@@ -7100,6 +7345,10 @@ function renderDetailForm(
       onPageTitleChange: opts.onPageTitleChange,
       onDetailSlotsChange: opts.onDetailSlotsChange,
       onOpenFkList: opts.onOpenFkList,
+      layoutKind: opts.layoutKind,
+      layoutSpec: opts.layoutSpec,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
       fkExpand: opts.fkExpand,
     });
   };
@@ -7506,27 +7755,16 @@ function renderDetailForm(
     }
   };
 
-  modeToggle.onclick = () => {
-    rawMode = !rawMode;
-    modeToggle.textContent = rawMode ? t("result.smart") : t("result.raw");
-    modeToggle.classList.toggle("is-raw", rawMode);
-    paintFields();
-  };
+  paintFieldsFn = paintFields;
   ensureSchemasThenPaint();
 
-  const actions = document.createElement("div");
-  actions.className = "detail-form-actions";
-  if (writeFn && primary && editableMode) {
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "primary";
-    saveBtn.textContent = t("common.save");
-    const flushPageLayout = () => {
-      opts.onColumnMetasChange?.(columnMetas ?? {});
-      opts.onDetailSlotsChange?.(slots.map((s) => ({ ...s })));
-    };
+  const flushPageLayout = () => {
+    opts.onColumnMetasChange?.(columnMetas ?? {});
+    opts.onDetailSlotsChange?.(slots.map((s) => ({ ...s })));
+  };
 
-    saveBtn.onclick = () => {
+  if (writeFn && primary && editableMode) {
+    runDetailSave = () => {
       void (async () => {
         if (!confirm(`Save changes to #${row.key}?`)) return;
         // Always persist page layout/config (slots, field show/hide, DDL)
@@ -7536,20 +7774,14 @@ function renderDetailForm(
           verifyTypeForWrite("put"),
         );
         if (verifyErr) {
-          saveBtn.textContent = verifyErr.slice(0, 48);
-          setTimeout(() => {
-            saveBtn.textContent = t("common.save");
-          }, 2200);
+          flashDetailChromeSave(verifyErr.slice(0, 48), 2200);
           return;
         }
         const edited: Record<string, string> = {};
         for (const [path, el] of inputs) edited[path] = el.value;
         for (const [path, id] of fkValues) {
           if (id == null) {
-            saveBtn.textContent = `Select foreign key`;
-            setTimeout(() => {
-              saveBtn.textContent = t("common.save");
-            }, 1400);
+            flashDetailChromeSave("Select foreign key", 1400);
             return;
           }
           edited[path] = String(id);
@@ -7580,11 +7812,10 @@ function renderDetailForm(
               }
             }
           } catch (e) {
-            saveBtn.textContent =
-              e instanceof Error ? e.message.slice(0, 40) : "Upload failed";
-            setTimeout(() => {
-              saveBtn.textContent = t("common.save");
-            }, 2000);
+            flashDetailChromeSave(
+              e instanceof Error ? e.message.slice(0, 40) : "Upload failed",
+              2000,
+            );
             return;
           }
         }
@@ -7657,10 +7888,7 @@ function renderDetailForm(
         });
         if (!payload) {
           // Layout already flushed — no record field changes
-          saveBtn.textContent = t("common.saved");
-          setTimeout(() => {
-            saveBtn.textContent = t("common.save");
-          }, 1200);
+          flashDetailChromeSave(t("common.saved"), 1200);
           return;
         }
         attachAuthVerifyToWritePayload(
@@ -7670,14 +7898,9 @@ function renderDetailForm(
         void writeFn(payload);
       })();
     };
-    actions.appendChild(saveBtn);
   }
   if (opts.onDelete) {
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "danger";
-    delBtn.textContent = t("common.delete");
-    delBtn.onclick = () => {
+    runDetailDelete = () => {
       void (async () => {
         if (
           !confirm(
@@ -7691,18 +7914,19 @@ function renderDetailForm(
           verifyTypeForWrite("delete"),
         );
         if (verifyErr) {
-          delBtn.textContent = verifyErr.slice(0, 40);
-          setTimeout(() => {
-            delBtn.textContent = t("common.delete");
-          }, 2200);
+          const delBtn = document.getElementById("btn-detail-delete");
+          if (delBtn instanceof HTMLButtonElement) {
+            delBtn.textContent = verifyErr.slice(0, 40);
+            window.setTimeout(() => {
+              if (delBtn.isConnected) delBtn.textContent = t("common.delete");
+            }, 2200);
+          }
           return;
         }
         opts.onDelete?.();
       })();
     };
-    actions.appendChild(delBtn);
   }
-  if (actions.childNodes.length) card.appendChild(actions);
 
   container.appendChild(card);
 }

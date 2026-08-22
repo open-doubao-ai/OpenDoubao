@@ -12,6 +12,10 @@ export type SchemaComments = {
 const cache = new Map<string, { at: number; data: SchemaComments }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+export function clearSchemaCommentCache(): void {
+  cache.clear();
+}
+
 /** APIJSON Demo: logical request name → physical MySQL table name. */
 const LOGICAL_TO_PHYSICAL: Record<string, string> = {
   User: "apijson_user",
@@ -184,6 +188,8 @@ function demoFallback(tables: string[]): SchemaComments {
       Product: "电商商品",
       Cart: "购物车",
       ShopOrder: "电商订单",
+      Category: "通用分类/栏目/流派",
+      Address: "收件地址",
     },
     columns: {
       "User.id": "Primary key (bigint)",
@@ -204,6 +210,9 @@ function demoFallback(tables: string[]): SchemaComments {
       "Comment.toId": "Reply-to Comment id (FK Comment, self)",
       "Comment.userId": "Commenter User id (bigint)",
       "Comment.momentId": "Moment id (bigint)",
+      "Comment.videoId": "Video id (bigint)",
+      "Comment.articleId": "Article id (bigint)",
+      "Comment.blogId": "Blog id (bigint)",
       "Comment.date": "Created at (timestamp)",
       "Comment.content": "Content (varchar(1000))",
       "Privacy.id": "Primary key (bigint)",
@@ -230,17 +239,27 @@ function demoFallback(tables: string[]): SchemaComments {
       "Notice.cover": "封面图",
       "Blog.title": "博客标题",
       "Blog.cover": "封面图",
+      "Blog.praiseUserIdList": "点赞用户 User.id 列表",
+      "Blog.collectUserIdList": "收藏用户 User.id 列表",
+      "Blog.shareCount": "分享次数",
       "Article.title": "文章标题",
       "Article.cover": "封面图",
+      "Article.praiseUserIdList": "点赞用户 User.id 列表",
+      "Article.collectUserIdList": "收藏用户 User.id 列表",
+      "Article.shareCount": "分享次数",
       "Video.title": "视频标题",
       "Video.cover": "封面图",
       "Video.videoUrl": "视频地址",
+      "Video.praiseUserIdList": "点赞用户 User.id 列表",
+      "Video.collectUserIdList": "收藏用户 User.id 列表",
+      "Video.shareCount": "分享次数",
       "Music.title": "歌曲名",
       "Music.cover": "封面图",
       "Music.audioUrl": "音频地址",
       "Music.artist": "歌手",
       "Product.name": "商品名称",
-      "Product.cover": "商品图",
+      "Product.cover": "商品封面图",
+      "Product.pictureList": "商品图集",
       "Product.price": "价格",
       "Product.stock": "库存",
       "Cart.title": "商品名称",
@@ -249,6 +268,26 @@ function demoFallback(tables: string[]): SchemaComments {
       "ShopOrder.consignee": "收货人",
       "ShopOrder.total": "订单金额",
       "ShopOrder.address": "收货地址",
+      "Category.app": "应用大类：commerce/music/news/…",
+      "Category.name": "分类名",
+      "Category.cover": "分类封面图",
+      "Category.sort": "排序",
+      "Product.categoryId": "分类 Category.id",
+      "Music.categoryId": "流派 Category.id",
+      "News.categoryId": "栏目 Category.id",
+      "Notice.categoryId": "栏目 Category.id",
+      "Video.categoryId": "分类 Category.id",
+      "Blog.categoryId": "分类 Category.id",
+      "Article.categoryId": "分类 Category.id",
+      "Activity.categoryId": "分类 Category.id",
+      "Moment.categoryId": "话题 Category.id",
+      "Message.categoryId": "分类 Category.id",
+      "Address.consignee": "收货人",
+      "Address.phone": "手机号",
+      "Address.region": "省市区",
+      "Address.address": "详细地址",
+      "Address.tag": "标签：家/公司/学校",
+      "Address.isDefault": "默认地址：0-否，1-是",
     },
     types: {
       "User.id": "bigint",
@@ -269,6 +308,9 @@ function demoFallback(tables: string[]): SchemaComments {
       "Comment.toId": "bigint",
       "Comment.userId": "bigint",
       "Comment.momentId": "bigint",
+      "Comment.videoId": "bigint",
+      "Comment.articleId": "bigint",
+      "Comment.blogId": "bigint",
       "Comment.date": "timestamp",
       "Comment.content": "varchar(1000)",
       "Privacy.id": "bigint",
@@ -283,9 +325,15 @@ function demoFallback(tables: string[]): SchemaComments {
       "News.viewCount": "int",
       "Video.videoUrl": "varchar(500)",
       "Music.audioUrl": "varchar(500)",
+      "Product.pictureList": "json",
       "Product.price": "decimal(10,2)",
       "Cart.qty": "int",
       "ShopOrder.total": "decimal(10,2)",
+      "Category.app": "varchar(20)",
+      "Category.name": "varchar(40)",
+      "Category.cover": "varchar(400)",
+      "Category.sort": "int",
+      "Product.categoryId": "bigint",
     },
   };
   // Mirror logical ↔ physical keys for alias-tolerant clients
@@ -363,6 +411,8 @@ export async function commentsForPayload(
     "Product",
     "Cart",
     "ShopOrder",
+    "Category",
+    "Address",
   ]) {
     tables.add(t);
   }

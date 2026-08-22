@@ -18,6 +18,7 @@
 --   视频     Video
 --   音乐     Music
 --   电商     Product / Cart / ShopOrder
+--   分类     Category（各应用类目；缺表时也可只跑 layout_demo_categories.sql）
 
 SET NAMES utf8mb4;
 
@@ -116,6 +117,9 @@ CREATE TABLE `Blog` (
   `author` varchar(50) DEFAULT NULL COMMENT '作者',
   `cover` varchar(400) DEFAULT NULL COMMENT '封面图',
   `content` text COMMENT '正文',
+  `praiseUserIdList` json DEFAULT NULL COMMENT '点赞用户 User.id 列表',
+  `collectUserIdList` json DEFAULT NULL COMMENT '收藏用户 User.id 列表',
+  `shareCount` int NOT NULL DEFAULT 0 COMMENT '分享次数',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发布时间',
   PRIMARY KEY (`id`),
   KEY `userId` (`userId`),
@@ -130,6 +134,9 @@ CREATE TABLE `Article` (
   `author` varchar(50) DEFAULT NULL COMMENT '作者',
   `cover` varchar(400) DEFAULT NULL COMMENT '封面图',
   `content` text COMMENT '文章正文',
+  `praiseUserIdList` json DEFAULT NULL COMMENT '点赞用户 User.id 列表',
+  `collectUserIdList` json DEFAULT NULL COMMENT '收藏用户 User.id 列表',
+  `shareCount` int NOT NULL DEFAULT 0 COMMENT '分享次数',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发布时间',
   PRIMARY KEY (`id`),
   KEY `userId` (`userId`),
@@ -146,6 +153,9 @@ CREATE TABLE `Video` (
   `videoUrl` varchar(500) NOT NULL COMMENT '视频地址',
   `duration` int NOT NULL DEFAULT 0 COMMENT '时长（秒）',
   `playCount` int NOT NULL DEFAULT 0 COMMENT '播放次数',
+  `praiseUserIdList` json DEFAULT NULL COMMENT '点赞用户 User.id 列表',
+  `collectUserIdList` json DEFAULT NULL COMMENT '收藏用户 User.id 列表',
+  `shareCount` int NOT NULL DEFAULT 0 COMMENT '分享次数',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '发布时间',
   PRIMARY KEY (`id`),
   KEY `userId` (`userId`),
@@ -174,7 +184,8 @@ CREATE TABLE `Product` (
   `id` bigint NOT NULL COMMENT '主键',
   `userId` bigint NOT NULL COMMENT '商家 User.id',
   `name` varchar(120) NOT NULL COMMENT '商品名称',
-  `cover` varchar(400) DEFAULT NULL COMMENT '商品图',
+  `cover` varchar(400) DEFAULT NULL COMMENT '商品封面图',
+  `pictureList` json DEFAULT NULL COMMENT '商品图集',
   `description` varchar(1000) DEFAULT NULL COMMENT '商品描述',
   `price` decimal(10,2) NOT NULL DEFAULT 0 COMMENT '价格',
   `stock` int NOT NULL DEFAULT 0 COMMENT '库存',
@@ -217,13 +228,41 @@ CREATE TABLE `ShopOrder` (
   KEY `index_date` (`date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='电商订单';
 
+DROP TABLE IF EXISTS `Category`;
+CREATE TABLE `Category` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `userId` bigint NOT NULL COMMENT '录入人 User.id',
+  `app` varchar(20) NOT NULL COMMENT '应用大类：commerce/music/news/video/info/blog/article/campaign/social/chat',
+  `name` varchar(40) NOT NULL COMMENT '分类名',
+  `cover` varchar(400) DEFAULT NULL COMMENT '分类封面图',
+  `sort` int NOT NULL DEFAULT 0 COMMENT '排序',
+  `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建日期',
+  PRIMARY KEY (`id`),
+  KEY `app_sort` (`app`, `sort`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通用分类/栏目/流派';
+
+DROP TABLE IF EXISTS `Address`;
+CREATE TABLE `Address` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `userId` bigint NOT NULL COMMENT '买家 User.id',
+  `consignee` varchar(50) NOT NULL COMMENT '收货人',
+  `phone` varchar(20) NOT NULL COMMENT '手机号',
+  `region` varchar(80) DEFAULT NULL COMMENT '省市区',
+  `address` varchar(200) NOT NULL COMMENT '详细地址',
+  `tag` varchar(20) DEFAULT NULL COMMENT '标签：家/公司/学校',
+  `isDefault` tinyint NOT NULL DEFAULT 0 COMMENT '默认地址：0-否，1-是',
+  `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建日期',
+  PRIMARY KEY (`id`),
+  KEY `userId` (`userId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='收件地址';
+
 -- ---------------------------------------------------------------------------
--- Access (ids 51–61). Activity already has Access id=35.
+-- Access (ids 51–63). Activity already has Access id=35.
 -- alias UNIQUE: set alias = table name so JSON keys stay PascalCase.
 -- ---------------------------------------------------------------------------
 
-DELETE FROM `Access` WHERE `id` BETWEEN 51 AND 61
-  OR `alias` IN ('Employee','Message','News','Notice','Blog','Article','Video','Music','Product','Cart','ShopOrder');
+DELETE FROM `Access` WHERE `id` BETWEEN 51 AND 63
+  OR `alias` IN ('Employee','Message','News','Notice','Blog','Article','Video','Music','Product','Cart','ShopOrder','Category','Address');
 
 INSERT INTO `Access` (`id`, `debug`, `schema`, `name`, `alias`, `get`, `head`, `gets`, `heads`, `post`, `put`, `delete`, `date`, `detail`)
 VALUES
@@ -260,21 +299,27 @@ VALUES
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
- '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
  NOW(), '博客'),
 (56, 0, NULL, 'Article', 'Article',
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
- '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
  NOW(), '文章'),
 (57, 0, NULL, 'Video', 'Video',
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
- '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]',
  NOW(), '视频'),
 (58, 0, NULL, 'Music', 'Music',
  '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
@@ -303,14 +348,28 @@ VALUES
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
- NOW(), '电商订单');
+ NOW(), '电商订单'),
+(62, 0, NULL, 'Category', 'Category',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ NOW(), '通用分类/栏目/流派'),
+(63, 0, NULL, 'Address', 'Address',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ NOW(), '收件地址');
 
 -- ---------------------------------------------------------------------------
 -- Request POST/PUT/DELETE (Activity/Data already have rows)
 -- ---------------------------------------------------------------------------
 
-DELETE FROM `Request` WHERE `id` BETWEEN 9105101 AND 9105133
-  OR `tag` IN ('Employee','Message','News','Notice','Blog','Article','Video','Music','Product','Cart','ShopOrder');
+DELETE FROM `Request` WHERE `id` BETWEEN 9105101 AND 9105139
+  OR `tag` IN ('Employee','Message','News','Notice','Blog','Article','Video','Music','Product','Cart','ShopOrder','Category','Address');
 
 INSERT INTO `Request` (`id`, `debug`, `version`, `method`, `tag`, `structure`, `detail`, `date`) VALUES
 (9105101, 0, 1, 'POST', 'Employee', CAST('{"MUST":"name","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Employee', NOW()),
@@ -355,7 +414,15 @@ INSERT INTO `Request` (`id`, `debug`, `version`, `method`, `tag`, `structure`, `
 
 (9105131, 0, 1, 'POST', 'ShopOrder', CAST('{"MUST":"consignee,phone,address","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create ShopOrder', NOW()),
 (9105132, 0, 1, 'PUT', 'ShopOrder', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update ShopOrder', NOW()),
-(9105133, 0, 1, 'DELETE', 'ShopOrder', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete ShopOrder', NOW());
+(9105133, 0, 1, 'DELETE', 'ShopOrder', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete ShopOrder', NOW()),
+
+(9105134, 0, 1, 'POST', 'Category', CAST('{"MUST":"name,app","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Category', NOW()),
+(9105135, 0, 1, 'PUT', 'Category', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update Category', NOW()),
+(9105136, 0, 1, 'DELETE', 'Category', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Category', NOW()),
+
+(9105137, 0, 1, 'POST', 'Address', CAST('{"MUST":"consignee,phone,address","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Address', NOW()),
+(9105138, 0, 1, 'PUT', 'Address', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update Address', NOW()),
+(9105139, 0, 1, 'DELETE', 'Address', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Address', NOW());
 
 -- ---------------------------------------------------------------------------
 -- Seed rows (userId values exist in apijson_user)
@@ -405,29 +472,31 @@ INSERT INTO `Notice` (`id`,`userId`,`title`,`cover`,`content`,`status`,`date`) V
 (505, 82001, '食堂本周菜单调整', 'https://picsum.photos/id/292/800/450', '周三增加素食窗口；周五供应牛肉面。过敏原见告示牌。', 'published', '2026-08-11 08:40:00'),
 (506, 82003, '草稿：年会场地待定', 'https://picsum.photos/id/201/800/450', '候选两家酒店，预算对比表稍后发出。', 'draft', '2026-08-22 17:00:00');
 
-INSERT INTO `Blog` (`id`,`userId`,`title`,`author`,`cover`,`content`,`date`) VALUES
-(601, 38710, '把聊天变成可绑定的 API', 'TommyLemon', 'https://picsum.photos/id/2/800/450', 'Agent 不该每次点击都再跑一遍模型。一次生成 UI 与请求模板，之后筛选分页直接打 HTTP。', '2026-08-15 10:00:00'),
-(602, 82001, '周末在江边散步想到的产品细节', 'Test User', 'https://picsum.photos/id/1015/800/450', '列表页和详情页必须是独立页面：标题、surfaceId、保存快照都不能混用。', '2026-08-10 19:20:00'),
-(603, 82002, '前端布局分类的一次试验', 'Jan', 'https://picsum.photos/id/119/800/450', '按表名和字段推断社交/新闻/电商模板，用户仍可在工具栏手动覆盖。', '2026-08-08 13:11:00'),
-(604, 70793, '图表默认分组为什么不能用 id', 'Strong', 'https://picsum.photos/id/180/800/450', '主键几乎唯一，GROUP BY id 会得到一堆单点。部门、状态、日期更合适。', '2026-07-29 09:45:00'),
-(605, 82003, '一次失败的线下沙龙筹备', 'Wechat', 'https://picsum.photos/id/201/800/450', '场地确认晚了两天，物料印刷来不及。以后活动表必须有开始/结束时间。', '2026-07-02 21:00:00'),
-(606, 82012, '笔记：APIJSON 的 Access 与 Request', 'Steve', 'https://picsum.photos/id/24/800/450', 'GET 可以 UNKNOWN；POST 需要 tag 对应的 Request.structure，OWNER 会注入 userId。', '2026-06-18 08:30:00');
+INSERT INTO `Blog` (`id`,`userId`,`title`,`author`,`cover`,`content`,`praiseUserIdList`,`collectUserIdList`,`shareCount`,`date`) VALUES
+(601, 38710, '把聊天变成可绑定的 API', 'TommyLemon', 'https://picsum.photos/id/2/800/450', 'Agent 不该每次点击都再跑一遍模型。一次生成 UI 与请求模板，之后筛选分页直接打 HTTP。', '[82001,82002]', '[82003]', 12, '2026-08-15 10:00:00'),
+(602, 82001, '周末在江边散步想到的产品细节', 'Test User', 'https://picsum.photos/id/1015/800/450', '列表页和详情页必须是独立页面：标题、surfaceId、保存快照都不能混用。', '[38710]', '[]', 3, '2026-08-10 19:20:00'),
+(603, 82002, '前端布局分类的一次试验', 'Jan', 'https://picsum.photos/id/119/800/450', '按表名和字段推断社交/新闻/电商模板，用户仍可在工具栏手动覆盖。', '[82001]', '[38710,82001]', 5, '2026-08-08 13:11:00'),
+(604, 70793, '图表默认分组为什么不能用 id', 'Strong', 'https://picsum.photos/id/180/800/450', '主键几乎唯一，GROUP BY id 会得到一堆单点。部门、状态、日期更合适。', '[]', '[]', 1, '2026-07-29 09:45:00'),
+(605, 82003, '一次失败的线下沙龙筹备', 'Wechat', 'https://picsum.photos/id/201/800/450', '场地确认晚了两天，物料印刷来不及。以后活动表必须有开始/结束时间。', '[82012]', '[]', 0, '2026-07-02 21:00:00'),
+(606, 82012, '笔记：APIJSON 的 Access 与 Request', 'Steve', 'https://picsum.photos/id/24/800/450', 'GET 可以 UNKNOWN；POST 需要 tag 对应的 Request.structure，OWNER 会注入 userId。', '[82001,70793]', '[82002]', 8, '2026-06-18 08:30:00');
 
-INSERT INTO `Article` (`id`,`userId`,`title`,`author`,`cover`,`content`,`date`) VALUES
-(701, 38710, '从文本到结构化请求：A2API 0.1', 'TommyLemon', 'https://picsum.photos/id/0/800/450', 'proposeRequest / bindRequest 把一次成功的 APIJSON 调用冻成模板。稳态阶段 usedLlm=false。', '2026-08-16 11:00:00'),
-(702, 82001, '权限门控：缺 Access 时自动提交 Apply', 'Test User', 'https://picsum.photos/id/48/800/450', '编辑删除先打业务 API；若权限或结构不合法，Demo 自动向 Admin 提交配置申请。', '2026-08-09 15:40:00'),
-(703, 82002, '智能字段：图片、性别与外键', 'Jan', 'https://picsum.photos/id/177/800/450', 'Show=Auto 时根据字段名与注释推断图片；sex 显示男女；*Id 跳转关联详情。', '2026-08-04 10:22:00'),
-(704, 70793, '不要把 SQL 交给模型临场拼装', 'Strong', 'https://picsum.photos/id/60/800/450', '可控的是 HTTP 上的 JSON ORM。表级角色与 Request.structure 仍在你信任的 API 层。', '2026-07-21 09:00:00'),
-(705, 82003, '运营活动页需要的最小字段集', 'Wechat', 'https://picsum.photos/id/1018/800/450', '标题、封面、说明、开始结束时间、状态、报名人数。其余放到详情里编辑。', '2026-07-11 16:18:00'),
-(706, 82012, '电商列表为什么要独立购物车页', 'Steve', 'https://picsum.photos/id/292/800/450', '商品浏览是 commerce 布局；结算是 order。同一份 Product 数据，两种页面模板。', '2026-06-30 12:00:00');
+INSERT INTO `Article` (`id`,`userId`,`title`,`author`,`cover`,`content`,`praiseUserIdList`,`collectUserIdList`,`shareCount`,`date`) VALUES
+(701, 38710, '从文本到结构化请求：A2API 0.1', 'TommyLemon', 'https://picsum.photos/id/0/800/450', 'proposeRequest / bindRequest 把一次成功的 APIJSON 调用冻成模板。稳态阶段 usedLlm=false。', '[82001,82002,70793]', '[82001]', 21, '2026-08-16 11:00:00'),
+(702, 82001, '权限门控：缺 Access 时自动提交 Apply', 'Test User', 'https://picsum.photos/id/48/800/450', '编辑删除先打业务 API；若权限或结构不合法，Demo 自动向 Admin 提交配置申请。', '[38710]', '[]', 4, '2026-08-09 15:40:00'),
+(703, 82002, '智能字段：图片、性别与外键', 'Jan', 'https://picsum.photos/id/177/800/450', 'Show=Auto 时根据字段名与注释推断图片；sex 显示男女；*Id 跳转关联详情。', '[82001]', '[38710]', 6, '2026-08-04 10:22:00'),
+(704, 70793, '不要把 SQL 交给模型临场拼装', 'Strong', 'https://picsum.photos/id/60/800/450', '可控的是 HTTP 上的 JSON ORM。表级角色与 Request.structure 仍在你信任的 API 层。', '[]', '[82012]', 2, '2026-07-21 09:00:00'),
+(705, 82003, '运营活动页需要的最小字段集', 'Wechat', 'https://picsum.photos/id/1018/800/450', '标题、封面、说明、开始结束时间、状态、报名人数。其余放到详情里编辑。', '[82001]', '[]', 0, '2026-07-11 16:18:00'),
+(706, 82012, '电商列表为什么要独立购物车页', 'Steve', 'https://picsum.photos/id/292/800/450', '商品浏览是 commerce 布局；结算是 order。同一份 Product 数据，两种页面模板。', '[38710,82002]', '[82001]', 9, '2026-06-30 12:00:00');
 
-INSERT INTO `Video` (`id`,`userId`,`title`,`author`,`cover`,`videoUrl`,`duration`,`playCount`,`date`) VALUES
-(801, 82001, 'Big Buck Bunny', 'Blender', 'https://picsum.photos/id/1015/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', 596, 92000, '2026-08-01 10:00:00'),
-(802, 38710, 'Elephant Dream', 'Blender', 'https://picsum.photos/id/1018/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4', 653, 54000, '2026-07-20 10:00:00'),
-(803, 82002, 'Sintel', 'Blender', 'https://picsum.photos/id/1016/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4', 888, 121000, '2026-07-02 10:00:00'),
-(804, 82001, 'Tears of Steel', 'Blender', 'https://picsum.photos/id/201/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4', 734, 78000, '2026-06-18 10:00:00'),
-(805, 82003, 'For Bigger Blazes', 'Google', 'https://picsum.photos/id/28/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', 15, 21000, '2026-08-12 10:00:00'),
-(806, 70793, 'For Bigger Fun', 'Google', 'https://picsum.photos/id/1060/800/450', 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4', 60, 33400, '2026-08-14 10:00:00');
+-- Public HTTPS MP4s: no login, no cookie, browser <video> can play + seek (Accept-Ranges).
+-- Avoid Google gtv-videos-bucket — often blocked / hangs from CN networks.
+INSERT INTO `Video` (`id`,`userId`,`title`,`author`,`cover`,`videoUrl`,`duration`,`playCount`,`praiseUserIdList`,`collectUserIdList`,`shareCount`,`date`) VALUES
+(801, 82001, 'Sintel Trailer', 'Blender Foundation', 'https://media.w3.org/2010/05/sintel/poster.png', 'https://media.w3.org/2010/05/sintel/trailer.mp4', 52, 92000, '[38710,82002]', '[82003]', 44, '2026-08-01 10:00:00'),
+(802, 38710, 'Big Buck Bunny Trailer', 'Blender Foundation', 'https://media.w3.org/2010/05/bunny/poster.png', 'https://media.w3.org/2010/05/bunny/trailer.mp4', 33, 54000, '[82001]', '[]', 18, '2026-07-20 10:00:00'),
+(803, 82002, 'Oceans', 'Video.js', 'https://vjs.zencdn.net/v/oceans.png', 'https://vjs.zencdn.net/v/oceans.mp4', 47, 121000, '[82001,70793]', '[38710]', 61, '2026-07-02 10:00:00'),
+(804, 82001, 'Flower', 'MDN', 'https://picsum.photos/id/106/800/450', 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4', 5, 78000, '[]', '[82002]', 12, '2026-06-18 10:00:00'),
+(805, 82003, 'HTML5 Test Movie', 'W3C', 'https://media.w3.org/2010/05/video/poster.png', 'https://media.w3.org/2010/05/video/movie_300.mp4', 300, 21000, '[82012]', '[]', 3, '2026-08-12 10:00:00'),
+(806, 70793, 'Rabbit', 'MDN', 'https://mdn.github.io/learning-area/html/multimedia-and-embedding/video-and-audio-content/poster.png', 'https://mdn.github.io/learning-area/html/multimedia-and-embedding/video-and-audio-content/rabbit320.mp4', 8, 33400, '[82001,82002]', '[82001]', 9, '2026-08-14 10:00:00');
 
 INSERT INTO `Music` (`id`,`userId`,`title`,`artist`,`album`,`cover`,`audioUrl`,`duration`,`playCount`,`date`) VALUES
 (901, 82001, 'SoundHelix Song 1', 'Tilo Burkhardt', 'SoundHelix', 'https://picsum.photos/id/39/400/400', 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3', 372, 18000, '2026-08-01 12:00:00'),
@@ -437,15 +506,15 @@ INSERT INTO `Music` (`id`,`userId`,`title`,`artist`,`album`,`cover`,`audioUrl`,`
 (905, 82003, 'SoundHelix Song 13', 'Tilo Burkhardt', 'SoundHelix', 'https://picsum.photos/id/58/400/400', 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-13.mp3', 281, 4100, '2026-08-05 12:00:00'),
 (906, 70793, 'SoundHelix Song 16', 'Tilo Burkhardt', 'SoundHelix', 'https://picsum.photos/id/88/400/400', 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-16.mp3', 266, 3800, '2026-08-06 12:00:00');
 
-INSERT INTO `Product` (`id`,`userId`,`name`,`cover`,`description`,`price`,`stock`,`sales`,`status`,`date`) VALUES
-(1001, 82001, '陶瓷滤杯套装', 'https://picsum.photos/id/225/600/600', '手冲咖啡滤杯 + 分享壶，适合 1–2 人。', 168.00, 42, 320, 'on', '2026-07-01 10:00:00'),
-(1002, 82001, '亚麻沙发靠垫', 'https://picsum.photos/id/1078/600/600', '45×45 cm，可拆洗外套，四色可选。', 89.00, 120, 860, 'on', '2026-06-18 10:00:00'),
-(1003, 38710, '机械键盘套件', 'https://picsum.photos/id/119/600/600', '75% 配列，热插拔，附键帽与试轴器。', 459.00, 18, 140, 'on', '2026-08-01 10:00:00'),
-(1004, 82002, '登山折叠杖', 'https://picsum.photos/id/29/600/600', '铝合金，可调 65–135 cm，含泥托。', 129.00, 64, 210, 'on', '2026-05-20 10:00:00'),
-(1005, 82001, '帆布托特包', 'https://picsum.photos/id/1015/600/600', '16 oz 帆布，内袋分层，可装 14 寸笔记本。', 199.00, 35, 540, 'on', '2026-07-22 10:00:00'),
-(1006, 82003, '香薰蜡烛礼盒', 'https://picsum.photos/id/1080/600/600', '三罐季节限定气味，燃烧约 28 小时/罐。', 138.00, 80, 390, 'on', '2026-08-08 10:00:00'),
-(1007, 70793, '无线降噪耳机', 'https://picsum.photos/id/3/600/600', '主动降噪，续航 30 小时，USB-C 快充。', 799.00, 12, 95, 'on', '2026-08-12 10:00:00'),
-(1008, 82012, '桌面显示器灯', 'https://picsum.photos/id/201/600/600', '无频闪，色温 2700–6500K，屏幕挂灯。', 259.00, 0, 410, 'off', '2026-04-02 10:00:00');
+INSERT INTO `Product` (`id`,`userId`,`name`,`cover`,`pictureList`,`description`,`price`,`stock`,`sales`,`status`,`date`) VALUES
+(1001, 82001, '陶瓷滤杯套装', 'https://picsum.photos/id/225/800/800', CAST('["https://picsum.photos/id/225/800/800","https://picsum.photos/id/30/800/800","https://picsum.photos/id/42/800/800","https://picsum.photos/id/366/800/800"]' AS JSON), '手冲咖啡滤杯 + 分享壶，适合 1–2 人。', 168.00, 42, 320, 'on', '2026-07-01 10:00:00'),
+(1002, 82001, '亚麻沙发靠垫', 'https://picsum.photos/id/1078/800/800', CAST('["https://picsum.photos/id/1078/800/800","https://picsum.photos/id/201/800/800","https://picsum.photos/id/101/800/800","https://picsum.photos/id/1067/800/800"]' AS JSON), '45×45 cm，可拆洗外套，四色可选。', 89.00, 120, 860, 'on', '2026-06-18 10:00:00'),
+(1003, 38710, '机械键盘套件', 'https://picsum.photos/id/119/800/800', CAST('["https://picsum.photos/id/119/800/800","https://picsum.photos/id/160/800/800","https://picsum.photos/id/180/800/800","https://picsum.photos/id/250/800/800","https://picsum.photos/id/2/800/800"]' AS JSON), '75% 配列，热插拔，附键帽与试轴器。', 459.00, 18, 140, 'on', '2026-08-01 10:00:00'),
+(1004, 82002, '登山折叠杖', 'https://picsum.photos/id/29/800/800', CAST('["https://picsum.photos/id/29/800/800","https://picsum.photos/id/28/800/800","https://picsum.photos/id/14/800/800"]' AS JSON), '铝合金，可调 65–135 cm，含泥托。', 129.00, 64, 210, 'on', '2026-05-20 10:00:00'),
+(1005, 82001, '帆布托特包', 'https://picsum.photos/id/1015/800/800', CAST('["https://picsum.photos/id/1015/800/800","https://picsum.photos/id/1011/800/800","https://picsum.photos/id/103/800/800","https://picsum.photos/id/21/800/800"]' AS JSON), '16 oz 帆布，内袋分层，可装 14 寸笔记本。', 199.00, 35, 540, 'on', '2026-07-22 10:00:00'),
+(1006, 82003, '香薰蜡烛礼盒', 'https://picsum.photos/id/1080/800/800', CAST('["https://picsum.photos/id/1080/800/800","https://picsum.photos/id/1081/800/800","https://picsum.photos/id/292/800/800"]' AS JSON), '三罐季节限定气味，燃烧约 28 小时/罐。', 138.00, 80, 390, 'on', '2026-08-08 10:00:00'),
+(1007, 70793, '无线降噪耳机', 'https://picsum.photos/id/3/800/800', CAST('["https://picsum.photos/id/3/800/800","https://picsum.photos/id/7/800/800","https://picsum.photos/id/60/800/800","https://picsum.photos/id/96/800/800"]' AS JSON), '主动降噪，续航 30 小时，USB-C 快充。', 799.00, 12, 95, 'on', '2026-08-12 10:00:00'),
+(1008, 82012, '桌面显示器灯', 'https://picsum.photos/id/201/800/800', CAST('["https://picsum.photos/id/201/800/800","https://picsum.photos/id/366/800/800","https://picsum.photos/id/1/800/800","https://picsum.photos/id/24/800/800"]' AS JSON), '无频闪，色温 2700–6500K，屏幕挂灯。', 259.00, 0, 410, 'off', '2026-04-02 10:00:00');
 
 INSERT INTO `Cart` (`id`,`userId`,`productId`,`title`,`cover`,`price`,`qty`,`date`) VALUES
 (1101, 82001, 1001, '陶瓷滤杯套装', 'https://picsum.photos/id/225/600/600', 168.00, 1, '2026-08-20 12:00:00'),
@@ -458,3 +527,232 @@ INSERT INTO `ShopOrder` (`id`,`userId`,`consignee`,`phone`,`address`,`remark`,`t
 (1202, 38710, '陈舟', '13800001002', '深圳市南山区科技园路 1 号', '放前台', 459.00, 'shipped', '2026-08-10 16:05:00'),
 (1203, 82002, '苏晚', '13800001003', '杭州市西湖区文三路 200 号', NULL, 414.00, 'done', '2026-07-28 09:48:00'),
 (1204, 82003, '周衡', '13800001004', '北京市朝阳区工体北路 8 号', '不要电话营销', 799.00, 'pending', '2026-08-22 19:01:00');
+
+INSERT INTO `Category` (`id`,`userId`,`app`,`name`,`cover`,`sort`,`date`) VALUES
+(1301, 82001, 'commerce', '电器', 'https://picsum.photos/id/201/400/400', 1, '2026-08-01 10:00:00'),
+(1302, 82001, 'commerce', '服装', 'https://picsum.photos/id/1011/400/400', 2, '2026-08-01 10:00:00'),
+(1303, 82001, 'commerce', '运动', 'https://picsum.photos/id/28/400/400', 3, '2026-08-01 10:00:00'),
+(1304, 82001, 'commerce', '美妆', 'https://picsum.photos/id/1080/400/400', 4, '2026-08-01 10:00:00'),
+(1305, 82001, 'commerce', '食品', 'https://picsum.photos/id/225/400/400', 5, '2026-08-01 10:00:00'),
+(1306, 82001, 'commerce', '家居', 'https://picsum.photos/id/1078/400/400', 6, '2026-08-01 10:00:00'),
+(1307, 82001, 'commerce', '数码', 'https://picsum.photos/id/119/400/400', 7, '2026-08-01 10:00:00'),
+(1308, 82001, 'commerce', '图书', 'https://picsum.photos/id/24/400/400', 8, '2026-08-01 10:00:00'),
+(1311, 82001, 'music', '流行', 'https://picsum.photos/id/39/400/400', 1, '2026-08-01 10:00:00'),
+(1312, 82001, 'music', '摇滚', 'https://picsum.photos/id/88/400/400', 2, '2026-08-01 10:00:00'),
+(1313, 82001, 'music', '古典', 'https://picsum.photos/id/54/400/400', 3, '2026-08-01 10:00:00'),
+(1314, 82001, 'music', '电子', 'https://picsum.photos/id/58/400/400', 4, '2026-08-01 10:00:00'),
+(1315, 82001, 'music', '民谣', 'https://picsum.photos/id/45/400/400', 5, '2026-08-01 10:00:00'),
+(1316, 82001, 'music', '爵士', 'https://picsum.photos/id/40/400/400', 6, '2026-08-01 10:00:00'),
+(1321, 82001, 'news', '要闻', 'https://picsum.photos/id/1011/400/400', 1, '2026-08-01 10:00:00'),
+(1322, 82001, 'news', '财经', 'https://picsum.photos/id/20/400/400', 2, '2026-08-01 10:00:00'),
+(1323, 82001, 'news', '科技', 'https://picsum.photos/id/0/400/400', 3, '2026-08-01 10:00:00'),
+(1324, 82001, 'news', '体育', 'https://picsum.photos/id/28/400/400', 4, '2026-08-01 10:00:00'),
+(1325, 82001, 'news', '娱乐', 'https://picsum.photos/id/1015/400/400', 5, '2026-08-01 10:00:00'),
+(1326, 82001, 'news', '社会', 'https://picsum.photos/id/1019/400/400', 6, '2026-08-01 10:00:00'),
+(1331, 82001, 'info', '公告', 'https://picsum.photos/id/60/400/400', 1, '2026-08-01 10:00:00'),
+(1332, 82001, 'info', '制度', 'https://picsum.photos/id/180/400/400', 2, '2026-08-01 10:00:00'),
+(1333, 82001, 'info', '活动', 'https://picsum.photos/id/1016/400/400', 3, '2026-08-01 10:00:00'),
+(1334, 82001, 'info', '福利', 'https://picsum.photos/id/292/400/400', 4, '2026-08-01 10:00:00'),
+(1335, 82001, 'info', '培训', 'https://picsum.photos/id/96/400/400', 5, '2026-08-01 10:00:00'),
+(1341, 82001, 'video', '音乐', 'https://picsum.photos/id/39/400/400', 1, '2026-08-01 10:00:00'),
+(1342, 82001, 'video', '游戏', 'https://picsum.photos/id/96/400/400', 2, '2026-08-01 10:00:00'),
+(1343, 82001, 'video', '教育', 'https://picsum.photos/id/24/400/400', 3, '2026-08-01 10:00:00'),
+(1344, 82001, 'video', '生活', 'https://picsum.photos/id/106/400/400', 4, '2026-08-01 10:00:00'),
+(1345, 82001, 'video', '科技', 'https://picsum.photos/id/0/400/400', 5, '2026-08-01 10:00:00'),
+(1346, 82001, 'video', '纪录片', 'https://picsum.photos/id/1015/400/400', 6, '2026-08-01 10:00:00'),
+(1351, 82001, 'blog', '技术', 'https://picsum.photos/id/2/400/400', 1, '2026-08-01 10:00:00'),
+(1352, 82001, 'blog', '产品', 'https://picsum.photos/id/1015/400/400', 2, '2026-08-01 10:00:00'),
+(1353, 82001, 'blog', '随笔', 'https://picsum.photos/id/201/400/400', 3, '2026-08-01 10:00:00'),
+(1354, 82001, 'blog', '设计', 'https://picsum.photos/id/177/400/400', 4, '2026-08-01 10:00:00'),
+(1355, 82001, 'blog', '职场', 'https://picsum.photos/id/180/400/400', 5, '2026-08-01 10:00:00'),
+(1361, 82001, 'article', '教程', 'https://picsum.photos/id/177/400/400', 1, '2026-08-01 10:00:00'),
+(1362, 82001, 'article', '深度', 'https://picsum.photos/id/0/400/400', 2, '2026-08-01 10:00:00'),
+(1363, 82001, 'article', '观点', 'https://picsum.photos/id/60/400/400', 3, '2026-08-01 10:00:00'),
+(1364, 82001, 'article', '译文', 'https://picsum.photos/id/48/400/400', 4, '2026-08-01 10:00:00'),
+(1365, 82001, 'article', '快讯', 'https://picsum.photos/id/1018/400/400', 5, '2026-08-01 10:00:00'),
+(1371, 82001, 'campaign', '促销', 'https://picsum.photos/id/1060/400/400', 1, '2026-08-01 10:00:00'),
+(1372, 82001, 'campaign', '招募', 'https://picsum.photos/id/1018/400/400', 2, '2026-08-01 10:00:00'),
+(1373, 82001, 'campaign', '赛事', 'https://picsum.photos/id/1016/400/400', 3, '2026-08-01 10:00:00'),
+(1374, 82001, 'campaign', '沙龙', 'https://picsum.photos/id/201/400/400', 4, '2026-08-01 10:00:00'),
+(1381, 82001, 'social', '日常', 'https://picsum.photos/id/1015/400/400', 1, '2026-08-01 10:00:00'),
+(1382, 82001, 'social', '旅行', 'https://picsum.photos/id/1016/400/400', 2, '2026-08-01 10:00:00'),
+(1383, 82001, 'social', '美食', 'https://picsum.photos/id/292/400/400', 3, '2026-08-01 10:00:00'),
+(1384, 82001, 'social', '摄影', 'https://picsum.photos/id/106/400/400', 4, '2026-08-01 10:00:00'),
+(1391, 82001, 'chat', '工作', 'https://picsum.photos/id/201/400/400', 1, '2026-08-01 10:00:00'),
+(1392, 82001, 'chat', '好友', 'https://picsum.photos/id/64/400/400', 2, '2026-08-01 10:00:00'),
+(1393, 82001, 'chat', '通知', 'https://picsum.photos/id/60/400/400', 3, '2026-08-01 10:00:00');
+
+INSERT INTO `Address` (`id`,`userId`,`consignee`,`phone`,`region`,`address`,`tag`,`isDefault`,`date`) VALUES
+(1401, 82001, '林晓', '13800001001', '上海市 静安区', '南京西路 100 号 8 楼', '公司', 1, '2026-07-01 10:00:00'),
+(1402, 82001, '林晓', '13800001001', '上海市 徐汇区', '淮海中路 200 号 12 栋 3 单元', '家', 0, '2026-07-08 10:00:00'),
+(1403, 38710, '陈舟', '13800001002', '广东省 深圳市 南山区', '科技园路 1 号', '公司', 1, '2026-07-12 10:00:00'),
+(1404, 82002, '苏晚', '13800001003', '浙江省 杭州市 西湖区', '文三路 200 号', '家', 1, '2026-07-18 10:00:00'),
+(1405, 82003, '周衡', '13800001004', '北京市 朝阳区', '工体北路 8 号', '家', 1, '2026-08-02 10:00:00');
+
+-- Comment: optional momentId + video/article/blog FKs (Demo table, do not DROP)
+ALTER TABLE `Comment` MODIFY `momentId` bigint DEFAULT NULL COMMENT '动态 Moment.id';
+
+SET @db := DATABASE();
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='videoId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `videoId` bigint DEFAULT NULL COMMENT ''视频 Video.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='articleId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `articleId` bigint DEFAULT NULL COMMENT ''文章 Article.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='blogId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `blogId` bigint DEFAULT NULL COMMENT ''博客 Blog.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Product' AND COLUMN_NAME='pictureList'),
+    'SELECT 1',
+    'ALTER TABLE `Product` ADD COLUMN `pictureList` json DEFAULT NULL COMMENT ''商品图集'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/225/800/800","https://picsum.photos/id/30/800/800","https://picsum.photos/id/42/800/800","https://picsum.photos/id/366/800/800"]' AS JSON) WHERE `id` = 1001 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/1078/800/800","https://picsum.photos/id/201/800/800","https://picsum.photos/id/101/800/800","https://picsum.photos/id/1067/800/800"]' AS JSON) WHERE `id` = 1002 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/119/800/800","https://picsum.photos/id/160/800/800","https://picsum.photos/id/180/800/800","https://picsum.photos/id/250/800/800","https://picsum.photos/id/2/800/800"]' AS JSON) WHERE `id` = 1003 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/29/800/800","https://picsum.photos/id/28/800/800","https://picsum.photos/id/14/800/800"]' AS JSON) WHERE `id` = 1004 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/1015/800/800","https://picsum.photos/id/1011/800/800","https://picsum.photos/id/103/800/800","https://picsum.photos/id/21/800/800"]' AS JSON) WHERE `id` = 1005 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/1080/800/800","https://picsum.photos/id/1081/800/800","https://picsum.photos/id/292/800/800"]' AS JSON) WHERE `id` = 1006 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/3/800/800","https://picsum.photos/id/7/800/800","https://picsum.photos/id/60/800/800","https://picsum.photos/id/96/800/800"]' AS JSON) WHERE `id` = 1007 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+UPDATE `Product` SET `pictureList` = CAST('["https://picsum.photos/id/201/800/800","https://picsum.photos/id/366/800/800","https://picsum.photos/id/1/800/800","https://picsum.photos/id/24/800/800"]' AS JSON) WHERE `id` = 1008 AND (`pictureList` IS NULL OR JSON_LENGTH(`pictureList`) < 2);
+
+UPDATE `Request`
+SET `structure` = CAST('{"MUST":"content","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON),
+    `detail` = 'Create Comment (momentId / videoId / articleId / blogId optional)'
+WHERE `tag` = 'Comment' AND `method` = 'POST';
+
+DELETE FROM `Comment` WHERE `id` BETWEEN 91001 AND 91012;
+INSERT INTO `Comment` (`id`,`userId`,`toId`,`momentId`,`videoId`,`articleId`,`blogId`,`date`,`content`) VALUES
+(91001, 38710, 0, NULL, 801, NULL, NULL, '2026-08-02 11:00:00', '片头音乐和演示素材都够用。'),
+(91002, 82002, 0, NULL, 801, NULL, NULL, '2026-08-02 12:20:00', '建议详情页把相关视频做成接下来播放。'),
+(91003, 70793, 0, NULL, 803, NULL, NULL, '2026-07-03 09:10:00', 'Sintel 当 16:9 播放器测试正好。'),
+(91004, 82001, 0, NULL, NULL, 701, NULL, '2026-08-16 12:30:00', '稳态 usedLlm=false 这点写得很清楚。'),
+(91005, 82002, 0, NULL, NULL, 701, NULL, '2026-08-16 14:05:00', '评论和点赞也必须走绑定后的 /apijson，而不是假按钮。'),
+(91006, 38710, 0, NULL, NULL, 703, NULL, '2026-08-05 10:00:00', '外键跳转作者详情就是这里该接的。'),
+(91007, 82001, 0, NULL, NULL, NULL, 601, '2026-08-15 16:40:00', '绑定一次，后面筛选分页直接 HTTP。');
+
+-- categoryId on content tables (idempotent). Standalone: layout_demo_categories.sql
+SET @db := DATABASE();
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Product')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Product' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Product` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Music')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Music' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Music` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''流派 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='News')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='News' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `News` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''栏目 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Notice')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Notice' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Notice` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''栏目 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Video')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Video' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Video` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Blog')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Blog' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Blog` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Article')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Article' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Article` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Activity')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Activity' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Activity` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Moment')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Moment' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Moment` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''话题 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Message')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Message' AND COLUMN_NAME='categoryId'),
+  'ALTER TABLE `Message` ADD COLUMN `categoryId` bigint DEFAULT NULL COMMENT ''分类 Category.id''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+UPDATE `Product` SET `categoryId` = 1305 WHERE `id` = 1001 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1306 WHERE `id` = 1002 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1307 WHERE `id` = 1003 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1303 WHERE `id` = 1004 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1302 WHERE `id` = 1005 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1304 WHERE `id` = 1006 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1301 WHERE `id` = 1007 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Product` SET `categoryId` = 1301 WHERE `id` = 1008 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1311 WHERE `id` = 901 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1312 WHERE `id` = 902 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1313 WHERE `id` = 903 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1314 WHERE `id` = 904 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1315 WHERE `id` = 905 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Music` SET `categoryId` = 1316 WHERE `id` = 906 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1321 WHERE `id` = 401 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1323 WHERE `id` = 402 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1326 WHERE `id` = 403 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1324 WHERE `id` = 404 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1325 WHERE `id` = 405 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1322 WHERE `id` = 406 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1331 WHERE `id` = 501 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1332 WHERE `id` = 502 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1333 WHERE `id` = 503 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1332 WHERE `id` = 504 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1334 WHERE `id` = 505 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Notice` SET `categoryId` = 1333 WHERE `id` = 506 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1346 WHERE `id` = 801 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1346 WHERE `id` = 802 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1346 WHERE `id` = 803 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1344 WHERE `id` = 804 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1343 WHERE `id` = 805 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Video` SET `categoryId` = 1344 WHERE `id` = 806 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1351 WHERE `id` = 601 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1352 WHERE `id` = 602 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1351 WHERE `id` = 603 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1351 WHERE `id` = 604 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1353 WHERE `id` = 605 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Blog` SET `categoryId` = 1351 WHERE `id` = 606 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1362 WHERE `id` = 701 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1362 WHERE `id` = 702 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1361 WHERE `id` = 703 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1363 WHERE `id` = 704 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1361 WHERE `id` = 705 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1363 WHERE `id` = 706 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1371 WHERE `id` = 201 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1372 WHERE `id` = 202 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1373 WHERE `id` = 203 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1371 WHERE `id` = 204 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1371 WHERE `id` = 205 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Activity` SET `categoryId` = 1374 WHERE `id` = 206 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Message` SET `categoryId` = 1391 WHERE `id` IN (301, 302, 303) AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Message` SET `categoryId` = 1392 WHERE `id` IN (304, 305, 308) AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Message` SET `categoryId` = 1393 WHERE `id` IN (306, 307) AND (`categoryId` IS NULL OR `categoryId` = 0);

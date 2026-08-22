@@ -85,7 +85,7 @@ export const FK_OPTIONAL_COLUMNS: Record<string, string[]> = {
     "praiseUserIdList",
     "pictureList",
   ],
-  Comment: ["id", "content", "userId", "momentId", "toId", "date"],
+  Comment: ["id", "content", "userId", "momentId", "videoId", "articleId", "blogId", "toId", "date"],
   Employee: ["id", "name", "dept", "title", "sex", "salary", "status", "head"],
   Activity: ["id", "title", "cover", "status", "startTime", "endTime"],
   Message: ["id", "content", "author", "head", "toUserId", "date"],

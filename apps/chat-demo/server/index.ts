@@ -11,7 +11,12 @@ import { loadEnv } from "./load-env.js";
 import { repairBody } from "./llm.js";
 import type { LlmConfig } from "./llm-config.js";
 import { Orchestrator } from "./orchestrator.js";
+import { isActionSlot } from "./action-bind.js";
 import { loadSchemaComments } from "./schema-comments.js";
+import {
+  ensureLayoutAddress,
+  ensureLayoutCategories,
+} from "./ensure-categories.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,16 +67,28 @@ app.post("/api/chat", async (c) => {
       language?: string;
     };
     apijsonAuth?: ApijsonAuthBody;
+    actionSlot?: string;
+    actionContext?: {
+      table?: string | null;
+      columns?: string[];
+      comments?: { tables?: Record<string, string>; columns?: Record<string, string> };
+      app?: string;
+      page?: string;
+    };
   }>();
   if (!body.message?.trim()) {
     return c.json({ error: "message required" }, 400);
   }
   try {
+    const slot = isActionSlot(body.actionSlot) ? body.actionSlot : undefined;
     const result = await orch.chat(
       body.sessionId,
       body.message.trim(),
       body.llm,
       authFromBody(body.apijsonAuth),
+      slot
+        ? { slot, context: body.actionContext }
+        : undefined,
     );
     return c.json(result);
   } catch (e) {
@@ -272,13 +289,37 @@ app.post("/api/analyze", async (c) => {
 
 app.get("/api/schema-comments", async (c) => {
   const tables = (c.req.query("tables") ||
-    "User,Moment,Comment,Employee,Activity,Message,News,Notice,Blog,Article,Video,Music,Product,Cart,ShopOrder")
+    "User,Moment,Comment,Employee,Activity,Message,News,Notice,Blog,Article,Video,Music,Product,Cart,ShopOrder,Category")
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);
   try {
     const data = await loadSchemaComments(orch.client, tables);
     return c.json(data);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      500,
+    );
+  }
+});
+
+app.post("/api/ensure-layout-categories", async (c) => {
+  try {
+    const result = await ensureLayoutCategories(orch.client);
+    return c.json(result, result.ok ? 200 : 500);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      500,
+    );
+  }
+});
+
+app.post("/api/ensure-layout-address", async (c) => {
+  try {
+    const result = await ensureLayoutAddress(orch.client);
+    return c.json(result, result.ok ? 200 : 500);
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : String(e) },

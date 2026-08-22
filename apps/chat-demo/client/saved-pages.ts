@@ -12,7 +12,13 @@ import type {
   DisplayKind,
   ViewMode,
 } from "./result-view.js";
-import type { LayoutKind } from "./page-layout.js";
+import type {
+  ActionBinding,
+  ActionSlot,
+  LayoutApp,
+  LayoutKind,
+  LayoutPage,
+} from "./page-layout.js";
 import type { ColumnFilter, ColumnSort } from "./table-query.js";
 
 const STORAGE_KEY = "a2api.savedPages";
@@ -185,10 +191,14 @@ export type SavedPageSnapshot = {
   columnOrder: string[];
   columnMetas: Record<string, ColumnMeta>;
   displayKind: DisplayKind;
-  /** Business layout category (data / social / video / cart …). */
+  /** @deprecated use layoutApp + layoutPage */
   layoutKind?: LayoutKind;
+  layoutApp?: LayoutApp;
+  layoutPage?: LayoutPage;
   /** True when the user picked a layout in the toolbar. */
   layoutKindManual?: boolean;
+  /** A2API bindRequest per UI slot (like / comment / …). */
+  actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
   chartLabelPath: string;
   chartValuePath: string;
   chartDimensions: ChartDimension[];

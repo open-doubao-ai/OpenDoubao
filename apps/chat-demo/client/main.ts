@@ -4,7 +4,10 @@ import {
   mountCreateView,
   mountWorkspaceGuide,
   parseResponse,
+  makeBackIconButton,
+  paintDetailChrome,
   renderResultView,
+  setDetailChrome,
   triggerListCreate,
   type ChartDimension,
   type ColumnMeta,
@@ -16,12 +19,57 @@ import {
   type WritePayload,
 } from "./result-view.js";
 import {
-  inferLayoutKind,
-  isLayoutKind,
-  LAYOUT_KINDS,
-  layoutKindLabel,
+  inferLayoutSpec,
+  isAddressPage,
+  isExploreLayoutPage,
+  isOrdersPage,
+  isSettingsPage,
+  isUserLayoutPage,
+  LAYOUT_APPS,
+  LAYOUT_PAGES_BY_APP,
+  layoutAppLabel,
+  layoutPageLabel,
+  layoutSpecLabel,
+  legacyKindFromSpec,
+  parseLayoutSpec,
+  pickSearchColumnPath,
+  specFromLegacy,
+  specsEqual,
+  type ActionBinding,
+  type ActionSlot,
+  type LayoutApp,
   type LayoutKind,
+  type LayoutPage,
+  type LayoutSpec,
 } from "./page-layout.js";
+import { setPendingSearchQuery } from "./layout-explore.js";
+import {
+  ensureLayoutCategories,
+  inferCategoryIdField,
+  inferCategoryTable,
+  inferItemTableForApp,
+  isCategoryTable,
+} from "./layout-category.js";
+import {
+  ensureLayoutAddress,
+  inferAddressTable,
+  inferOrderTable,
+  isAddressTable,
+  isOrderTable,
+} from "./layout-entities.js";
+import { flashLayoutNote } from "./layout-views.js";
+import {
+  actionBindPrompt,
+  bindingFromPayload,
+  fetchBoundGet,
+  fillActionBody,
+  inferPersonTable,
+  inferWriteTable,
+  type ActionBindContext,
+  type ActionRunContext,
+  type ActionSlotResult,
+} from "./layout-actions.js";
+import { socialWriteFlags } from "./layout-social.js";
 import {
   applyRelateToColumnMetas,
   mergeStructureForApply,
@@ -265,7 +313,9 @@ type SessionUi = {
   displayKind: DisplayKind;
   /** Business layout for list/detail (auto from table/fields, overridable). */
   layoutKind: LayoutKind;
+  layoutSpec: LayoutSpec;
   layoutKindManual: boolean;
+  actionBindings: Partial<Record<ActionSlot, ActionBinding>>;
   chartLabelPath: string;
   /** @deprecated migrated into chartFieldValues */
   chartValuePath: string;
@@ -275,6 +325,8 @@ type SessionUi = {
   chartFieldValues: Record<string, string>;
   combinedShowTable: boolean;
   lastResponse: unknown;
+  /** Last chat text used to pick home vs list/detail/search. */
+  lastUserPrompt: string;
   /** Prefill for Add form (e.g. Create moment with content "…") */
   createInitialValues: Record<string, unknown> | null;
   bindMeta: {
@@ -311,7 +363,9 @@ const state: SessionUi = {
   columnMetas: {},
   displayKind: "table",
   layoutKind: "data",
+  layoutSpec: { app: "data", page: "list" },
   layoutKindManual: false,
+  actionBindings: {},
   chartLabelPath: "",
   chartValuePath: "",
   chartDimensions: [],
@@ -319,6 +373,7 @@ const state: SessionUi = {
   chartFieldValues: {},
   combinedShowTable: true,
   lastResponse: null,
+  lastUserPrompt: "",
   createInitialValues: null,
   bindMeta: null,
   activePageId: null,
@@ -405,7 +460,10 @@ function renderRows(response: unknown) {
     columnMetas: state.columnMetas,
     displayKind: state.displayKind,
     layoutKind: state.layoutKind,
+    layoutSpec: state.layoutSpec,
     layoutKindManual: state.layoutKindManual,
+    actionBindings: state.actionBindings,
+    onActionSlot: (slot, ctx, opts) => handleActionSlot(slot, ctx, opts),
     onLayoutKindResolved: (kind) => {
       if (state.layoutKindManual) return;
       if (state.layoutKind === kind) {
@@ -413,11 +471,36 @@ function renderRows(response: unknown) {
         return;
       }
       state.layoutKind = kind;
+      state.layoutSpec = specFromLegacy(kind, state.pageKind);
       persistCurrentPageVersion({ captureThumb: false });
       syncLayoutKindControl();
     },
+    onLayoutSpecResolved: (spec) => {
+      if (state.layoutKindManual) return;
+      if (specsEqual(spec, state.layoutSpec)) {
+        syncLayoutKindControl();
+        return;
+      }
+      applyLayoutSpec(spec, { manual: false, rerender: false });
+    },
     onRequestLayoutKind: (kind) => {
       applyLayoutKind(kind, { manual: true, rerender: true });
+    },
+    onAppSearch: (q) => applyInPlaceAppSearch(q),
+    onOpenAppSearch: (q) => {
+      void openAppSearchPage(q);
+    },
+    layoutPrompt: state.lastUserPrompt,
+    onSelectAppPage: (page) => selectAppPage(page),
+    onOpenAppScan: () => openAppScanPage(),
+    onOpenCategory: (id) => {
+      void openCategoryItems(id);
+    },
+    onReplaceFilters: (filters) => {
+      applyReplacedFilters(filters);
+    },
+    onComments: (c) => {
+      state.comments = mergeComments(state.comments, c);
     },
     chartLabelPath: state.chartLabelPath || undefined,
     chartValuePath: state.chartValuePath || undefined,
@@ -691,7 +774,7 @@ function renderRows(response: unknown) {
       void bound("tables_change");
     },
     onBackToList: () => {
-      void returnToListPage();
+      void goBackPage();
     },
     onOpenDetail: (info) => {
       activateIndependentPage({
@@ -729,67 +812,214 @@ function renderRows(response: unknown) {
   });
 }
 
+type PageNavRef = { pageId: string; version: number; title: string };
+
+/** Workspace page history — leftmost Back returns to the previous page. */
+let pageNavStack: PageNavRef[] = [];
+let pageNavGoingBack = false;
+
+function rememberPageBeforeJump(nextPageId?: string | null) {
+  if (pageNavGoingBack) return;
+  if (!state.activePageId || state.activeVersion == null) return;
+  if (nextPageId && nextPageId === state.activePageId) return;
+  persistCurrentPageVersion({ captureThumb: false });
+  const ref: PageNavRef = {
+    pageId: state.activePageId,
+    version: state.activeVersion,
+    title: state.pageTitle,
+  };
+  const top = pageNavStack[pageNavStack.length - 1];
+  if (top && top.pageId === ref.pageId && top.version === ref.version) return;
+  pageNavStack.push(ref);
+  if (pageNavStack.length > 40) pageNavStack.shift();
+}
+
+function dropPageNavEntries(pageId: string) {
+  pageNavStack = pageNavStack.filter((r) => r.pageId !== pageId);
+}
+
+async function goBackPage() {
+  persistCurrentPageVersion();
+  setDetailChrome(null);
+  while (pageNavStack.length) {
+    const prev = pageNavStack.pop()!;
+    if (prev.pageId === state.activePageId) continue;
+    if (!getSavedPage(prev.pageId)) continue;
+    pageNavGoingBack = true;
+    try {
+      await switchToSavedPage(prev.pageId, prev.version, {
+        skipPersist: true,
+      });
+    } finally {
+      pageNavGoingBack = false;
+    }
+    return;
+  }
+  await returnToListPage();
+}
+
 /** Back from detail → list page (independent page identity). */
 async function returnToListPage() {
   // Persist create/detail layout BEFORE clearing in-memory slots/kind.
   // switchToSavedPage also persists first — if we wipe state here, that
   // write would empty Register User / forked pages in localStorage.
   persistCurrentPageVersion();
+  setDetailChrome(null);
   const ref = state.listPageRef;
   state.listPageRef = null;
   state.viewMode = "list";
   state.pageKind = "list";
   state.detailSlots = [];
-  if (ref) {
-    // Already persisted above; skipPersist so wiped slots aren't written back
-    await switchToSavedPage(ref.pageId, ref.version, { skipPersist: true });
-    return;
+  pageNavGoingBack = true;
+  try {
+    if (ref) {
+      // Already persisted above; skipPersist so wiped slots aren't written back
+      await switchToSavedPage(ref.pageId, ref.version, { skipPersist: true });
+      return;
+    }
+    // Already on a list bind — just refresh chrome title
+    const primary = inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null);
+    if (primary && state.hasBind) {
+      const { title } = normalizePageIdentity({
+        table: primary,
+        kind: "list",
+        surfaceId: state.activePageId,
+        title: state.pageTitle,
+      });
+      syncPageTitleInput(title);
+      renderFilters(state.filters);
+      void bound("refresh");
+      return;
+    }
+    renderFilters(state.filters);
+    if (state.hasBind) void bound("refresh");
+    else mountWorkspaceGuide($("result-view"));
+  } finally {
+    pageNavGoingBack = false;
   }
-  // Already on a list bind — just refresh chrome title
-  const primary = inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null);
-  if (primary && state.hasBind) {
-    const { title } = normalizePageIdentity({
-      table: primary,
-      kind: "list",
-      surfaceId: state.activePageId,
-      title: state.pageTitle,
-    });
-    syncPageTitleInput(title);
-    void bound("refresh");
-    return;
+}
+
+function currentPrimaryTable(): string | null {
+  return inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null);
+}
+
+function isAuxiliaryTable(table: string | null | undefined): boolean {
+  if (!table) return false;
+  return (
+    isCategoryTable(table, state.comments) ||
+    isOrderTable(table, state.comments) ||
+    isAddressTable(table, state.comments) ||
+    inferPersonTable(state.comments) === table
+  );
+}
+
+function itemTableForApp(app: LayoutApp): string | null {
+  const cat = inferCategoryTable(state.comments);
+  const inferred = inferItemTableForApp(app, state.comments, cat);
+  if (inferred && !isAuxiliaryTable(inferred)) return inferred;
+  const cur = currentPrimaryTable();
+  if (!cur || isAuxiliaryTable(cur)) return null;
+  const spec = inferLayoutSpec({
+    table: cur,
+    comments: state.comments,
+    pageKind: "list",
+  });
+  return spec.app === app ? cur : null;
+}
+
+function contentLandingPage(app: LayoutApp): LayoutPage {
+  const allowed = LAYOUT_PAGES_BY_APP[app];
+  if (allowed.includes("list")) return "list";
+  if (allowed.includes("home")) return "home";
+  if (allowed.includes("feed")) return "feed";
+  return allowed[0] ?? "list";
+}
+
+/** Sync table for a layout page, or `undefined` when the page should keep the current bind. */
+function tableForPageSync(app: LayoutApp, page: LayoutPage): string | null | undefined {
+  if (
+    page === "cart" ||
+    page === "order" ||
+    page === "scan" ||
+    page === "create" ||
+    page === "category"
+  ) {
+    return undefined;
   }
-  if (state.hasBind) void bound("refresh");
-  else mountWorkspaceGuide($("result-view"));
+  if (isOrdersPage(page)) return inferOrderTable(state.comments);
+  if (isAddressPage(page)) return inferAddressTable(state.comments);
+  if (isUserLayoutPage(page) || page === "profile") {
+    return inferPersonTable(state.comments);
+  }
+  if (isSettingsPage(page) && page !== "favorite") return undefined;
+  if (page === "favorite") return itemTableForApp(app);
+  if (page === "feed") return itemTableForApp(app);
+  if (
+    page === "home" ||
+    page === "list" ||
+    page === "detail" ||
+    page === "player" ||
+    page === "recommend" ||
+    page === "rank" ||
+    page === "history" ||
+    page === "search"
+  ) {
+    return itemTableForApp(app);
+  }
+  return undefined;
+}
+
+async function refreshLayoutComments() {
+  try {
+    const c = await api<SchemaComments>(
+      "/api/schema-comments?tables=User,Moment,Comment,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee",
+    );
+    state.comments = mergeComments(state.comments, c);
+  } catch {
+    /* ignore — infer from whatever comments we already have */
+  }
+}
+
+async function resolveTableForPage(
+  app: LayoutApp,
+  page: LayoutPage,
+): Promise<string | null | undefined> {
+  const quick = tableForPageSync(app, page);
+  if (quick !== null) return quick;
+  await refreshLayoutComments();
+  if (isAddressPage(page) && !inferAddressTable(state.comments)) {
+    const ensured = await ensureLayoutAddress();
+    if (ensured.comments) {
+      state.comments = mergeComments(state.comments, ensured.comments);
+    }
+    return inferAddressTable(state.comments) || ensured.table || null;
+  }
+  return tableForPageSync(app, page);
 }
 
 /**
- * FK id-list link → related table list, filtered by id (eq or IN).
- * e.g. Moment.praiseUserIdList [12,34] → User List where id ∈ {12,34}.
+ * Bind a list GET for `table` (no LLM). Used by FK jumps and layout page switches.
  */
-async function openFkTableFiltered(info: {
+async function openBoundTableList(opts: {
   table: string;
-  ids: Array<string | number>;
-  field?: string;
-}) {
-  const table = info.table.trim();
-  const field = (info.field || "id").trim() || "id";
-  const ids = info.ids.filter(
-    (id) =>
-      (typeof id === "number" && Number.isFinite(id)) ||
-      (typeof id === "string" && /^-?\d+$/.test(id.trim())),
-  );
-  if (!table || !ids.length) return;
-
-  persistCurrentPageVersion();
-  state.listPageRef = null;
-  state.detailSlots = [];
-  state.viewMode = "list";
-  state.pageKind = "list";
+  filters?: ColumnFilter[];
+  keepLayout?: boolean;
+  prepare?: () => void;
+}): Promise<boolean> {
+  const table = opts.table.trim();
+  if (!table) return false;
 
   const { surfaceId, title } = normalizePageIdentity({
     table,
     kind: "list",
   });
+  rememberPageBeforeJump(surfaceId);
+  persistCurrentPageVersion();
+  setDetailChrome(null);
+  state.listPageRef = null;
+  state.detailSlots = [];
+  state.viewMode = "list";
+  state.pageKind = "list";
   const existing = getSavedPage(surfaceId);
   const latest = existing?.versions.length
     ? existing.versions.reduce((a, b) => (a.version >= b.version ? a : b))
@@ -829,65 +1059,90 @@ async function openFkTableFiltered(info: {
     state.columnMetas = {};
     state.tableJoins = {};
     state.displayKind = "table";
-    state.layoutKindManual = false;
-    state.layoutKind = inferLayoutKind({
-      table,
-      comments: state.comments,
-      pageKind: "list",
-    });
+    if (!opts.keepLayout) {
+      state.layoutKindManual = false;
+      seedLayoutFromTable(table);
+    }
+    state.actionBindings = {};
     state.chartLabelPath = "";
     state.chartValuePath = "";
     state.chartDimensions = [];
     state.chartFieldColors = {};
     state.chartFieldValues = {};
     state.combinedShowTable = true;
-    state.filterCombineExpr = "";
     saveGeneratedPage(surfaceId, title, [
       { key: "page", label: "Page", type: "number" },
       { key: "count", label: "Count", type: "number" },
     ]);
   }
 
-  // Ensure PK id is filterable/visible so the active filter shows in the header
-  const idPath = `${table}.${field}`;
-  const prevMeta = state.columnMetas[idPath];
-  state.columnMetas = {
-    ...state.columnMetas,
-    [idPath]: {
-      path: idPath,
-      type: prevMeta?.type ?? "number",
-      show: prevMeta?.show ?? "auto",
-      visible: true,
-      filterable: true,
-      sortable: prevMeta?.sortable ?? true,
-      ...(prevMeta?.displayName
-        ? { displayName: prevMeta.displayName }
-        : {}),
-      ...(prevMeta?.onTable ? { onTable: prevMeta.onTable } : {}),
-      ...(prevMeta?.onField ? { onField: prevMeta.onField } : {}),
-    },
-  };
-
-  state.columnFilters = [
-    {
-      path: idPath,
-      conditions: [
-        {
-          id: newConditionId(),
-          op: ids.length === 1 ? "eq" : "in",
-          value: ids.join(","),
-          join: "and",
-          not: false,
-        },
-      ],
-    },
-  ];
+  if (opts.filters) state.columnFilters = opts.filters;
+  else state.columnFilters = [];
   state.filterCombineExpr = "";
+  opts.prepare?.();
 
   syncPageTitleInput(state.pageTitle || title);
   renderFilters(state.filters);
   setUi({ ...readUi(), page: 0, count });
   await bound("search");
+  return true;
+}
+
+/**
+ * FK id-list link → related table list, filtered by id (eq or IN).
+ * e.g. Moment.praiseUserIdList [12,34] → User List where id ∈ {12,34}.
+ */
+async function openFkTableFiltered(info: {
+  table: string;
+  ids: Array<string | number>;
+  field?: string;
+}) {
+  const table = info.table.trim();
+  const field = (info.field || "id").trim() || "id";
+  const ids = info.ids.filter(
+    (id) =>
+      (typeof id === "number" && Number.isFinite(id)) ||
+      (typeof id === "string" && /^-?\d+$/.test(id.trim())),
+  );
+  if (!table || !ids.length) return;
+
+  const idPath = `${table}.${field}`;
+  await openBoundTableList({
+    table,
+    filters: [
+      {
+        path: idPath,
+        conditions: [
+          {
+            id: newConditionId(),
+            op: ids.length === 1 ? "eq" : "in",
+            value: ids.join(","),
+            join: "and",
+            not: false,
+          },
+        ],
+      },
+    ],
+    prepare: () => {
+      const prevMeta = state.columnMetas[idPath];
+      state.columnMetas = {
+        ...state.columnMetas,
+        [idPath]: {
+          path: idPath,
+          type: prevMeta?.type ?? "number",
+          show: prevMeta?.show ?? "auto",
+          visible: true,
+          filterable: true,
+          sortable: prevMeta?.sortable ?? true,
+          ...(prevMeta?.displayName
+            ? { displayName: prevMeta.displayName }
+            : {}),
+          ...(prevMeta?.onTable ? { onTable: prevMeta.onTable } : {}),
+          ...(prevMeta?.onField ? { onField: prevMeta.onField } : {}),
+        },
+      };
+    },
+  });
 }
 
 /** Detail ↔ Table DDL: same onTable/onField store (no remount). */
@@ -964,7 +1219,12 @@ function capturePageSnapshot(): Omit<
     columnMetas: structuredClone(state.columnMetas),
     displayKind: state.displayKind,
     layoutKind: state.layoutKind,
+    layoutApp: state.layoutSpec.app,
+    layoutPage: state.layoutSpec.page,
     layoutKindManual: state.layoutKindManual,
+    actionBindings: Object.keys(state.actionBindings).length
+      ? structuredClone(state.actionBindings)
+      : undefined,
     chartLabelPath: state.chartLabelPath,
     chartValuePath: state.chartValuePath,
     chartDimensions: structuredClone(state.chartDimensions),
@@ -986,14 +1246,15 @@ function syncPageTitleInput(title: string) {
 
 function syncLayoutKindControl() {
   const btn = document.getElementById("page-layout-btn");
-  if (btn) btn.textContent = layoutKindLabel(state.layoutKind);
+  if (btn) btn.textContent = layoutSpecLabel(state.layoutSpec);
 }
 
-function applyLayoutKind(
-  kind: LayoutKind,
+function applyLayoutSpec(
+  spec: LayoutSpec,
   opts?: { manual?: boolean; rerender?: boolean },
 ) {
-  state.layoutKind = kind;
+  state.layoutSpec = spec;
+  state.layoutKind = legacyKindFromSpec(spec);
   if (opts?.manual) state.layoutKindManual = true;
   persistCurrentPageVersion({ captureThumb: false });
   syncLayoutKindControl();
@@ -1001,20 +1262,79 @@ function applyLayoutKind(
   if (opts?.rerender) {
     if (state.lastResponse != null || state.hasBind) {
       renderRows(state.lastResponse);
-    } else if (kind === "cart" || kind === "order") {
+    } else if (spec.page === "cart" || spec.page === "order") {
       renderRows({ code: 200 });
     }
   }
 }
 
+function applyLayoutKind(
+  kind: LayoutKind,
+  opts?: { manual?: boolean; rerender?: boolean },
+) {
+  applyLayoutSpec(specFromLegacy(kind, state.pageKind), opts);
+}
+
+function currentSearchColumns(): string[] {
+  const metas = Object.keys(state.columnMetas);
+  if (metas.length) return metas;
+  if (state.comments) return Object.keys(state.comments.columns);
+  return [];
+}
+
+function applyInPlaceAppSearch(q: string) {
+  const primary = inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null);
+  const path = pickSearchColumnPath(currentSearchColumns(), primary);
+  const trimmed = q.trim();
+  if (path) {
+    const rest = state.columnFilters.filter((f) => f.path !== path);
+    state.columnFilters = trimmed
+      ? [
+          ...rest,
+          {
+            path,
+            conditions: [
+              {
+                id: newConditionId(),
+                op: "contains",
+                value: trimmed,
+                join: "and",
+                not: false,
+              },
+            ],
+          },
+        ]
+      : rest;
+  }
+  if (state.hasBind && state.pageKind === "list") {
+    void bound("search", { page: 0 });
+  }
+}
+
+async function openAppSearchPage(q: string) {
+  const app = state.layoutSpec.app;
+  const trimmed = q.trim();
+  setPendingSearchQuery(app, trimmed);
+  if (state.pageKind !== "list" || state.viewMode !== "list") {
+    await returnToListPage();
+  }
+  if (LAYOUT_PAGES_BY_APP[app].includes("search")) {
+    applyLayoutSpec({ app, page: "search" }, { manual: true, rerender: true });
+  }
+  applyInPlaceAppSearch(trimmed);
+}
+
 function seedLayoutFromTable(table: string | null | undefined) {
   if (state.layoutKindManual) return;
-  state.layoutKind = inferLayoutKind({
+  const spec = inferLayoutSpec({
     table,
     columns: Object.keys(state.columnMetas),
     comments: state.comments,
     pageKind: state.pageKind,
+    prompt: state.lastUserPrompt,
   });
+  state.layoutSpec = spec;
+  state.layoutKind = legacyKindFromSpec(spec);
 }
 
 /**
@@ -1039,6 +1359,7 @@ function activateIndependentPage(opts: {
     title: opts.title,
     id: opts.id,
   });
+  rememberPageBeforeJump(surfaceId);
 
   // Capture list page before switching — even if viewMode already flipped to detail
   if (
@@ -1057,6 +1378,7 @@ function activateIndependentPage(opts: {
 
   state.viewMode = "detail";
   state.pageKind = opts.kind;
+  setDetailChrome(null);
   /** Add only for create; list/grid → detail defaults to Edit (put). */
   const primaryOp = opts.kind === "create" ? "post" : "put";
   const seedSlot = (): DetailTableSlot => ({
@@ -1298,6 +1620,7 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
     ? structuredClone(snap.detailSlots)
     : [];
   if (state.viewMode === "list") state.listPageRef = null;
+  setDetailChrome(null);
   state.filters = snap.filters.filter(
     (f) => f.key === "page" || f.key === "count",
   );
@@ -1314,14 +1637,26 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
   state.columnOrder = [...(snap.columnOrder || [])];
   state.columnMetas = structuredClone(snap.columnMetas || {});
   state.displayKind = snap.displayKind || "table";
-  state.layoutKind = isLayoutKind(snap.layoutKind)
-    ? snap.layoutKind
-    : inferLayoutKind({
-        table: inferPrimaryTable([], snap.bindMeta?.bodyTemplate ?? null),
-        columns: Object.keys(snap.columnMetas || {}),
-        comments: state.comments,
-      });
+  state.layoutSpec =
+    snap.layoutApp || snap.layoutKind
+      ? parseLayoutSpec(
+          snap.layoutApp && snap.layoutPage
+            ? { app: snap.layoutApp, page: snap.layoutPage }
+            : snap.layoutKind,
+          kind,
+        )
+      : inferLayoutSpec({
+          table: inferPrimaryTable([], snap.bindMeta?.bodyTemplate ?? null),
+          columns: Object.keys(snap.columnMetas || {}),
+          comments: state.comments,
+          pageKind: kind,
+          prompt: state.lastUserPrompt,
+        });
+  state.layoutKind = legacyKindFromSpec(state.layoutSpec);
   state.layoutKindManual = snap.layoutKindManual === true;
+  state.actionBindings = snap.actionBindings
+    ? structuredClone(snap.actionBindings)
+    : {};
   state.chartLabelPath = snap.chartLabelPath || "";
   state.chartValuePath = snap.chartValuePath || "";
   state.chartDimensions = structuredClone(snap.chartDimensions || []);
@@ -1369,7 +1704,7 @@ function mountSavedCreatePage(title: string) {
       state.detailSlots = slots;
       persistCurrentPageVersion();
     },
-    onBack: () => void returnToListPage(),
+    onBack: () => void goBackPage(),
   });
 }
 
@@ -1455,6 +1790,7 @@ async function switchToSavedPage(
   version?: number,
   opts?: { search?: boolean; skipPersist?: boolean },
 ) {
+  rememberPageBeforeJump(pageId);
   const switchGen = ++pageSwitchGen;
   // Drop deferred stay-on-page jobs; leave capture is critical and awaited.
   cancelPageThumbCapture();
@@ -1530,6 +1866,8 @@ function clearActivePageUi() {
   state.bindMeta = null;
   state.lastResponse = null;
   setActivePageRef(null);
+  pageNavStack = [];
+  setDetailChrome(null);
   renderFilters([]);
   mountWorkspaceGuide($("result-view"));
 }
@@ -1539,6 +1877,7 @@ async function confirmDeleteSavedPage(pageId: string, title: string) {
   const wasActive = state.activePageId === pageId;
   if (wasActive) persistCurrentPageVersion();
   if (!deleteSavedPage(pageId)) return;
+  dropPageNavEntries(pageId);
   closePageMenus();
   if (!wasActive) {
     const ui = readUi();
@@ -1894,6 +2233,7 @@ function forkDetailPageWithTitle(title: string) {
   const kind: PageKind =
     state.pageKind === "create" ? "create" : "detail";
   const pageId = allocatePageId(title);
+  rememberPageBeforeJump(pageId);
   const { page, snapshot } = addPageVersion(pageId, title, {
     ...snap,
     viewMode: "detail",
@@ -1943,6 +2283,7 @@ function saveGeneratedPage(
   filters: FilterDef[],
 ) {
   if (!state.bindMeta) return;
+  rememberPageBeforeJump(surfaceId);
   state.filters = filters.filter((f) => f.key === "page" || f.key === "count");
   const snap = capturePageSnapshot();
   if (!snap) return;
@@ -1975,7 +2316,15 @@ function bindHoverMenu(trigger: HTMLElement, menu: HTMLElement) {
   });
 }
 
-/** Left: page title + version · Right: Search · Clear · paging · Analyze · Add */
+function isWorkspaceFormPage() {
+  return (
+    state.pageKind === "detail" ||
+    state.pageKind === "create" ||
+    state.viewMode === "detail"
+  );
+}
+
+/** Left: Back · layout · title · version. Right switches list Search/paging vs detail #id/Save. */
 function renderFilters(filters: FilterDef[]) {
   const pagingOnly = filters.filter(
     (f) => f.key === "page" || f.key === "count",
@@ -2004,30 +2353,75 @@ function renderFilters(filters: FilterDef[]) {
   const left = document.createElement("div");
   left.className = "filters-left";
 
+  if (pageNavStack.length) {
+    const prev = pageNavStack[pageNavStack.length - 1]!;
+    const back = makeBackIconButton(() => void goBackPage());
+    back.id = "btn-page-back";
+    back.classList.add("page-nav-back");
+    const prevTitle = prev.title.trim();
+    back.title = prevTitle
+      ? `${t("common.back")} · ${prevTitle}`
+      : t("common.back");
+    left.appendChild(back);
+  }
+
   const layoutWrap = document.createElement("div");
   layoutWrap.className = "page-layout-control";
   const layoutBtn = document.createElement("button");
   layoutBtn.type = "button";
   layoutBtn.className = "page-layout-btn";
   layoutBtn.id = "page-layout-btn";
-  layoutBtn.textContent = layoutKindLabel(state.layoutKind);
+  layoutBtn.textContent = layoutSpecLabel(state.layoutSpec);
   layoutBtn.title = t("workspace.selectLayout");
   layoutBtn.setAttribute("aria-label", t("workspace.selectLayout"));
   const layoutMenu = document.createElement("div");
   layoutMenu.className = "page-menu page-layout-menu";
-  for (const kind of LAYOUT_KINDS) {
-    const item = document.createElement("button");
-    item.type = "button";
-    item.className =
-      "page-layout-item" + (kind === state.layoutKind ? " active" : "");
-    item.textContent = layoutKindLabel(kind);
-    item.onclick = (ev) => {
+  for (const app of LAYOUT_APPS) {
+    const group = document.createElement("div");
+    group.className =
+      "page-layout-group" +
+      (app === state.layoutSpec.app ? " is-current" : "");
+    const parent = document.createElement("button");
+    parent.type = "button";
+    parent.className =
+      "page-layout-item page-layout-parent" +
+      (app === state.layoutSpec.app ? " active" : "");
+    parent.textContent = layoutAppLabel(app);
+    parent.onclick = (ev) => {
       ev.stopPropagation();
-      closePageMenus();
-      if (kind === state.layoutKind) return;
-      applyLayoutKind(kind, { manual: true, rerender: true });
+      for (const g of Array.from(
+        layoutMenu.querySelectorAll(".page-layout-group.is-open"),
+      )) {
+        if (g !== group) g.classList.remove("is-open");
+      }
+      group.classList.toggle("is-open");
     };
-    layoutMenu.appendChild(item);
+    const sub = document.createElement("div");
+    sub.className = "page-layout-sub";
+    for (const page of LAYOUT_PAGES_BY_APP[app]) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className =
+        "page-layout-item" +
+        (app === state.layoutSpec.app && page === state.layoutSpec.page
+          ? " active"
+          : "");
+        item.textContent = layoutPageLabel(page, app);
+      item.onclick = (ev) => {
+        ev.stopPropagation();
+        closePageMenus();
+        if (
+          app === state.layoutSpec.app &&
+          page === state.layoutSpec.page
+        ) {
+          return;
+        }
+        void selectLayoutPage(app, page);
+      };
+      sub.appendChild(item);
+    }
+    group.append(parent, sub);
+    layoutMenu.appendChild(group);
   }
   bindHoverMenu(layoutBtn, layoutMenu);
   layoutWrap.append(layoutBtn, layoutMenu);
@@ -2114,6 +2508,16 @@ function renderFilters(filters: FilterDef[]) {
 
   const right = document.createElement("div");
   right.className = "filters-right";
+
+  if (isWorkspaceFormPage()) {
+    const host = document.createElement("div");
+    host.id = "detail-chrome";
+    host.className = "detail-chrome";
+    right.appendChild(host);
+    root.appendChild(right);
+    paintDetailChrome();
+    return;
+  }
 
   const searchBtn = document.createElement("button");
   searchBtn.type = "button";
@@ -2529,6 +2933,7 @@ async function prepareWriteBody(
   body: Record<string, unknown>,
   base: string,
   table?: string,
+  keepTag = false,
 ): Promise<Record<string, unknown>> {
   let next = stripWriteUserIds(body);
   if (method === "post" || method === "crud") next = stripPostIds(next);
@@ -2537,7 +2942,7 @@ async function prepareWriteBody(
     table ||
     inferBodyTable(next) ||
     "";
-  if (tagTable) {
+  if (tagTable && !keepTag) {
     next = { ...next, tag: requestTagForCurrentPage(tagTable) };
   }
   return withRequestRole(next, method, base);
@@ -2629,7 +3034,7 @@ async function submitUiApply(opts: {
  * Multi-table always uses POST /crud (@post/@put/…).
  * On permission / parameter / illegal errors → auto-submit Admin Apply.
  */
-async function executeWriteDirect(payload: WritePayload) {
+async function executeWriteDirect(payload: WritePayload): Promise<boolean> {
   const verb =
     payload.method === "post"
       ? t("common.create")
@@ -2649,7 +3054,7 @@ async function executeWriteDirect(payload: WritePayload) {
       "assistant",
       `${verb} requires Login (top-right) so the browser can call APIJSON with a session cookie.`,
     );
-    return;
+    return false;
   }
   const base = apijsonBaseUrl.replace(/\/+$/, "");
   const method = payload.method as WriteMethod;
@@ -2666,7 +3071,9 @@ async function executeWriteDirect(payload: WritePayload) {
     ) as Record<string, unknown>;
 
     const saved =
-      method === "crud" ? null : loadWriteTemplate(table, method);
+      payload.skipTemplate || method === "crud"
+        ? null
+        : loadWriteTemplate(table, method);
     let body = await prepareWriteBody(
       method,
       method === "crud"
@@ -2674,6 +3081,7 @@ async function executeWriteDirect(payload: WritePayload) {
         : mergeWriteTemplate(saved?.body ?? raw, method, table, entity),
       base,
       table,
+      Boolean(payload.keepTag),
     );
     // Preserve Verify check object from the form (not a write template field).
     // Keep `"@delete":"Verify"` + Verify ahead of User / other tables.
@@ -2785,8 +3193,8 @@ async function executeWriteDirect(payload: WritePayload) {
           "assistant",
           `${verb} ${payload.table} succeeded.${repairNote}`,
         );
-        await returnToListAndRefresh();
-        return;
+        if (!payload.stayOnPage) await returnToListAndRefresh();
+        return true;
       }
 
       lastErr =
@@ -2799,7 +3207,7 @@ async function executeWriteDirect(payload: WritePayload) {
           "assistant",
           `${verb} failed: ${lastErr} Signed out — please Login again, then retry.`,
         );
-        return;
+        return false;
       }
 
       // Demo never Approves/Rejects — only Admin. Auto-Apply on gate errors.
@@ -2834,7 +3242,7 @@ async function executeWriteDirect(payload: WritePayload) {
             `${verb} failed (${lastErr}); Apply submit failed: ${submitted.error}`,
           );
         }
-        return;
+        return false;
       }
 
       if (repairAttempts >= MAX_WRITE_AI_REPAIRS) break;
@@ -2846,7 +3254,13 @@ async function executeWriteDirect(payload: WritePayload) {
       );
       const repaired = await requestBodyRepair(method, body, lastErr);
       if (!repaired) break;
-      body = await prepareWriteBody(method, repaired, base, table);
+      body = await prepareWriteBody(
+        method,
+        repaired,
+        base,
+        table,
+        Boolean(payload.keepTag),
+      );
       if (isPlainBodyObject(raw.Verify)) body.Verify = { ...raw.Verify };
       if (typeof raw["@delete"] === "string" && raw["@delete"].trim()) {
         body["@delete"] = raw["@delete"];
@@ -2862,7 +3276,7 @@ async function executeWriteDirect(payload: WritePayload) {
           ? `${verb} still failing after ${repairAttempts} auto-repair(s): ${lastErr}. Stay in Chat and retry (not jumping to Data API).`
           : `${verb} failed: ${lastErr}. Stay in Chat and retry (not jumping to Data API).`,
       );
-      return;
+      return false;
     }
 
     addMessage(
@@ -2872,15 +3286,17 @@ async function executeWriteDirect(payload: WritePayload) {
         : `${verb} failed: ${lastErr}. Open the Data API tab to edit the request, then Send.`,
     );
     switchTab("data");
+    return false;
   } catch (e) {
     addMessage("assistant", e instanceof Error ? e.message : String(e));
     if (!allowApply) switchTab("data");
+    return false;
   }
 }
 
 async function returnToListAndRefresh() {
   state.awaitingWrite = false;
-  await returnToListPage();
+  await goBackPage();
 }
 
 function readUi(): {
@@ -3059,7 +3475,277 @@ async function bound(
   }
 }
 
+function actionBindContext(): ActionBindContext {
+  return {
+    table: inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null),
+    columns: [
+      ...new Set([
+        ...Object.keys(state.columnMetas),
+        ...state.columnOrder,
+      ]),
+    ],
+    comments: state.comments,
+    app: state.layoutSpec.app,
+    page: state.layoutSpec.page,
+  };
+}
+
+function attachActionBind(
+  slot: ActionSlot,
+  raw: {
+    bindingId?: string;
+    method?: string;
+    url?: string;
+    bodyTemplate?: Record<string, unknown>;
+    paramMap?: Array<{ from: string; to: string }>;
+    triggerActions?: string[];
+  },
+): ActionBinding | null {
+  const binding = bindingFromPayload(slot, raw);
+  if (!binding) return null;
+  if (binding.url) {
+    binding.url = toBrowserApijsonUrl(binding.url, apijsonBaseUrl);
+  }
+  state.actionBindings = { ...state.actionBindings, [slot]: binding };
+  persistCurrentPageVersion({ captureThumb: false });
+  return binding;
+}
+
+async function executeActionBinding(
+  binding: ActionBinding,
+  ctx: ActionRunContext,
+): Promise<ActionSlotResult> {
+  const body = fillActionBody(binding, ctx);
+  const method = (binding.method || "get").toLowerCase();
+  if (method === "get" || method === "gets") {
+    const json = await fetchBoundGet(apijsonBaseUrl, body);
+    const code =
+      json && typeof json.code === "number" ? json.code : undefined;
+    const ok = json != null && (code === 200 || code === 0 || code == null);
+    return { ok, json };
+  }
+  const table = inferWriteTable(body);
+  if (!table) return { ok: false };
+  const ok = await executeWriteDirect(
+    socialWriteFlags({
+      method: method === "delete" ? "delete" : method === "post" ? "post" : "put",
+      table,
+      body,
+    }),
+  );
+  return { ok };
+}
+
+async function handleActionSlot(
+  slot: ActionSlot,
+  ctx: ActionRunContext,
+  opts?: { bindIfMissing?: boolean },
+): Promise<ActionSlotResult> {
+  const existing = state.actionBindings[slot];
+  if (existing) return executeActionBinding(existing, ctx);
+  if (opts?.bindIfMissing === false) return { ok: false };
+
+  const message = actionBindPrompt(slot, actionBindContext());
+  addMessage("user", message);
+  addMessage(
+    "assistant",
+    t("layout.binding", { slot: t(`layout.slot.${slot}` as "layout.slot.like") }),
+  );
+  try {
+    const data = await api<{
+      sessionId: string;
+      assistantMessage: string;
+      actionSlot?: string;
+      actionBind?: {
+        bindingId?: string;
+        method?: string;
+        url?: string;
+        bodyTemplate?: Record<string, unknown>;
+        paramMap?: Array<{ from: string; to: string }>;
+        triggerActions?: string[];
+      };
+      schemaComments?: SchemaComments;
+    }>("/api/chat", {
+      sessionId: state.sessionId,
+      message,
+      llm: llmConfigForApi(),
+      actionSlot: slot,
+      actionContext: actionBindContext(),
+    });
+    if (data.sessionId) state.sessionId = data.sessionId;
+    if (data.schemaComments) {
+      state.comments = mergeComments(state.comments, data.schemaComments);
+    }
+    addMessage("assistant", data.assistantMessage);
+    if (!data.actionBind) return { ok: false };
+    const binding = attachActionBind(slot, data.actionBind);
+    if (!binding) return { ok: false };
+    return executeActionBinding(binding, ctx);
+  } catch (e) {
+    addMessage("assistant", e instanceof Error ? e.message : String(e));
+    return { ok: false };
+  }
+}
+
+function openAppScanPage() {
+  const app = state.layoutSpec.app;
+  const go = () => {
+    if (LAYOUT_PAGES_BY_APP[app].includes("scan")) {
+      applyLayoutSpec({ app, page: "scan" }, { manual: true, rerender: true });
+    }
+  };
+  if (state.pageKind !== "list" || state.viewMode !== "list") {
+    void returnToListPage().then(go);
+    return;
+  }
+  go();
+}
+
+async function openCategoryItems(id: string | number) {
+  const app = state.layoutSpec.app;
+  const catTable = inferCategoryTable(state.comments);
+  let itemTable =
+    inferItemTableForApp(app, state.comments, catTable) ||
+    inferPrimaryTable([], state.bindMeta?.bodyTemplate ?? null);
+  if (itemTable && isCategoryTable(itemTable, state.comments)) {
+    itemTable = inferItemTableForApp(app, state.comments, itemTable);
+  }
+  if (!itemTable) {
+    flashLayoutNote(t("layout.explore.noItemTable"));
+    return;
+  }
+  let field = inferCategoryIdField(
+    itemTable,
+    state.comments,
+    Object.keys(state.columnMetas),
+  );
+  if (!field) {
+    const ensured = await ensureLayoutCategories();
+    if (ensured.comments) {
+      state.comments = mergeComments(state.comments, ensured.comments);
+    }
+    field = inferCategoryIdField(itemTable, state.comments);
+  }
+  if (!field) {
+    flashLayoutNote(t("layout.explore.noCategoryId"));
+    return;
+  }
+  const landing: LayoutPage = LAYOUT_PAGES_BY_APP[app].includes("list")
+    ? "list"
+    : LAYOUT_PAGES_BY_APP[app].includes("home")
+      ? "home"
+      : "list";
+  applyLayoutSpec({ app, page: landing }, { manual: true, rerender: false });
+  await openFkTableFiltered({ table: itemTable, ids: [id], field });
+  applyLayoutSpec({ app, page: landing }, { manual: true, rerender: true });
+}
+
+function applyReplacedFilters(filters: ColumnFilter[]) {
+  const prev = state.columnFilters.map((f) => ({
+    ...f,
+    conditions: f.conditions.map((c) => ({ ...c })),
+  }));
+  state.columnFilters = filters;
+  syncCombineExprAfterFilterChange(prev);
+
+  const app = state.layoutSpec.app;
+  const page = state.layoutSpec.page;
+  const jumpExplore =
+    isExploreLayoutPage(page) &&
+    page !== "scan" &&
+    filters.some((f) => filterHasValue(f));
+  if (jumpExplore) {
+    const landing = contentLandingPage(app);
+    const item = itemTableForApp(app);
+    const cur = currentPrimaryTable();
+    applyLayoutSpec({ app, page: landing }, { manual: true, rerender: false });
+    if (item && item !== cur) {
+      void openBoundTableList({
+        table: item,
+        filters,
+        keepLayout: true,
+      }).then(() => {
+        applyLayoutSpec({ app, page: landing }, { manual: true, rerender: true });
+      });
+      return;
+    }
+  }
+  void bound("filter_change");
+}
+
+function selectAppPage(page: LayoutPage) {
+  void selectLayoutPage(state.layoutSpec.app, page);
+}
+
+async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
+  if (app === state.layoutSpec.app && page === state.layoutSpec.page) return;
+  if (page === "scan") {
+    if (app !== state.layoutSpec.app) {
+      applyLayoutSpec({ app, page: state.layoutSpec.page }, { manual: true, rerender: false });
+    }
+    openAppScanPage();
+    return;
+  }
+  if (page === "search") {
+    if (app !== state.layoutSpec.app) {
+      applyLayoutSpec({ app, page: "search" }, { manual: true, rerender: false });
+    }
+    const item = itemTableForApp(app);
+    const cur = currentPrimaryTable();
+    if (item && item !== cur) {
+      await openBoundTableList({ table: item, keepLayout: true });
+    }
+    await openAppSearchPage("");
+    return;
+  }
+  if (page === "create") {
+    applyLayoutSpec({ app, page }, { manual: true, rerender: false });
+    if (!triggerListCreate()) {
+      applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    }
+    return;
+  }
+
+  const current = currentPrimaryTable();
+  const quick = tableForPageSync(app, page);
+  if (
+    quick === undefined ||
+    (quick != null && quick === current && state.hasBind)
+  ) {
+    if (state.pageKind !== "list" && (page === "orders" || page === "address" || page === "list" || page === "home")) {
+      await returnToListPage();
+    }
+    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    return;
+  }
+
+  applyLayoutSpec({ app, page }, { manual: true, rerender: false });
+  const target = await resolveTableForPage(app, page);
+  if (target === undefined) {
+    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    return;
+  }
+  if (!target) {
+    if (isOrdersPage(page)) flashLayoutNote(t("layout.explore.noOrderTable"));
+    else if (isAddressPage(page)) flashLayoutNote(t("layout.explore.noAddressTable"));
+    else if (isUserLayoutPage(page) || page === "feed") {
+      flashLayoutNote(t("layout.explore.noItemTable"));
+    } else {
+      flashLayoutNote(t("layout.explore.noItemTable"));
+    }
+    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    return;
+  }
+  if (target === currentPrimaryTable() && state.hasBind && state.pageKind === "list") {
+    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    return;
+  }
+  await openBoundTableList({ table: target, keepLayout: true });
+  applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+}
+
 async function sendChat(message: string) {
+  state.lastUserPrompt = message.trim();
   addMessage("user", message);
   try {
     const data = await api<{
@@ -3201,7 +3887,7 @@ async function sendChat(message: string) {
           state.detailSlots = slots;
           persistCurrentPageVersion();
         },
-        onBack: () => void returnToListPage(),
+        onBack: () => void goBackPage(),
       });
       return;
     }
@@ -3223,6 +3909,7 @@ async function sendChat(message: string) {
       state.columnMetas = {};
       state.displayKind = "table";
       state.layoutKindManual = false;
+      state.actionBindings = {};
       state.chartLabelPath = "";
       state.chartValuePath = "";
       state.chartDimensions = [];
@@ -3389,7 +4076,7 @@ function mergeComments(
 
 // Prefetch Demo schema comments for tooltips before first query
 api<SchemaComments>(
-  "/api/schema-comments?tables=User,Moment,Comment,Privacy,apijson_privacy",
+  "/api/schema-comments?tables=User,Moment,Comment,Privacy,apijson_privacy,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee",
 )
   .then((c) => {
     state.comments = mergeComments(state.comments, c);

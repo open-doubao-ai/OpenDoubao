@@ -24,6 +24,11 @@ import {
 } from "./intent.js";
 import { commentsForPayload, type SchemaComments } from "./schema-comments.js";
 import {
+  generateActionBind,
+  type ActionBindContext,
+  type ActionSlot,
+} from "./action-bind.js";
+import {
   applyTableQuery,
   type ColumnFilter,
   type ColumnSort,
@@ -386,12 +391,115 @@ export class Orchestrator {
     return next;
   }
 
+  /**
+   * Bind a UI action slot (like / comment / …) via A2API bindRequest.
+   * Does not replace the session list bind or execute the write.
+   */
+  async bindAction(
+    sessionId: string | undefined,
+    message: string,
+    slot: ActionSlot,
+    context: ActionBindContext | undefined,
+    llm?: LlmConfig | null,
+    auth?: ApijsonAuth | null,
+  ) {
+    const session = this.getOrCreateSession(sessionId);
+    session.messages.push({ role: "user", content: message });
+    const login = await this.ensureApijsonLogin(session, auth);
+    if (!login.ok) {
+      session.messages.push({ role: "assistant", content: login.error });
+      return {
+        sessionId: session.id,
+        assistantMessage: login.error,
+        actionSlot: slot,
+        pending: { status: "failed", issues: [login.error] },
+        plan: { filters: [], surfaceId: "action" },
+        dataModel: session.dataModel,
+      };
+    }
+    this.bindClientCookie(session);
+    try {
+      const generated = await generateActionBind(
+        slot,
+        {
+          table: context?.table ?? null,
+          columns: context?.columns ?? [],
+          comments:
+            context?.comments ??
+            session.dataModel.schemaComments ??
+            null,
+          app: context?.app,
+          page: context?.page,
+        },
+        llm,
+      );
+      if (!generated) {
+        const assistantMessage = `Could not bind "${slot}" from the current project's schema. Add table/column comments or try again after loading a list.`;
+        session.messages.push({ role: "assistant", content: assistantMessage });
+        return {
+          sessionId: session.id,
+          assistantMessage,
+          actionSlot: slot,
+          pending: { status: "failed", issues: [assistantMessage] },
+          plan: {
+            filters: session.plan?.a2uiHint.filters ?? [],
+            surfaceId: session.plan?.a2uiHint.surfaceId ?? "action",
+            viewMode: session.plan?.viewMode,
+            title: session.plan?.title,
+          },
+          dataModel: session.dataModel,
+        };
+      }
+      const { bind, source } = generated;
+      this.bound.register(bind);
+      const envelopes = [toBindEnvelope(bind)];
+      const assistantMessage =
+        source === "llm"
+          ? `Bound "${slot}" via A2API bindRequest (${bind.method}). Page list bind unchanged.`
+          : `Bound "${slot}" via A2API bindRequest from this project's schema (${bind.method}). Page list bind unchanged.`;
+      session.messages.push({ role: "assistant", content: assistantMessage });
+      return {
+        sessionId: session.id,
+        assistantMessage,
+        actionSlot: slot,
+        actionBind: bind,
+        a2apiEnvelopes: envelopes,
+        pending: {
+          status: "done",
+          requestId: bind.bindingId,
+          method: bind.method,
+          body: bind.bodyTemplate,
+        },
+        plan: {
+          filters: session.plan?.a2uiHint.filters ?? [],
+          surfaceId: session.plan?.a2uiHint.surfaceId ?? "action",
+          viewMode: session.plan?.viewMode,
+          title: session.plan?.title,
+        },
+        dataModel: session.dataModel,
+      };
+    } finally {
+      this.saveClientCookie(session);
+    }
+  }
+
   async chat(
     sessionId: string | undefined,
     message: string,
     llm?: LlmConfig | null,
     auth?: ApijsonAuth | null,
+    action?: { slot: ActionSlot; context?: ActionBindContext },
   ) {
+    if (action?.slot) {
+      return this.bindAction(
+        sessionId,
+        message,
+        action.slot,
+        action.context,
+        llm,
+        auth,
+      );
+    }
     const session = this.getOrCreateSession(sessionId);
     session.messages.push({ role: "user", content: message });
 

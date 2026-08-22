@@ -93,7 +93,7 @@ export APIJSON_BASE_URL=http://localhost:8080
 # 或编辑 .env
 ```
 
-请确保 Demo 库表在该服务上可用。业务表示例见 `apps/chat-demo/sql/layout_demo_tables.sql`（User / Moment / Comment 以及员工、活动、聊天、新闻、资讯、博客、文章、视频、音乐、商品等），导入后需重载 Access/Request。
+请确保 Demo 库表在该服务上可用。业务表示例见 `apps/chat-demo/sql/layout_demo_tables.sql`（User / Moment / Comment 以及员工、活动、聊天、新闻、资讯、博客、文章、视频、音乐、商品、订单、收件地址、分类等），导入后需重载 Access/Request。仅补分类表可跑 `apps/chat-demo/sql/layout_demo_categories.sql`；仅补地址表可跑 `apps/chat-demo/sql/layout_demo_address.sql`（对应页缺表时也会自动导入）。
 
 **写操作（POST/PUT/DELETE）：** Demo 常要求已登录会话（`@role` OWNER/LOGIN）。MVP 仍会生成请求并展示 HITL 批准/拒绝界面；若 APIJSON 返回未登录，请通过 Demo/APIAuto 会话 Cookie 登录，或在本地放宽 Access。**读操作**可直接使用公开 Demo 数据。
 
