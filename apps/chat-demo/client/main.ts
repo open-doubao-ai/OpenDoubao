@@ -16,6 +16,13 @@ import {
   type WritePayload,
 } from "./result-view.js";
 import {
+  inferLayoutKind,
+  isLayoutKind,
+  LAYOUT_KINDS,
+  layoutKindLabel,
+  type LayoutKind,
+} from "./page-layout.js";
+import {
   applyRelateToColumnMetas,
   mergeStructureForApply,
 } from "./detail-crud.js";
@@ -256,6 +263,9 @@ type SessionUi = {
   columnOrder: string[];
   columnMetas: Record<string, ColumnMeta>;
   displayKind: DisplayKind;
+  /** Business layout for list/detail (auto from table/fields, overridable). */
+  layoutKind: LayoutKind;
+  layoutKindManual: boolean;
   chartLabelPath: string;
   /** @deprecated migrated into chartFieldValues */
   chartValuePath: string;
@@ -300,6 +310,8 @@ const state: SessionUi = {
   columnOrder: [],
   columnMetas: {},
   displayKind: "table",
+  layoutKind: "data",
+  layoutKindManual: false,
   chartLabelPath: "",
   chartValuePath: "",
   chartDimensions: [],
@@ -392,6 +404,21 @@ function renderRows(response: unknown) {
     columnOrder: state.columnOrder,
     columnMetas: state.columnMetas,
     displayKind: state.displayKind,
+    layoutKind: state.layoutKind,
+    layoutKindManual: state.layoutKindManual,
+    onLayoutKindResolved: (kind) => {
+      if (state.layoutKindManual) return;
+      if (state.layoutKind === kind) {
+        syncLayoutKindControl();
+        return;
+      }
+      state.layoutKind = kind;
+      persistCurrentPageVersion({ captureThumb: false });
+      syncLayoutKindControl();
+    },
+    onRequestLayoutKind: (kind) => {
+      applyLayoutKind(kind, { manual: true, rerender: true });
+    },
     chartLabelPath: state.chartLabelPath || undefined,
     chartValuePath: state.chartValuePath || undefined,
     chartDimensions: state.chartDimensions,
@@ -802,6 +829,12 @@ async function openFkTableFiltered(info: {
     state.columnMetas = {};
     state.tableJoins = {};
     state.displayKind = "table";
+    state.layoutKindManual = false;
+    state.layoutKind = inferLayoutKind({
+      table,
+      comments: state.comments,
+      pageKind: "list",
+    });
     state.chartLabelPath = "";
     state.chartValuePath = "";
     state.chartDimensions = [];
@@ -930,6 +963,8 @@ function capturePageSnapshot(): Omit<
     columnOrder: [...state.columnOrder],
     columnMetas: structuredClone(state.columnMetas),
     displayKind: state.displayKind,
+    layoutKind: state.layoutKind,
+    layoutKindManual: state.layoutKindManual,
     chartLabelPath: state.chartLabelPath,
     chartValuePath: state.chartValuePath,
     chartDimensions: structuredClone(state.chartDimensions),
@@ -947,6 +982,39 @@ function syncPageTitleInput(title: string) {
     "page-title-input",
   ) as HTMLInputElement | null;
   if (input) input.value = title;
+}
+
+function syncLayoutKindControl() {
+  const btn = document.getElementById("page-layout-btn");
+  if (btn) btn.textContent = layoutKindLabel(state.layoutKind);
+}
+
+function applyLayoutKind(
+  kind: LayoutKind,
+  opts?: { manual?: boolean; rerender?: boolean },
+) {
+  state.layoutKind = kind;
+  if (opts?.manual) state.layoutKindManual = true;
+  persistCurrentPageVersion({ captureThumb: false });
+  syncLayoutKindControl();
+  renderFilters(state.filters);
+  if (opts?.rerender) {
+    if (state.lastResponse != null || state.hasBind) {
+      renderRows(state.lastResponse);
+    } else if (kind === "cart" || kind === "order") {
+      renderRows({ code: 200 });
+    }
+  }
+}
+
+function seedLayoutFromTable(table: string | null | undefined) {
+  if (state.layoutKindManual) return;
+  state.layoutKind = inferLayoutKind({
+    table,
+    columns: Object.keys(state.columnMetas),
+    comments: state.comments,
+    pageKind: state.pageKind,
+  });
 }
 
 /**
@@ -1246,6 +1314,14 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
   state.columnOrder = [...(snap.columnOrder || [])];
   state.columnMetas = structuredClone(snap.columnMetas || {});
   state.displayKind = snap.displayKind || "table";
+  state.layoutKind = isLayoutKind(snap.layoutKind)
+    ? snap.layoutKind
+    : inferLayoutKind({
+        table: inferPrimaryTable([], snap.bindMeta?.bodyTemplate ?? null),
+        columns: Object.keys(snap.columnMetas || {}),
+        comments: state.comments,
+      });
+  state.layoutKindManual = snap.layoutKindManual === true;
   state.chartLabelPath = snap.chartLabelPath || "";
   state.chartValuePath = snap.chartValuePath || "";
   state.chartDimensions = structuredClone(snap.chartDimensions || []);
@@ -1927,6 +2003,35 @@ function renderFilters(filters: FilterDef[]) {
 
   const left = document.createElement("div");
   left.className = "filters-left";
+
+  const layoutWrap = document.createElement("div");
+  layoutWrap.className = "page-layout-control";
+  const layoutBtn = document.createElement("button");
+  layoutBtn.type = "button";
+  layoutBtn.className = "page-layout-btn";
+  layoutBtn.id = "page-layout-btn";
+  layoutBtn.textContent = layoutKindLabel(state.layoutKind);
+  layoutBtn.title = t("workspace.selectLayout");
+  layoutBtn.setAttribute("aria-label", t("workspace.selectLayout"));
+  const layoutMenu = document.createElement("div");
+  layoutMenu.className = "page-menu page-layout-menu";
+  for (const kind of LAYOUT_KINDS) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className =
+      "page-layout-item" + (kind === state.layoutKind ? " active" : "");
+    item.textContent = layoutKindLabel(kind);
+    item.onclick = (ev) => {
+      ev.stopPropagation();
+      closePageMenus();
+      if (kind === state.layoutKind) return;
+      applyLayoutKind(kind, { manual: true, rerender: true });
+    };
+    layoutMenu.appendChild(item);
+  }
+  bindHoverMenu(layoutBtn, layoutMenu);
+  layoutWrap.append(layoutBtn, layoutMenu);
+  left.appendChild(layoutWrap);
 
   const titleWrap = document.createElement("div");
   titleWrap.className = "page-title-control";
@@ -3002,13 +3107,18 @@ async function sendChat(message: string) {
     const isOpenCreate =
       data.plan?.openCreate === true ||
       data.kind === "create_moment" ||
-      data.kind === "create_comment";
+      data.kind === "create_comment" ||
+      data.kind === "create_table";
+    const fromWriteForm = /^\/([A-Z][A-Za-z0-9]*)\//.exec(
+      data.plan?.writeForm?.fields?.[0]?.path || "",
+    )?.[1];
     const createTable =
       data.kind === "create_comment"
         ? "Comment"
         : data.kind === "create_moment"
           ? "Moment"
-          : inferPrimaryTable([], data.bind?.bodyTemplate ?? null);
+          : fromWriteForm ||
+            inferPrimaryTable([], data.bind?.bodyTemplate ?? null);
     // Single-record templates (User Detail, etc.) must never become a bound table
     if (
       data.kind === "get_user" ||
@@ -3112,6 +3222,7 @@ async function sendChat(message: string) {
       state.columnOrder = [];
       state.columnMetas = {};
       state.displayKind = "table";
+      state.layoutKindManual = false;
       state.chartLabelPath = "";
       state.chartValuePath = "";
       state.chartDimensions = [];
@@ -3124,6 +3235,7 @@ async function sendChat(message: string) {
         bodyTemplate: data.bind.bodyTemplate,
       };
       const primary = inferPrimaryTable([], data.bind.bodyTemplate);
+      seedLayoutFromTable(primary);
       state.fkExpand = defaultFkExpandState(primary);
       // Persist expanded FK tables into template so columns appear consistently
       state.bindMeta.bodyTemplate = applyFkExpand(

@@ -105,7 +105,7 @@ export APIJSON_BASE_URL=http://localhost:8080
 # or edit .env
 ```
 
-Ensure the Demo schema (User / Moment / Comment) is available on that server.
+Ensure the Demo schema is available on that server. Business layout tables are in `apps/chat-demo/sql/layout_demo_tables.sql` (User / Moment / Comment plus Employee, Activity, Message, News, Notice, Blog, Article, Video, Music, Product, …). After import, reload Access/Request.
 
 **Writes (POST/PUT/DELETE):** the Demo often requires a logged-in session (`@role` OWNER/LOGIN). The MVP still generates the request and shows the HITL Approve/Reject UI; if APIJSON returns "not logged in", log in via your Demo/APIAuto session cookies or relax Access for local testing. **Reads** work out of the box against the public Demo data.
 

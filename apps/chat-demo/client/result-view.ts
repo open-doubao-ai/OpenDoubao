@@ -116,6 +116,22 @@ import {
   type RelateSyncPayload,
 } from "./detail-crud.js";
 import { pageTitleForTable } from "./saved-pages.js";
+import {
+  clearCart,
+  inferLayoutKind,
+  isCartOrOrder,
+  isLayoutKind,
+  pickRowPresentation,
+  type LayoutKind,
+} from "./page-layout.js";
+import {
+  addRowToCart,
+  flashLayoutNote,
+  renderLayoutDetailHero,
+  renderLayoutList,
+  shouldHideDetailForm,
+  shouldReplaceList,
+} from "./layout-views.js";
 import { stripApiJsonRole, type SchemaComments } from "./schema-types.js";
 import {
   isAuthVerifyField,
@@ -480,7 +496,7 @@ function isFlatEntityItem(item: Record<string, unknown>): boolean {
  * Never treat the array index fallback as a DB id.
  */
 function resolveRowRecordId(
-  row: FlatRow,
+  row: { cells: Record<string, unknown>; raw?: unknown },
   table: string | null | undefined,
 ): string | number | null {
   if (table) {
@@ -934,6 +950,12 @@ export function renderResultView(
     detailSlots?: DetailTableSlot[] | null;
     onPageTitleChange?: (title: string) => void;
     onDetailSlotsChange?: (slots: DetailTableSlot[]) => void;
+    /** Business layout (data / social / video / cart …). */
+    layoutKind?: LayoutKind;
+    /** User picked a layout — do not auto-replace. */
+    layoutKindManual?: boolean;
+    onLayoutKindResolved?: (kind: LayoutKind) => void;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
   },
 ): ResultViewState {
   const preferred = opts.viewMode;
@@ -991,6 +1013,76 @@ export function renderResultView(
   const ambiguous = ambiguousColumnNames(parsed.columns);
   const visibleCols = order.filter((p) => metas[p]?.visible !== false);
 
+  const inferredLayout = inferLayoutKind({
+    table: primaryTable,
+    columns: parsed.columns,
+    comments,
+    pageKind: mode === "detail" ? "detail" : "list",
+  });
+  const layoutKind: LayoutKind =
+    opts.layoutKindManual && isLayoutKind(opts.layoutKind)
+      ? opts.layoutKind
+      : inferredLayout;
+  if (!opts.layoutKindManual && layoutKind !== opts.layoutKind) {
+    opts.onLayoutKindResolved?.(layoutKind);
+  }
+
+  const layoutDetailHandlers = (
+    row: { key: string; cells: Record<string, unknown> },
+    table: string | null,
+  ) => ({
+    onAddToCart: () => {
+      const pres = pickRowPresentation(row.cells, {
+        primaryTable: table,
+        columns: parsed.columns,
+        comments,
+        recordId: resolveRowRecordId(row, table),
+      });
+      addRowToCart(table, row, pres);
+      flashLayoutNote(t("layout.addedToCart"));
+    },
+    onBuyNow: () => {
+      const pres = pickRowPresentation(row.cells, {
+        primaryTable: table,
+        columns: parsed.columns,
+        comments,
+        recordId: resolveRowRecordId(row, table),
+      });
+      addRowToCart(table, row, pres);
+      opts.onRequestLayoutKind?.("order");
+    },
+    onCheckout: (info: {
+      name: string;
+      phone: string;
+      address: string;
+      remark: string;
+      lines: { title: string; qty: number; price: number }[];
+      total: number;
+    }) => {
+      const orderTable =
+        table && /order/i.test(table) ? table : "Order";
+      if (write) {
+        void write({
+          method: "post",
+          table: orderTable,
+          body: {
+            [orderTable]: {
+              name: info.name,
+              phone: info.phone,
+              address: info.address,
+              remark: info.remark,
+              total: info.total,
+              items: JSON.stringify(info.lines),
+            },
+            tag: orderTable,
+          },
+        });
+      }
+      clearCart();
+      flashLayoutNote(t("layout.orderPlaced"));
+    },
+  });
+
   if (mode === "detail" && parsed.rows[0]) {
     const detailTable =
       primaryTable || pickPrimaryTable(parsed.rows[0]) || null;
@@ -1021,6 +1113,7 @@ export function renderResultView(
         mode: write ? "edit" : "view",
         pageTitle: opts.pageTitle,
         initialSlots: detailNavSlots,
+        layoutKind,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -1028,6 +1121,7 @@ export function renderResultView(
         onPageTitleChange: opts.onPageTitleChange,
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
       });
       return state;
     }
@@ -1042,6 +1136,7 @@ export function renderResultView(
       apijsonBase,
       pageTitle: opts.pageTitle,
       initialSlots: detailNavSlots,
+      layoutKind,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
@@ -1058,11 +1153,59 @@ export function renderResultView(
             if (payload) void write(payload);
           }
         : undefined,
+      onLayoutAddToCart: layoutDetailHandlers(detailRow, detailTable).onAddToCart,
+      onLayoutBuyNow: layoutDetailHandlers(detailRow, detailTable).onBuyNow,
+      onLayoutCheckout: layoutDetailHandlers(detailRow, detailTable).onCheckout,
+      onRequestLayoutKind: opts.onRequestLayoutKind,
     });
     return state;
   }
 
-  if (!parsed.rows.length) {
+  const openListRow = (key: string, mode: "view" | "edit" = write ? "edit" : "view") => {
+    const row = parsed.rows.find((r) => r.key === key);
+    if (!row) return;
+    const table = primaryTable || pickPrimaryTable(row);
+    const id = resolveRowRecordId(row, table);
+    if (id == null) return;
+    let navSlots: DetailTableSlot[] | undefined;
+    if (table) {
+      const detailId =
+        typeof id === "string" || typeof id === "number" ? id : String(id);
+      const fromParent = opts.onOpenDetail?.({ table, id: detailId });
+      navSlots = resolveNavDetailSlots(
+        table,
+        mode === "edit" ? "put" : "get",
+        fromParent,
+      );
+    }
+    const detailPageTitle = table
+      ? pageTitleForTable(table, "detail", id)
+      : opts.pageTitle;
+    if (apijsonBase && table && String(id) !== "") {
+      void openFkDetail(container, {
+        table,
+        id,
+        comments,
+        columnMetas: metas,
+        apijsonBase,
+        mode,
+        pageTitle: detailPageTitle,
+        initialSlots: navSlots,
+        layoutKind,
+        onBack: opts.onBackToList,
+        onWrite: write,
+        onRelateSync: opts.onRelateSync,
+        onColumnMetasChange: opts.onColumnMetasChange,
+        onPageTitleChange: opts.onPageTitleChange,
+        onDetailSlotsChange: opts.onDetailSlotsChange,
+        onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
+        fkExpand: opts.fkExpand,
+      });
+    }
+  };
+
+  if (!parsed.rows.length && !isCartOrOrder(layoutKind)) {
     if (primaryTable && write) {
       listCreateAction = () => {
         const fromParent = opts.onOpenDetail?.({
@@ -1103,6 +1246,65 @@ export function renderResultView(
       empty.textContent = t("result.noMatching");
       container.appendChild(empty);
     }
+    return state;
+  }
+
+  if (shouldReplaceList(layoutKind)) {
+    if (primaryTable && write) {
+      listCreateAction = () => {
+        const fromParent = opts.onOpenDetail?.({
+          table: primaryTable,
+          create: true,
+        });
+        openCreateForm(container, {
+          table: primaryTable,
+          columns: parsed.columns,
+          comments,
+          columnMetas: metas,
+          fkExpand: opts.fkExpand ?? null,
+          apijsonBase,
+          initialValues: opts.createInitialValues ?? undefined,
+          initialSlots: resolveNavDetailSlots(primaryTable, "post", fromParent),
+          pageTitle: pageTitleForTable(primaryTable, "create"),
+          onRelateSync: opts.onRelateSync,
+          onColumnMetasChange: opts.onColumnMetasChange,
+          onPageTitleChange: opts.onPageTitleChange,
+          onDetailSlotsChange: opts.onDetailSlotsChange,
+          onBack: () => {
+            opts.onBackToList?.();
+            renderResultView(container, opts);
+          },
+          onSubmit: write,
+        });
+      };
+    }
+    renderLayoutList(container, {
+      kind: layoutKind,
+      rows: parsed.rows,
+      columns: parsed.columns,
+      primaryTable,
+      comments,
+      columnMetas: metas,
+      apijsonBase,
+      recordId: (row) => resolveRowRecordId(row, primaryTable),
+      handlers: {
+        onOpenRow: (key) => openListRow(key),
+        onAddToCart: (row) => {
+          layoutDetailHandlers(row, primaryTable).onAddToCart();
+        },
+        onBuyNow: (row) => {
+          layoutDetailHandlers(row, primaryTable).onBuyNow();
+        },
+        onCheckout: (info) => {
+          layoutDetailHandlers(parsed.rows[0] ?? { key: "", cells: {} }, primaryTable).onCheckout(info);
+        },
+        onOpenCheckout: () => opts.onRequestLayoutKind?.("order"),
+      },
+    });
+    const themedDetailHost = document.createElement("div");
+    themedDetailHost.id = "result-detail-host";
+    themedDetailHost.className = "hidden";
+    container.appendChild(themedDetailHost);
     return state;
   }
 
@@ -2012,6 +2214,7 @@ export function renderResultView(
         mode,
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
+        layoutKind,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -2019,6 +2222,7 @@ export function renderResultView(
         onPageTitleChange: opts.onPageTitleChange,
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
         fkExpand: opts.fkExpand,
       });
       return;
@@ -3817,6 +4021,25 @@ export function createFieldDefaults(table: string): Record<string, unknown> {
       return { content: "" };
     case "User":
       return { name: "", sex: 0 };
+    case "Employee":
+      return { name: "", dept: "", sex: 0, status: "active" };
+    case "Activity":
+      return { title: "", status: "online" };
+    case "Message":
+      return { content: "" };
+    case "News":
+    case "Notice":
+    case "Blog":
+    case "Article":
+    case "Video":
+    case "Music":
+      return { title: "" };
+    case "Product":
+      return { name: "", price: 0, stock: 0, status: "on" };
+    case "Cart":
+      return { title: "", qty: 1 };
+    case "ShopOrder":
+      return { consignee: "", phone: "", address: "", status: "pending" };
     default:
       return {};
   }
@@ -3825,7 +4048,7 @@ export function createFieldDefaults(table: string): Record<string, unknown> {
 /** Columns omitted from create forms (server injects / Request REFUSE). */
 function createOmitColumns(table: string): Set<string> {
   const omit = new Set(["id", "date"]);
-  if (table === "Moment" || table === "Comment") omit.add("userId");
+  omit.add("userId");
   const rules = createRulesFromRequest(table);
   for (const f of rules?.refuse ?? []) omit.add(f);
   return omit;
@@ -3847,6 +4070,24 @@ export function createRequiredColumns(table: string): string[] {
       return ["content", "momentId"];
     case "User":
       return ["name"];
+    case "Employee":
+      return ["name"];
+    case "Activity":
+    case "News":
+    case "Notice":
+    case "Blog":
+    case "Article":
+    case "Video":
+    case "Music":
+      return ["title"];
+    case "Message":
+      return ["content", "toUserId"];
+    case "Product":
+      return ["name"];
+    case "Cart":
+      return ["title", "productId"];
+    case "ShopOrder":
+      return ["consignee", "phone", "address"];
     default:
       return [];
   }
@@ -3989,7 +4230,7 @@ export function buildPutFromDetail(
 }
 
 const LIST_HIDE_SEL =
-  "#result-table-wrap, #result-grid-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
+  "#result-table-wrap, #result-grid-wrap, #result-layout-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
 
 function buildCombineExprBar(opts: {
   value: string;
@@ -6422,6 +6663,8 @@ async function openFkDetail(
       ids: Array<string | number>;
       field?: string;
     }) => void;
+    layoutKind?: LayoutKind;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
   },
 ) {
   for (const el of Array.from(container.querySelectorAll(LIST_HIDE_SEL))) {
@@ -6473,6 +6716,12 @@ async function openFkDetail(
     }
     row = expandDetailRowFields(row, opts.table, opts.comments);
     detailHost.innerHTML = "";
+    const pres = pickRowPresentation(row.cells, {
+      primaryTable: opts.table,
+      columns: Object.keys(row.cells),
+      comments: opts.comments,
+      recordId: opts.id,
+    });
     renderDetailForm(detailHost, row, {
       comments: opts.comments,
       columnMetas: opts.columnMetas ?? null,
@@ -6481,11 +6730,42 @@ async function openFkDetail(
       apijsonBase: opts.apijsonBase,
       pageTitle: opts.pageTitle,
       initialSlots: opts.initialSlots,
+      layoutKind: opts.layoutKind,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
       onDetailSlotsChange: opts.onDetailSlotsChange,
       onOpenFkList: opts.onOpenFkList,
+      onLayoutAddToCart: () => {
+        addRowToCart(opts.table, row, pres);
+        flashLayoutNote(t("layout.addedToCart"));
+      },
+      onLayoutBuyNow: () => {
+        addRowToCart(opts.table, row, pres);
+        opts.onRequestLayoutKind?.("order");
+      },
+      onLayoutCheckout: (info) => {
+        const orderTable = /order/i.test(opts.table) ? opts.table : "Order";
+        if (opts.onWrite) {
+          void opts.onWrite({
+            method: "post",
+            table: orderTable,
+            body: {
+              [orderTable]: {
+                name: info.name,
+                phone: info.phone,
+                address: info.address,
+                remark: info.remark,
+                total: info.total,
+                items: JSON.stringify(info.lines),
+              },
+              tag: orderTable,
+            },
+          });
+        }
+        clearCart();
+        flashLayoutNote(t("layout.orderPlaced"));
+      },
       onBack: () => {
         detailHost.classList.add("hidden");
         detailHost.innerHTML = "";
@@ -6580,6 +6860,18 @@ function renderDetailForm(
       ids: Array<string | number>;
       field?: string;
     }) => void;
+    layoutKind?: LayoutKind;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
+    onLayoutAddToCart?: () => void;
+    onLayoutBuyNow?: () => void;
+    onLayoutCheckout?: (info: {
+      name: string;
+      phone: string;
+      address: string;
+      remark: string;
+      lines: { title: string; qty: number; price: number }[];
+      total: number;
+    }) => void;
   },
 ) {
   let comments = opts.comments;
@@ -6636,6 +6928,8 @@ function renderDetailForm(
               onPageTitleChange: opts.onPageTitleChange,
               onDetailSlotsChange: opts.onDetailSlotsChange,
               onOpenFkList: opts.onOpenFkList,
+              layoutKind: opts.layoutKind,
+              onRequestLayoutKind: opts.onRequestLayoutKind,
             });
           }
         : undefined,
@@ -6649,6 +6943,65 @@ function renderDetailForm(
   modeToggle.title = t("result.smartToggle");
   header.appendChild(modeToggle);
   card.appendChild(header);
+
+  const detailLayout = opts.layoutKind;
+  if (detailLayout && detailLayout !== "data") {
+    renderLayoutDetailHero(card, {
+      kind: detailLayout,
+      row,
+      columns,
+      primaryTable: primary,
+      comments,
+      columnMetas,
+      apijsonBase: opts.apijsonBase || "",
+      recordId: recordId as string | number,
+      handlers: {
+        onAddToCart: opts.onLayoutAddToCart,
+        onBuyNow: opts.onLayoutBuyNow,
+        onCheckout: opts.onLayoutCheckout,
+        onOpenCheckout: opts.onLayoutBuyNow,
+        onOpenRelated: (id) => {
+          if (!primary || !opts.apijsonBase) return;
+          void openFkDetail(switchHost, {
+            table: primary,
+            id,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase,
+            mode: editableMode ? "edit" : "view",
+            pageTitle: opts.pageTitle,
+            initialSlots: opts.initialSlots,
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: opts.layoutKind,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+          });
+        },
+      },
+    });
+    if (shouldHideDetailForm(detailLayout)) {
+      container.appendChild(card);
+      return;
+    }
+    card.classList.add("is-layout-app", "layout-form-collapsed");
+    const editToggle = document.createElement("button");
+    editToggle.type = "button";
+    editToggle.className = "layout-edit-toggle";
+    editToggle.textContent = t("layout.editFields");
+    editToggle.onclick = () => {
+      const collapsed = card.classList.toggle("layout-form-collapsed");
+      editToggle.textContent = collapsed
+        ? t("layout.editFields")
+        : t("layout.hideFields");
+    };
+    card.appendChild(editToggle);
+  }
 
   const fieldsHost = document.createElement("div");
   fieldsHost.className = "detail-fields-host";

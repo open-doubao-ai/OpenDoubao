@@ -12,6 +12,7 @@ import type {
   DisplayKind,
   ViewMode,
 } from "./result-view.js";
+import type { LayoutKind } from "./page-layout.js";
 import type { ColumnFilter, ColumnSort } from "./table-query.js";
 
 const STORAGE_KEY = "a2api.savedPages";
@@ -184,6 +185,10 @@ export type SavedPageSnapshot = {
   columnOrder: string[];
   columnMetas: Record<string, ColumnMeta>;
   displayKind: DisplayKind;
+  /** Business layout category (data / social / video / cart …). */
+  layoutKind?: LayoutKind;
+  /** True when the user picked a layout in the toolbar. */
+  layoutKindManual?: boolean;
   chartLabelPath: string;
   chartValuePath: string;
   chartDimensions: ChartDimension[];

@@ -278,6 +278,14 @@ const KNOWN_NUMBER_METRICS: Record<string, string[]> = {
   Moment: ["commentCount"],
   User: [],
   Comment: [],
+  Employee: ["salary"],
+  Activity: ["signupCount"],
+  News: ["viewCount"],
+  Video: ["duration", "playCount"],
+  Music: ["duration", "playCount"],
+  Product: ["price", "stock", "sales"],
+  Cart: ["price", "qty"],
+  ShopOrder: ["total"],
 };
 
 const KNOWN_ARRAY_METRICS: Record<string, string[]> = {

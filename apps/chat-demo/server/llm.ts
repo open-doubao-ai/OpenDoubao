@@ -14,6 +14,8 @@ const RULES_LOCKED_KINDS = new Set<BootstrapPlan["kind"]>([
   "get_comment",
   "create_moment",
   "create_comment",
+  "create_table",
+  "list_table",
   "update_comment",
   "delete_comment",
 ]);

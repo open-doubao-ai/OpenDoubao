@@ -1,9 +1,21 @@
-/** Few-shot table dictionary for APIJSON-Demo (User / Moment / Comment). */
+/** Few-shot table dictionary for APIJSON-Demo + layout demo tables. */
 export const SCHEMA_DICT = `
-Tables (APIJSON-Demo):
-- User: id, sex, name, tag, head, contactIdList, pictureList, date
-- Moment: id, userId, date, content, praiseUserIdList, commentCount
+Tables (APIJSON-Demo + layout categories):
+- User: id, sex, name, tag, head, contactIdList, pictureList, date  (数据管理)
+- Employee: id, userId, name, dept, title, sex, salary, status, email, phone, head, date  (数据管理)
+- Activity: id, userId, title, cover, content, startTime, endTime, status, signupCount, date  (运营活动)
+- Moment: id, userId, date, content, praiseUserIdList, commentCount, pictureList  (社交)
 - Comment: id, toId, userId, momentId, content, date
+- Message: id, userId, toUserId, conversationId, author, head, content, date  (聊天)
+- News: id, userId, title, headline, source, author, cover, content, viewCount, date  (新闻)
+- Notice: id, userId, title, cover, content, status, date  (资讯)
+- Blog: id, userId, title, author, cover, content, date  (博客)
+- Article: id, userId, title, author, cover, content, date  (文章)
+- Video: id, userId, title, author, cover, videoUrl, duration, playCount, date  (视频)
+- Music: id, userId, title, artist, album, cover, audioUrl, duration, playCount, date  (音乐)
+- Product: id, userId, name, cover, description, price, stock, sales, status, date  (电商)
+- Cart: id, userId, productId, title, cover, price, qty, date  (购物车)
+- ShopOrder: id, userId, consignee, phone, address, remark, total, status, date  (订单)
 
 Identity / role / structure rules for generated requests:
 - Never hardcode id or userId (no sample ids like 38710 / 1 / 22).
@@ -11,18 +23,20 @@ Identity / role / structure rules for generated requests:
 - GET/HEAD (open): client may set "@role" to Access minimum for the tables.
 - Non-open methods (gets/post/put/delete, or GET with tag): must match Request
   table (method + tag + version) — honor structure MUST/REFUSE/TYPE/VERIFY.
-- POST Moment/Comment: omit userId — session injects the visitor.
+- POST writes: omit userId — session injects the visitor.
 - Prefer list queries; open a row in the UI for detail / edit / delete.
 - Do not JOIN User by default when the session already scopes the visitor.
 
 Common APIJSON patterns:
-GET list (omit @column on the primary table so all fields return —
-  e.g. User tag/head/pictureList/contactIdList, Moment pictureList):
+GET list (omit @column on the primary table so all fields return):
 { "[]": { "count": 20, "page": 0, "Moment": { "@order": "date-" } } }
 { "[]": { "count": 20, "page": 0, "User": { "@order": "date-" } } }
+{ "[]": { "count": 20, "page": 0, "Product": { "@order": "date-" } } }
+{ "[]": { "count": 20, "page": 0, "News": { "@order": "date-" } } }
 
 POST:
 { "Moment": { "content": "..." }, "tag": "Moment" }
+{ "Product": { "name": "..." }, "tag": "Product" }
 
 PUT (id must come from the user-selected row, never invent one):
 { "Comment": { "content": "..." }, "tag": "Comment" }

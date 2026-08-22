@@ -271,7 +271,8 @@ app.post("/api/analyze", async (c) => {
 });
 
 app.get("/api/schema-comments", async (c) => {
-  const tables = (c.req.query("tables") || "User,Moment,Comment")
+  const tables = (c.req.query("tables") ||
+    "User,Moment,Comment,Employee,Activity,Message,News,Notice,Blog,Article,Video,Music,Product,Cart,ShopOrder")
     .split(",")
     .map((t) => t.trim())
     .filter(Boolean);

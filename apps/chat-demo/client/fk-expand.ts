@@ -22,13 +22,24 @@ export type FkJoinSpec = {
   onField?: string;
 };
 
+const USER_FK: FkEdge = { column: "userId", target: "User" };
+
 /** Primary table → outgoing FK edges. */
 export const TABLE_FK_EDGES: Record<string, FkEdge[]> = {
-  Moment: [{ column: "userId", target: "User" }],
-  Comment: [
-    { column: "userId", target: "User" },
-    { column: "momentId", target: "Moment" },
-  ],
+  Moment: [USER_FK],
+  Comment: [USER_FK, { column: "momentId", target: "Moment" }],
+  Employee: [USER_FK],
+  Activity: [USER_FK],
+  Message: [USER_FK, { column: "toUserId", target: "User" }],
+  News: [USER_FK],
+  Notice: [USER_FK],
+  Blog: [USER_FK],
+  Article: [USER_FK],
+  Video: [USER_FK],
+  Music: [USER_FK],
+  Product: [USER_FK],
+  Cart: [USER_FK, { column: "productId", target: "Product" }],
+  ShopOrder: [USER_FK],
 };
 
 /**
@@ -40,6 +51,18 @@ export const DEFAULT_FK_COLUMNS: Record<string, string[]> = {
   User: ["name", "tag", "head", "pictureList"],
   Moment: ["content"],
   Comment: ["content"],
+  Employee: ["name", "dept", "head"],
+  Activity: ["title", "cover"],
+  Message: ["content", "author", "head"],
+  News: ["title", "cover"],
+  Notice: ["title", "cover"],
+  Blog: ["title", "cover"],
+  Article: ["title", "cover"],
+  Video: ["title", "cover"],
+  Music: ["title", "cover", "artist"],
+  Product: ["name", "cover", "price"],
+  Cart: ["title", "cover", "price"],
+  ShopOrder: ["consignee", "total", "status"],
 };
 
 /** Extra columns offered in the multi-select UI (beyond the default text field). */
@@ -63,6 +86,18 @@ export const FK_OPTIONAL_COLUMNS: Record<string, string[]> = {
     "pictureList",
   ],
   Comment: ["id", "content", "userId", "momentId", "toId", "date"],
+  Employee: ["id", "name", "dept", "title", "sex", "salary", "status", "head"],
+  Activity: ["id", "title", "cover", "status", "startTime", "endTime"],
+  Message: ["id", "content", "author", "head", "toUserId", "date"],
+  News: ["id", "title", "cover", "source", "author", "date"],
+  Notice: ["id", "title", "cover", "status", "date"],
+  Blog: ["id", "title", "cover", "author", "date"],
+  Article: ["id", "title", "cover", "author", "date"],
+  Video: ["id", "title", "cover", "author", "videoUrl", "playCount"],
+  Music: ["id", "title", "cover", "artist", "audioUrl", "playCount"],
+  Product: ["id", "name", "cover", "price", "stock", "status"],
+  Cart: ["id", "title", "cover", "price", "qty", "productId"],
+  ShopOrder: ["id", "consignee", "phone", "address", "total", "status"],
 };
 
 export function defaultFkColumns(table: string): string[] {

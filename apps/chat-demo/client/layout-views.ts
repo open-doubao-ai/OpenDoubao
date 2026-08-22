@@ -1,0 +1,1535 @@
+/**
+ * Consumer-app layouts (YouTube / 酷狗 / 掘金 / 微信 / 腾讯新闻 / Amazon).
+ * Data layout stays in result-view (table · grid · charts · form).
+ */
+
+import { t } from "./i18n/index.js";
+import {
+  addCartLine,
+  cartTotal,
+  formatCount,
+  formatDuration,
+  formatPrice,
+  getCartLines,
+  isCartOrOrder,
+  layoutKindLabel,
+  mediaSrc,
+  pickRowPresentation,
+  setCartQty,
+  type CartLine,
+  type LayoutKind,
+  type RowPresentation,
+} from "./page-layout.js";
+import type { SchemaComments } from "./schema-types.js";
+import type { ColumnMeta } from "./field-meta.js";
+
+type FlatRow = { key: string; cells: Record<string, unknown> };
+
+export type LayoutListHandlers = {
+  onOpenRow: (key: string) => void;
+  onAddToCart?: (row: FlatRow, pres: RowPresentation) => void;
+  onBuyNow?: (row: FlatRow, pres: RowPresentation) => void;
+  onCheckout?: (info: LayoutCheckoutInfo) => void;
+  onOpenCheckout?: () => void;
+};
+
+export type LayoutCheckoutInfo = {
+  name: string;
+  phone: string;
+  address: string;
+  remark: string;
+  lines: CartLine[];
+  total: number;
+};
+
+export type LayoutDetailHandlers = {
+  onBack?: () => void;
+  onAddToCart?: () => void;
+  onBuyNow?: () => void;
+  onCheckout?: (info: LayoutCheckoutInfo) => void;
+  onOpenCheckout?: () => void;
+  onOpenRelated?: (id: string | number) => void;
+};
+
+type RelatedPack = {
+  table: string | null;
+  rows: FlatRow[];
+  columns: string[];
+  comments?: SchemaComments | null;
+  metas?: Record<string, ColumnMeta> | null;
+  apijsonBase: string;
+  recordId: (row: FlatRow) => string | number | null;
+};
+
+let relatedPack: RelatedPack | null = null;
+
+function rememberRelated(pack: RelatedPack) {
+  relatedPack = pack;
+}
+
+function relatedItems(exceptId: string | number | null): Array<{
+  row: FlatRow;
+  pres: RowPresentation;
+  id: string | number;
+}> {
+  if (!relatedPack) return [];
+  const out: Array<{ row: FlatRow; pres: RowPresentation; id: string | number }> =
+    [];
+  for (const row of relatedPack.rows) {
+    const id = relatedPack.recordId(row);
+    if (id == null || String(id) === String(exceptId)) continue;
+    out.push({
+      row,
+      id,
+      pres: present(row, {
+        table: relatedPack.table,
+        columns: relatedPack.columns,
+        comments: relatedPack.comments,
+        metas: relatedPack.metas,
+        recordId: id,
+      }),
+    });
+  }
+  return out;
+}
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function showMap(
+  metas?: Record<string, ColumnMeta> | null,
+): Record<string, ColumnMeta["show"] | undefined> {
+  const out: Record<string, ColumnMeta["show"] | undefined> = {};
+  if (!metas) return out;
+  for (const [p, m] of Object.entries(metas)) out[p] = m.show;
+  return out;
+}
+
+function present(
+  row: FlatRow,
+  opts: {
+    table: string | null;
+    columns: string[];
+    comments?: SchemaComments | null;
+    metas?: Record<string, ColumnMeta> | null;
+    recordId?: string | number | null;
+  },
+): RowPresentation {
+  return pickRowPresentation(row.cells, {
+    primaryTable: opts.table,
+    columns: opts.columns,
+    comments: opts.comments,
+    showByPath: showMap(opts.metas),
+    recordId: opts.recordId ?? row.key,
+  });
+}
+
+function thumb(
+  url: string | null,
+  apijsonBase: string,
+  className: string,
+  emptyText: string,
+): HTMLElement {
+  const box = el("div", className);
+  if (url) {
+    const img = el("img");
+    img.src = mediaSrc(url, apijsonBase);
+    img.alt = "";
+    img.loading = "lazy";
+    img.referrerPolicy = "no-referrer";
+    img.onerror = () => {
+      box.classList.add("is-empty");
+      img.replaceWith(document.createTextNode(emptyText));
+    };
+    box.appendChild(img);
+  } else {
+    box.classList.add("is-empty");
+    box.textContent = emptyText;
+  }
+  return box;
+}
+
+function kicker(kind: LayoutKind): string {
+  return layoutKindLabel(kind);
+}
+
+function stop(ev: Event) {
+  ev.stopPropagation();
+}
+
+function chip(label: string, className = "app-chip"): HTMLButtonElement {
+  const b = el("button", className, label);
+  b.type = "button";
+  return b;
+}
+
+function paras(text: string): string[] {
+  const blocks = text
+    .split(/\n{2,}|\r\n|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (blocks.length === 1 && blocks[0]!.length > 48) {
+    const bits = blocks[0]!.split(/(?<=[。！？.!?])\s*/).filter(
+      (s) => s.trim().length > 0,
+    );
+    if (bits.length > 1) return bits;
+  }
+  return blocks;
+}
+
+function tocFromBody(text: string): string[] {
+  const lines = paras(text);
+  const heads = lines.filter(
+    (s) =>
+      /^#{1,3}\s/.test(s) ||
+      (s.length <= 24 && !s.endsWith("。") && !s.endsWith(".")),
+  );
+  return heads.slice(0, 8).map((s) => s.replace(/^#+\s*/, ""));
+}
+
+type ListOpts = {
+  kind: LayoutKind;
+  rows: FlatRow[];
+  columns: string[];
+  primaryTable: string | null;
+  comments?: SchemaComments | null;
+  columnMetas?: Record<string, ColumnMeta> | null;
+  apijsonBase: string;
+  recordId: (row: FlatRow) => string | number | null;
+  handlers: LayoutListHandlers;
+};
+
+function rowPres(opts: ListOpts, row: FlatRow): RowPresentation {
+  return present(row, {
+    table: opts.primaryTable,
+    columns: opts.columns,
+    comments: opts.comments,
+    metas: opts.columnMetas,
+    recordId: opts.recordId(row),
+  });
+}
+
+function addShopButtons(
+  host: HTMLElement,
+  row: FlatRow,
+  pres: RowPresentation,
+  handlers: LayoutListHandlers,
+) {
+  const rowBtns = el("div", "layout-card-actions");
+  const addBtn = el("button", "layout-btn", t("layout.addToCart"));
+  addBtn.type = "button";
+  addBtn.onclick = (ev) => {
+    stop(ev);
+    handlers.onAddToCart?.(row, pres);
+  };
+  const buyBtn = el("button", "layout-btn layout-btn-primary", t("layout.buyNow"));
+  buyBtn.type = "button";
+  buyBtn.onclick = (ev) => {
+    stop(ev);
+    handlers.onBuyNow?.(row, pres);
+  };
+  rowBtns.append(addBtn, buyBtn);
+  host.appendChild(rowBtns);
+}
+
+export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLElement {
+  rememberRelated({
+    table: opts.primaryTable,
+    rows: opts.rows,
+    columns: opts.columns,
+    comments: opts.comments,
+    metas: opts.columnMetas,
+    apijsonBase: opts.apijsonBase,
+    recordId: opts.recordId,
+  });
+  const wrap = el("div", `layout-wrap layout-${opts.kind}`);
+  wrap.id = "result-layout-wrap";
+
+  if (opts.kind === "cart") {
+    wrap.appendChild(
+      renderCartPanel({
+        ...cartOptsFromList(opts),
+        onGoCheckout: () => opts.handlers.onOpenCheckout?.(),
+      }),
+    );
+    container.appendChild(wrap);
+    return wrap;
+  }
+  if (opts.kind === "order") {
+    wrap.appendChild(
+      renderOrderPanel({
+        ...cartOptsFromList(opts),
+        checkoutHandler: (info) => opts.handlers.onCheckout?.(info),
+      }),
+    );
+    container.appendChild(wrap);
+    return wrap;
+  }
+
+  if (!opts.rows.length) {
+    wrap.appendChild(el("div", "result-empty", t("result.noMatching")));
+    container.appendChild(wrap);
+    return wrap;
+  }
+
+  if (opts.kind === "chat") wrap.appendChild(renderChatList(opts));
+  else if (opts.kind === "music") wrap.appendChild(renderKugouList(opts));
+  else if (opts.kind === "video") wrap.appendChild(renderYoutubeGrid(opts));
+  else if (opts.kind === "commerce") wrap.appendChild(renderProductGrid(opts));
+  else if (opts.kind === "social") wrap.appendChild(renderSocialFeed(opts));
+  else if (opts.kind === "news" || opts.kind === "info") {
+    wrap.appendChild(renderNewsPortal(opts));
+  } else if (opts.kind === "blog" || opts.kind === "article") {
+    wrap.appendChild(renderArticleList(opts));
+  } else wrap.appendChild(renderMediaList(opts));
+
+  container.appendChild(wrap);
+  return wrap;
+}
+
+function renderMediaList(opts: ListOpts): HTMLElement {
+  const list = el("div", "layout-media-list");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "layout-media-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    card.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "layout-media-thumb", t("result.noImage")),
+    );
+    const body = el("div", "layout-media-body");
+    body.appendChild(el("div", "layout-kicker", kicker(opts.kind)));
+    body.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
+    const excerpt = pres.headline || pres.body || pres.subtitle;
+    if (excerpt) body.appendChild(el("div", "layout-excerpt", excerpt.slice(0, 120)));
+    const meta = [pres.author, pres.date, pres.status].filter(Boolean).join(" · ");
+    if (meta) body.appendChild(el("div", "layout-meta", meta));
+    card.appendChild(body);
+    list.appendChild(card);
+  }
+  return list;
+}
+
+function renderNewsPortal(opts: ListOpts): HTMLElement {
+  const portal = el("div", "news-portal");
+  const top = el("div", "news-portal-top");
+  const heads = el("div", "news-headline-stack");
+  for (let i = 0; i < Math.min(opts.rows.length, 6); i++) {
+    const row = opts.rows[i]!;
+    const pres = rowPres(opts, row);
+    const b = el("button", "news-headline" + (i === 0 ? " is-lead" : ""));
+    b.type = "button";
+    b.onclick = () => opts.handlers.onOpenRow(row.key);
+    b.appendChild(el("div", "layout-title", pres.title));
+    if (i === 0 && (pres.headline || pres.body)) {
+      b.appendChild(
+        el("div", "layout-excerpt", (pres.headline || pres.body).slice(0, 96)),
+      );
+    }
+    heads.appendChild(b);
+  }
+  top.appendChild(heads);
+
+  const lead = opts.rows[0]!;
+  const leadPres = rowPres(opts, lead);
+  const featured = el("button", "news-featured");
+  featured.type = "button";
+  featured.onclick = () => opts.handlers.onOpenRow(lead.key);
+  const featBody = el("div", "news-featured-body");
+  featBody.appendChild(el("div", "layout-kicker", t("layout.hotNews")));
+  featBody.appendChild(el("h2", "layout-title", leadPres.title));
+  if (leadPres.headline || leadPres.body) {
+    featBody.appendChild(
+      el("div", "layout-excerpt", (leadPres.headline || leadPres.body).slice(0, 140)),
+    );
+  }
+  featBody.appendChild(
+    el(
+      "div",
+      "layout-meta",
+      [leadPres.source, leadPres.author, leadPres.date].filter(Boolean).join(" · "),
+    ),
+  );
+  featured.appendChild(featBody);
+  featured.appendChild(
+    thumb(leadPres.coverUrl, opts.apijsonBase, "news-featured-img", t("result.noImage")),
+  );
+  top.appendChild(featured);
+  portal.appendChild(top);
+
+  const grid = el("div", "news-grid");
+  for (const row of opts.rows.slice(1)) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "news-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    card.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "news-card-img", t("result.noImage")),
+    );
+    card.appendChild(el("div", "layout-title", pres.title));
+    card.appendChild(
+      el("div", "layout-meta", [pres.source || pres.author, pres.date].filter(Boolean).join(" · ")),
+    );
+    grid.appendChild(card);
+  }
+  portal.appendChild(grid);
+  return portal;
+}
+
+function renderArticleList(opts: ListOpts): HTMLElement {
+  const list = el("div", "jj-list");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "jj-list-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    const text = el("div", "jj-list-text");
+    text.appendChild(el("div", "layout-kicker", kicker(opts.kind)));
+    text.appendChild(el("h2", "jj-list-title", pres.title || `#${row.key}`));
+    const excerpt = pres.headline || pres.body;
+    if (excerpt) {
+      text.appendChild(el("div", "layout-excerpt", excerpt.slice(0, 140)));
+    }
+    text.appendChild(
+      el(
+        "div",
+        "layout-meta",
+        [pres.author, pres.date, pres.playCount != null ? `${formatCount(pres.playCount)} ${t("layout.reads")}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+      ),
+    );
+    card.appendChild(text);
+    card.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "jj-list-thumb", t("result.noImage")),
+    );
+    list.appendChild(card);
+  }
+  return list;
+}
+
+function renderSocialFeed(opts: ListOpts): HTMLElement {
+  const feed = el("div", "layout-feed");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "layout-feed-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    const head = el("div", "layout-feed-head");
+    head.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "layout-avatar", ""));
+    const who = el("div", "layout-feed-who");
+    who.appendChild(
+      el("div", "layout-title", pres.author || pres.title || `#${row.key}`),
+    );
+    if (pres.date) who.appendChild(el("div", "layout-meta", pres.date));
+    head.appendChild(who);
+    card.appendChild(head);
+    const text = pres.body || (pres.author ? pres.title : "");
+    if (text) card.appendChild(el("div", "layout-feed-text", text));
+    if (pres.coverUrl) {
+      card.appendChild(
+        thumb(pres.coverUrl, opts.apijsonBase, "layout-social-photo", ""),
+      );
+    }
+    feed.appendChild(card);
+  }
+  return feed;
+}
+
+function renderChatList(opts: ListOpts): HTMLElement {
+  const list = el("div", "layout-chat-list wx-conv-list");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "layout-chat-row");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "layout-avatar", ""));
+    const mid = el("div", "layout-chat-mid");
+    mid.appendChild(
+      el("div", "layout-title", pres.author || pres.title || `#${row.key}`),
+    );
+    mid.appendChild(
+      el("div", "layout-excerpt", (pres.body || pres.subtitle || "").slice(0, 80)),
+    );
+    card.appendChild(mid);
+    if (pres.date) card.appendChild(el("div", "layout-chat-time", pres.date));
+    list.appendChild(card);
+  }
+  return list;
+}
+
+function renderYoutubeGrid(opts: ListOpts): HTMLElement {
+  const grid = el("div", "yt-grid");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "yt-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    const cover = thumb(
+      pres.coverUrl,
+      opts.apijsonBase,
+      "yt-thumb",
+      t("layout.play"),
+    );
+    const dur = formatDuration(pres.durationSec);
+    if (dur) cover.appendChild(el("span", "yt-duration", dur));
+    card.appendChild(cover);
+    const meta = el("div", "yt-card-meta");
+    meta.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "yt-avatar", ""));
+    const text = el("div", "yt-card-text");
+    text.appendChild(el("div", "yt-card-title", pres.title || `#${row.key}`));
+    text.appendChild(el("div", "layout-meta", pres.author || t("layout.video")));
+    const stats = [
+      pres.playCount != null ? `${formatCount(pres.playCount)} ${t("layout.views")}` : "",
+      pres.date,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    if (stats) text.appendChild(el("div", "layout-meta", stats));
+    meta.appendChild(text);
+    card.appendChild(meta);
+    grid.appendChild(card);
+  }
+  return grid;
+}
+
+function renderKugouList(opts: ListOpts): HTMLElement {
+  const box = el("div", "kg-home");
+  const featured = el("div", "kg-featured");
+  featured.appendChild(el("h3", "kg-h", t("layout.music")));
+  const featGrid = el("div", "kg-feat-grid");
+  for (const row of opts.rows.slice(0, 5)) {
+    const pres = rowPres(opts, row);
+    const card = el("button", "kg-feat-card");
+    card.type = "button";
+    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    const cover = thumb(pres.coverUrl, opts.apijsonBase, "kg-feat-img", "");
+    cover.appendChild(el("span", "layout-play-badge", "▶"));
+    if (pres.playCount != null) {
+      cover.appendChild(el("span", "kg-plays", formatCount(pres.playCount)));
+    }
+    card.appendChild(cover);
+    card.appendChild(el("div", "layout-title", pres.title));
+    featGrid.appendChild(card);
+  }
+  featured.appendChild(featGrid);
+  box.appendChild(featured);
+
+  const list = el("div", "kg-tracks");
+  list.appendChild(el("h3", "kg-h", t("layout.queue")));
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const item = el("button", "kg-track");
+    item.type = "button";
+    item.onclick = () => opts.handlers.onOpenRow(row.key);
+    item.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "layout-track-cover", ""));
+    const info = el("div", "layout-track-info");
+    info.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
+    info.appendChild(el("div", "layout-meta", pres.author || pres.album));
+    item.appendChild(info);
+    item.appendChild(el("div", "kg-dur", formatDuration(pres.durationSec) || ""));
+    list.appendChild(item);
+  }
+  box.appendChild(list);
+  return box;
+}
+
+function renderProductGrid(opts: ListOpts): HTMLElement {
+  const grid = el("div", "layout-product-grid az-grid");
+  for (const row of opts.rows) {
+    const pres = rowPres(opts, row);
+    const card = el("div", "layout-product-card");
+    const open = el("button", "layout-product-open");
+    open.type = "button";
+    open.onclick = () => opts.handlers.onOpenRow(row.key);
+    open.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "layout-product-img", t("result.noImage")),
+    );
+    open.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
+    const price = formatPrice(pres.price);
+    if (price) open.appendChild(el("div", "layout-price", price));
+    if (pres.sales != null) {
+      open.appendChild(el("div", "layout-meta", `${formatCount(pres.sales)} ${t("layout.sold")}`));
+    }
+    card.appendChild(open);
+    addShopButtons(card, row, pres, opts.handlers);
+    grid.appendChild(card);
+  }
+  return grid;
+}
+
+export function renderLayoutDetailHero(
+  host: HTMLElement,
+  opts: {
+    kind: LayoutKind;
+    row: FlatRow;
+    columns: string[];
+    primaryTable: string | null;
+    comments?: SchemaComments | null;
+    columnMetas?: Record<string, ColumnMeta> | null;
+    apijsonBase: string;
+    recordId?: string | number | null;
+    handlers: LayoutDetailHandlers;
+  },
+): void {
+  const pres = present(opts.row, {
+    table: opts.primaryTable,
+    columns: opts.columns,
+    comments: opts.comments,
+    metas: opts.columnMetas,
+    recordId: opts.recordId,
+  });
+  const related = relatedItems(opts.recordId ?? null);
+
+  if (opts.kind === "cart") {
+    host.appendChild(
+      renderCartPanel({
+        rows: [opts.row],
+        columns: opts.columns,
+        table: opts.primaryTable,
+        comments: opts.comments,
+        metas: opts.columnMetas,
+        apijsonBase: opts.apijsonBase,
+        recordId: () => opts.recordId ?? null,
+        onGoCheckout: () => opts.handlers.onOpenCheckout?.(),
+      }),
+    );
+    return;
+  }
+  if (opts.kind === "order") {
+    host.appendChild(
+      renderOrderPanel({
+        rows: [opts.row],
+        columns: opts.columns,
+        table: opts.primaryTable,
+        comments: opts.comments,
+        metas: opts.columnMetas,
+        apijsonBase: opts.apijsonBase,
+        recordId: () => opts.recordId ?? null,
+        checkoutHandler: opts.handlers.onCheckout,
+      }),
+    );
+    return;
+  }
+
+  const app = el("div", `layout-app app-${opts.kind}`);
+  if (opts.kind === "video") renderYoutubeWatch(app, pres, related, opts);
+  else if (opts.kind === "music") renderSpotifyPlayer(app, pres, related, opts);
+  else if (opts.kind === "commerce") renderAmazonPdp(app, pres, related, opts);
+  else if (opts.kind === "chat") renderWechatThread(app, pres, related, opts);
+  else if (opts.kind === "social") renderTikTokStage(app, pres, opts);
+  else if (opts.kind === "news" || opts.kind === "info") {
+    renderNewsArticle(app, pres, related, opts);
+  } else if (opts.kind === "blog" || opts.kind === "article") {
+    renderJuejinArticle(app, pres, related, opts);
+  } else if (opts.kind === "campaign") {
+    renderCampaignLanding(app, pres, opts);
+  } else {
+    renderJuejinArticle(app, pres, related, opts);
+  }
+  host.appendChild(app);
+}
+
+function openRelated(
+  handlers: LayoutDetailHandlers,
+  id: string | number,
+) {
+  handlers.onOpenRelated?.(id);
+}
+
+function renderYoutubeWatch(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+) {
+  const page = el("div", "yt-watch");
+  const main = el("div", "yt-main");
+  const player = el("div", "yt-player");
+  if (pres.videoUrl) {
+    const video = el("video", "yt-video");
+    video.controls = true;
+    video.playsInline = true;
+    video.autoplay = false;
+    video.src = mediaSrc(pres.videoUrl, opts.apijsonBase);
+    if (pres.coverUrl) video.poster = mediaSrc(pres.coverUrl, opts.apijsonBase);
+    player.appendChild(video);
+  } else {
+    const ph = thumb(
+      pres.coverUrl,
+      opts.apijsonBase,
+      "yt-player-fallback",
+      t("layout.noMedia"),
+    );
+    ph.appendChild(el("span", "layout-play-badge", "▶"));
+    player.appendChild(ph);
+  }
+  main.appendChild(player);
+  main.appendChild(el("h1", "yt-title", pres.title));
+
+  const row = el("div", "yt-channel-row");
+  const left = el("div", "yt-channel");
+  left.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "yt-avatar-lg", ""));
+  const who = el("div");
+  who.appendChild(el("div", "yt-channel-name", pres.author || t("layout.video")));
+  who.appendChild(
+    el(
+      "div",
+      "layout-meta",
+      pres.playCount != null
+        ? `${formatCount(pres.playCount)} ${t("layout.views")}`
+        : "",
+    ),
+  );
+  left.appendChild(who);
+  left.appendChild(chip(t("layout.subscribe"), "yt-sub"));
+  row.appendChild(left);
+  const actions = el("div", "yt-actions");
+  actions.appendChild(chip(`👍 ${t("layout.like")}`));
+  actions.appendChild(chip(`👎`));
+  actions.appendChild(chip(t("layout.share")));
+  actions.appendChild(chip(t("layout.save")));
+  row.appendChild(actions);
+  main.appendChild(row);
+
+  const desc = el("div", "yt-desc");
+  const stats = [
+    pres.playCount != null ? `${formatCount(pres.playCount)} ${t("layout.views")}` : "",
+    pres.date,
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
+  if (stats) desc.appendChild(el("div", "yt-desc-stats", stats));
+  if (pres.body) desc.appendChild(el("div", "yt-desc-body", pres.body));
+  main.appendChild(desc);
+
+  const comments = el("div", "yt-comments");
+  comments.appendChild(el("h3", "yt-h", t("layout.comments")));
+  const cRow = el("div", "yt-c-row");
+  cRow.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "yt-avatar", ""));
+  const cIn = document.createElement("input");
+  cIn.className = "yt-c-input";
+  cIn.placeholder = t("layout.composerHint");
+  cRow.appendChild(cIn);
+  comments.appendChild(cRow);
+  main.appendChild(comments);
+  page.appendChild(main);
+
+  const side = el("div", "yt-related");
+  side.appendChild(el("h3", "yt-h", t("layout.related")));
+  for (const item of related.slice(0, 12)) {
+    const card = el("button", "yt-related-card");
+    card.type = "button";
+    card.onclick = () => openRelated(opts.handlers, item.id);
+    const th = thumb(item.pres.coverUrl, opts.apijsonBase, "yt-related-thumb", "");
+    const dur = formatDuration(item.pres.durationSec);
+    if (dur) th.appendChild(el("span", "yt-duration", dur));
+    card.appendChild(th);
+    const tx = el("div", "yt-related-text");
+    tx.appendChild(el("div", "layout-title", item.pres.title));
+    tx.appendChild(el("div", "layout-meta", item.pres.author));
+    if (item.pres.playCount != null) {
+      tx.appendChild(
+        el("div", "layout-meta", `${formatCount(item.pres.playCount)} ${t("layout.views")}`),
+      );
+    }
+    card.appendChild(tx);
+    side.appendChild(card);
+  }
+  page.appendChild(side);
+  app.appendChild(page);
+}
+
+function renderSpotifyPlayer(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+) {
+  const page = el("div", "sp-page");
+  if (pres.coverUrl) {
+    const bg = el("div", "sp-blur");
+    bg.style.backgroundImage = `url("${mediaSrc(pres.coverUrl, opts.apijsonBase)}")`;
+    page.appendChild(bg);
+  }
+  const hero = el("div", "sp-hero");
+  hero.appendChild(
+    thumb(pres.coverUrl, opts.apijsonBase, "sp-art", t("result.noImage")),
+  );
+  const info = el("div", "sp-hero-text");
+  info.appendChild(el("div", "sp-kind", t("layout.music")));
+  info.appendChild(el("h1", "sp-title", pres.title));
+  info.appendChild(
+    el(
+      "div",
+      "sp-sub",
+      [pres.author, pres.album, formatDuration(pres.durationSec)]
+        .filter(Boolean)
+        .join(" · "),
+    ),
+  );
+  if (pres.playCount != null) {
+    info.appendChild(
+      el("div", "layout-meta", `${formatCount(pres.playCount)} ${t("layout.plays")}`),
+    );
+  }
+  const playRow = el("div", "sp-play-row");
+  const playBtn = el("button", "sp-play", "▶");
+  playBtn.type = "button";
+  playBtn.title = t("layout.play");
+  playRow.appendChild(playBtn);
+  playRow.appendChild(chip("♡", "sp-heart"));
+  playRow.appendChild(chip("···", "app-chip"));
+  info.appendChild(playRow);
+  hero.appendChild(info);
+  page.appendChild(hero);
+
+  const split = el("div", "sp-split");
+  const queue = el("div", "sp-queue");
+  const head = el("div", "sp-q-head");
+  head.appendChild(el("span", "", "#"));
+  head.appendChild(el("span", "", t("layout.queue")));
+  head.appendChild(el("span", "", t("layout.music")));
+  head.appendChild(el("span", "", ""));
+  queue.appendChild(head);
+
+  const tracks = [
+    { pres, id: pres.id ?? "", current: true },
+    ...related.map((r) => ({ pres: r.pres, id: r.id, current: false })),
+  ];
+  let trackIndex = 0;
+  const audio = el("audio", "sp-audio-hidden");
+  audio.preload = "metadata";
+  const src = pres.audioUrl || pres.videoUrl;
+  if (src) audio.src = mediaSrc(src, opts.apijsonBase);
+
+  const barTitle = el("div", "sp-bar-title", pres.title);
+  const barArtist = el("div", "sp-bar-artist", pres.author);
+  const lyricTitle = el("div", "sp-lyric-title", pres.title);
+  const lyricArtist = el("div", "sp-lyric-sub", [pres.author, pres.album].filter(Boolean).join(" · "));
+  const timeCur = el("span", "sp-time", "0:00");
+  const timeTot = el("span", "sp-time", formatDuration(pres.durationSec) || "0:00");
+  const seek = document.createElement("input");
+  seek.type = "range";
+  seek.min = "0";
+  seek.max = "1000";
+  seek.value = "0";
+  seek.className = "sp-seek";
+  const prev = el("button", "sp-icon", "⏮");
+  const midPlay = el("button", "sp-icon sp-icon-play", "▶");
+  const next = el("button", "sp-icon", "⏭");
+  prev.type = "button";
+  midPlay.type = "button";
+  next.type = "button";
+
+  const markCurrent = (index: number) => {
+    trackIndex = index;
+    const rows = Array.from(queue.querySelectorAll(".sp-q-row"));
+    rows.forEach((elRow, i) => {
+      elRow.classList.toggle("is-current", i === index);
+    });
+  };
+
+  const setPlayingUi = (playing: boolean) => {
+    playBtn.textContent = playing ? "❚❚" : "▶";
+    midPlay.textContent = playing ? "❚❚" : "▶";
+  };
+
+  const setTrack = (p: RowPresentation, index: number, autoplay: boolean) => {
+    const next = p.audioUrl || p.videoUrl;
+    if (next) audio.src = mediaSrc(next, opts.apijsonBase);
+    barTitle.textContent = p.title;
+    barArtist.textContent = p.author;
+    lyricTitle.textContent = p.title;
+    lyricArtist.textContent = [p.author, p.album].filter(Boolean).join(" · ");
+    timeTot.textContent = formatDuration(p.durationSec) || "0:00";
+    markCurrent(index);
+    if (autoplay) void audio.play().catch(() => undefined);
+  };
+
+  playBtn.onclick = () => {
+    if (audio.paused) void audio.play().catch(() => undefined);
+    else audio.pause();
+  };
+  audio.onplay = () => setPlayingUi(true);
+  audio.onpause = () => setPlayingUi(false);
+  audio.ontimeupdate = () => {
+    if (!audio.duration) return;
+    seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000));
+    timeCur.textContent = formatDuration(audio.currentTime);
+  };
+  audio.onended = () => {
+    const next = (trackIndex + 1) % tracks.length;
+    const item = tracks[next];
+    if (item) setTrack(item.pres, next, true);
+  };
+  seek.oninput = () => {
+    if (!audio.duration) return;
+    audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+  };
+  const skip = (delta: number) => {
+    if (!tracks.length) return;
+    const nextIndex = (trackIndex + delta + tracks.length) % tracks.length;
+    const item = tracks[nextIndex];
+    if (item) setTrack(item.pres, nextIndex, true);
+  };
+  prev.onclick = () => skip(-1);
+  next.onclick = () => skip(1);
+  midPlay.onclick = () => playBtn.click();
+
+  tracks.forEach((item, i) => {
+    const row = el("button", "sp-q-row" + (item.current ? " is-current" : ""));
+    row.type = "button";
+    row.appendChild(el("span", "sp-q-num", String(i + 1)));
+    const name = el("div", "sp-q-name");
+    name.appendChild(el("div", "layout-title", item.pres.title));
+    name.appendChild(el("div", "layout-meta", item.pres.author));
+    row.appendChild(name);
+    row.appendChild(el("span", "layout-meta", item.pres.album));
+    row.appendChild(
+      el("span", "sp-q-dur", formatDuration(item.pres.durationSec)),
+    );
+    row.onclick = () => setTrack(item.pres, i, true);
+    queue.appendChild(row);
+  });
+
+  const lyrics = el("div", "sp-lyrics");
+  lyrics.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "sp-lyric-art", ""));
+  lyrics.appendChild(lyricTitle);
+  lyrics.appendChild(lyricArtist);
+  lyrics.appendChild(el("div", "sp-lyric-hint", t("layout.lyrics")));
+  split.append(queue, lyrics);
+  page.appendChild(split);
+
+  const bar = el("div", "sp-bar");
+  const barLeft = el("div", "sp-bar-left");
+  barLeft.appendChild(
+    thumb(pres.coverUrl, opts.apijsonBase, "sp-bar-art", ""),
+  );
+  const barTx = el("div");
+  barTx.appendChild(barTitle);
+  barTx.appendChild(barArtist);
+  barLeft.appendChild(barTx);
+  const barMid = el("div", "sp-bar-mid");
+  const ctrls = el("div", "sp-bar-ctrls");
+  ctrls.append(prev, midPlay, next);
+  const seekRow = el("div", "sp-seek-row");
+  seekRow.append(timeCur, seek, timeTot);
+  barMid.append(ctrls, seekRow);
+  bar.append(barLeft, barMid, audio);
+  page.appendChild(bar);
+  app.appendChild(page);
+}
+
+function renderAmazonPdp(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+) {
+  const page = el("div", "az-pdp");
+  const top = el("div", "az-top");
+  const gallery = el("div", "az-gallery");
+  gallery.appendChild(
+    thumb(pres.coverUrl, opts.apijsonBase, "az-main-img", t("result.noImage")),
+  );
+  const thumbs = el("div", "az-thumbs");
+  thumbs.appendChild(
+    thumb(pres.coverUrl, opts.apijsonBase, "az-thumb", ""),
+  );
+  for (const item of related.slice(0, 4)) {
+    thumbs.appendChild(
+      thumb(item.pres.coverUrl, opts.apijsonBase, "az-thumb", ""),
+    );
+  }
+  gallery.appendChild(thumbs);
+  top.appendChild(gallery);
+
+  const info = el("div", "az-info");
+  info.appendChild(el("h1", "az-title", pres.title));
+  if (pres.author) {
+    info.appendChild(el("div", "az-by", `${t("layout.authorCard")}: ${pres.author}`));
+  }
+  info.appendChild(el("div", "az-stars", "★★★★☆"));
+  const price = formatPrice(pres.price);
+  if (price) info.appendChild(el("div", "az-price", price));
+  const stockN = Number(pres.stock);
+  info.appendChild(
+    el(
+      "div",
+      Number.isFinite(stockN) && stockN <= 0 ? "az-oos" : "az-stock",
+      Number.isFinite(stockN) && stockN <= 0
+        ? t("layout.outOfStock")
+        : `${t("layout.inStock")}${pres.stock ? ` · ${pres.stock}` : ""}`,
+    ),
+  );
+  if (pres.sales != null) {
+    info.appendChild(
+      el("div", "layout-meta", `${formatCount(pres.sales)} ${t("layout.sold")}`),
+    );
+  }
+  if (pres.body) info.appendChild(el("div", "az-blurb", pres.body));
+  top.appendChild(info);
+
+  const buy = el("div", "az-buybox");
+  buy.appendChild(el("div", "az-buy-label", t("layout.buyBox")));
+  if (price) buy.appendChild(el("div", "az-price", price));
+  const qty = el("div", "az-qty");
+  qty.appendChild(el("span", "", t("layout.qty")));
+  const qtyIn = document.createElement("select");
+  qtyIn.className = "az-qty-sel";
+  for (let i = 1; i <= 5; i++) {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = String(i);
+    qtyIn.appendChild(o);
+  }
+  qty.appendChild(qtyIn);
+  buy.appendChild(qty);
+  const add = el("button", "az-btn az-btn-cart", t("layout.addToCart"));
+  add.type = "button";
+  add.onclick = () => opts.handlers.onAddToCart?.();
+  const buyNow = el("button", "az-btn az-btn-buy", t("layout.buyNow"));
+  buyNow.type = "button";
+  buyNow.onclick = () => opts.handlers.onBuyNow?.();
+  buy.append(add, buyNow);
+  top.appendChild(buy);
+  page.appendChild(top);
+
+  const tabs = el("div", "az-tabs");
+  tabs.appendChild(el("h3", "az-h", t("layout.description")));
+  tabs.appendChild(el("div", "az-tab-body", pres.body || pres.headline || pres.title));
+  if (related.length) {
+    tabs.appendChild(el("h3", "az-h", t("layout.moreFrom")));
+    const rec = el("div", "az-recs");
+    for (const item of related.slice(0, 6)) {
+      const c = el("button", "az-rec");
+      c.type = "button";
+      c.onclick = () => openRelated(opts.handlers, item.id);
+      c.appendChild(
+        thumb(item.pres.coverUrl, opts.apijsonBase, "az-rec-img", ""),
+      );
+      c.appendChild(el("div", "layout-title", item.pres.title));
+      const p = formatPrice(item.pres.price);
+      if (p) c.appendChild(el("div", "layout-price", p));
+      rec.appendChild(c);
+    }
+    tabs.appendChild(rec);
+  }
+  page.appendChild(tabs);
+  app.appendChild(page);
+}
+
+function renderWechatThread(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string },
+) {
+  const page = el("div", "wx-page");
+  const head = el("div", "wx-head");
+  head.appendChild(el("div", "wx-head-title", pres.author || pres.title));
+  page.appendChild(head);
+  const thread = el("div", "wx-thread");
+  const msgs = [
+    { pres, mine: false },
+    ...related.slice(0, 16).map((r, i) => ({ pres: r.pres, mine: i % 2 === 0 })),
+  ];
+  for (const m of msgs) {
+    const row = el("div", "wx-row" + (m.mine ? " is-mine" : ""));
+    row.appendChild(
+      thumb(m.pres.coverUrl, opts.apijsonBase, "wx-av", ""),
+    );
+    const bubble = el("div", "wx-bubble");
+    bubble.appendChild(el("div", "wx-name", m.pres.author || ""));
+    bubble.appendChild(el("div", "wx-text", m.pres.body || m.pres.title));
+    if (m.pres.date) bubble.appendChild(el("div", "wx-time", m.pres.date));
+    row.appendChild(bubble);
+    thread.appendChild(row);
+  }
+  page.appendChild(thread);
+  const composer = el("div", "wx-composer");
+  const input = document.createElement("input");
+  input.className = "wx-input";
+  input.placeholder = t("layout.composerHint");
+  const send = el("button", "wx-send", t("layout.send"));
+  send.type = "button";
+  const pushMine = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const row = el("div", "wx-row is-mine");
+    row.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "wx-av", ""));
+    const bubble = el("div", "wx-bubble");
+    bubble.appendChild(el("div", "wx-text", trimmed));
+    row.appendChild(bubble);
+    thread.appendChild(row);
+    thread.scrollTop = thread.scrollHeight;
+  };
+  send.onclick = () => {
+    pushMine(input.value);
+    input.value = "";
+  };
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      send.click();
+    }
+  });
+  composer.append(input, send);
+  page.appendChild(composer);
+  app.appendChild(page);
+}
+
+function renderTikTokStage(
+  app: HTMLElement,
+  pres: RowPresentation,
+  opts: { apijsonBase: string },
+) {
+  const stage = el("div", "tt-stage");
+  const video = pres.videoUrl ? el("video", "tt-video") : null;
+  if (video) {
+    video.controls = false;
+    video.playsInline = true;
+    video.loop = true;
+    video.muted = true;
+    video.src = mediaSrc(pres.videoUrl!, opts.apijsonBase);
+    if (pres.coverUrl) video.poster = mediaSrc(pres.coverUrl, opts.apijsonBase);
+    stage.appendChild(video);
+    const toggle = () => {
+      if (video.paused) void video.play().catch(() => undefined);
+      else video.pause();
+    };
+    stage.addEventListener("click", toggle);
+    void video.play().catch(() => undefined);
+  } else {
+    stage.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "tt-photo", t("layout.noMedia")),
+    );
+  }
+  const overlay = el("div", "tt-overlay");
+  overlay.appendChild(el("div", "tt-user", `@${pres.author || "user"}`));
+  overlay.appendChild(el("div", "tt-caption", pres.body || pres.title));
+  if (pres.date) overlay.appendChild(el("div", "tt-time", pres.date));
+  stage.appendChild(overlay);
+  const rail = el("div", "tt-rail");
+  rail.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "tt-av", ""));
+  const mk = (icon: string, n: string) => {
+    const b = el("div", "tt-act");
+    b.appendChild(el("div", "tt-act-icon", icon));
+    b.appendChild(el("div", "tt-act-n", n));
+    return b;
+  };
+  rail.appendChild(mk("♥", formatCount(pres.playCount) || "—"));
+  rail.appendChild(mk("💬", "—"));
+  rail.appendChild(mk("★", "—"));
+  rail.appendChild(mk("↗", t("layout.share")));
+  rail.addEventListener("click", (ev) => ev.stopPropagation());
+  stage.appendChild(rail);
+  app.appendChild(stage);
+}
+
+function renderNewsArticle(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+) {
+  const page = el("div", "news-read");
+  const main = el("div", "news-read-main");
+  const heads = el("div", "news-heads");
+  heads.appendChild(el("h1", "news-h1", pres.title));
+  if (related[0]) {
+    const sub = el("button", "news-subhead");
+    sub.type = "button";
+    sub.textContent = related[0].pres.title;
+    sub.onclick = () => openRelated(opts.handlers, related[0]!.id);
+    heads.appendChild(sub);
+  }
+  main.appendChild(heads);
+  main.appendChild(
+    el(
+      "div",
+      "news-byline",
+      [pres.source, pres.author, pres.date, pres.playCount != null ? `${formatCount(pres.playCount)} ${t("layout.reads")}` : ""]
+        .filter(Boolean)
+        .join("  ·  "),
+    ),
+  );
+  if (pres.coverUrl) {
+    main.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "news-cover", ""),
+    );
+  }
+  const body = el("div", "news-body");
+  for (const p of paras(pres.body || pres.headline || "")) {
+    body.appendChild(el("p", "", p));
+  }
+  main.appendChild(body);
+  page.appendChild(main);
+
+  const side = el("div", "news-side");
+  side.appendChild(el("h3", "news-side-h", t("layout.relatedNews")));
+  for (const item of related.slice(0, 8)) {
+    const a = el("button", "news-side-item");
+    a.type = "button";
+    a.onclick = () => openRelated(opts.handlers, item.id);
+    a.appendChild(
+      thumb(item.pres.coverUrl, opts.apijsonBase, "news-side-img", ""),
+    );
+    const tx = el("div");
+    tx.appendChild(el("div", "layout-title", item.pres.title));
+    tx.appendChild(el("div", "layout-meta", item.pres.date));
+    a.appendChild(tx);
+    side.appendChild(a);
+  }
+  page.appendChild(side);
+  app.appendChild(page);
+}
+
+function renderJuejinArticle(
+  app: HTMLElement,
+  pres: RowPresentation,
+  related: Array<{ pres: RowPresentation; id: string | number }>,
+  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+) {
+  const page = el("div", "jj-page");
+  const rail = el("div", "jj-rail");
+  const mk = (icon: string, n: string) => {
+    const b = el("button", "jj-act");
+    b.type = "button";
+    b.appendChild(el("span", "jj-act-icon", icon));
+    b.appendChild(el("span", "", n));
+    return b;
+  };
+  rail.appendChild(mk("👍", formatCount(pres.playCount) || "0"));
+  rail.appendChild(mk("💬", "0"));
+  rail.appendChild(mk("⭐", "0"));
+  rail.appendChild(mk("↗", ""));
+  page.appendChild(rail);
+
+  const article = el("article", "jj-article");
+  article.appendChild(el("h1", "jj-h1", pres.title));
+  const meta = el("div", "jj-meta");
+  meta.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "jj-av", ""));
+  const who = el("div");
+  who.appendChild(el("div", "jj-author", pres.author || t("layout.authorCard")));
+  who.appendChild(
+    el(
+      "div",
+      "layout-meta",
+      [pres.date, pres.playCount != null ? `${formatCount(pres.playCount)} ${t("layout.reads")}` : ""]
+        .filter(Boolean)
+        .join(" · "),
+    ),
+  );
+  meta.appendChild(who);
+  meta.appendChild(chip(t("layout.follow"), "jj-follow"));
+  article.appendChild(meta);
+  if (pres.coverUrl) {
+    article.appendChild(
+      thumb(pres.coverUrl, opts.apijsonBase, "jj-cover", ""),
+    );
+  }
+  const body = el("div", "jj-body");
+  for (const p of paras(pres.body || pres.headline || "")) {
+    if (p.length <= 24 && !p.endsWith("。")) body.appendChild(el("h2", "jj-h2", p));
+    else body.appendChild(el("p", "", p));
+  }
+  article.appendChild(body);
+  page.appendChild(article);
+
+  const side = el("div", "jj-side");
+  const author = el("div", "jj-card");
+  const ah = el("div", "jj-card-head");
+  ah.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "jj-av-lg", ""));
+  const at = el("div");
+  at.appendChild(el("div", "layout-title", pres.author || t("layout.authorCard")));
+  at.appendChild(el("div", "layout-meta", kicker("blog")));
+  ah.appendChild(at);
+  author.appendChild(ah);
+  const stats = el("div", "jj-stats");
+  const stat = (label: string, value: string) => {
+    const d = el("div", "jj-stat");
+    d.appendChild(el("div", "jj-stat-n", value));
+    d.appendChild(el("div", "jj-stat-l", label));
+    return d;
+  };
+  stats.appendChild(stat(t("layout.articles"), String(related.length + 1)));
+  stats.appendChild(stat(t("layout.reads"), formatCount(pres.playCount) || "—"));
+  stats.appendChild(stat(t("layout.fans"), "—"));
+  author.appendChild(stats);
+  const follow = chip(t("layout.follow"), "jj-follow");
+  const msg = chip(t("layout.message"), "app-chip");
+  const btns = el("div", "jj-card-btns");
+  btns.append(follow, msg);
+  author.appendChild(btns);
+  side.appendChild(author);
+
+  const toc = tocFromBody(pres.body);
+  if (toc.length) {
+    const tocCard = el("div", "jj-card");
+    tocCard.appendChild(el("h3", "jj-card-h", t("layout.toc")));
+    for (const h of toc) tocCard.appendChild(el("div", "jj-toc-item", h));
+    side.appendChild(tocCard);
+  }
+  if (related.length) {
+    const rec = el("div", "jj-card");
+    rec.appendChild(el("h3", "jj-card-h", t("layout.moreFrom")));
+    for (const item of related.slice(0, 5)) {
+      const a = el("button", "jj-more");
+      a.type = "button";
+      a.textContent = item.pres.title;
+      a.onclick = () => openRelated(opts.handlers, item.id);
+      rec.appendChild(a);
+    }
+    side.appendChild(rec);
+  }
+  page.appendChild(side);
+  app.appendChild(page);
+}
+
+function renderCampaignLanding(
+  app: HTMLElement,
+  pres: RowPresentation,
+  opts: { apijsonBase: string },
+) {
+  const page = el("div", "camp-page");
+  page.appendChild(
+    thumb(pres.coverUrl, opts.apijsonBase, "camp-banner", t("result.noImage")),
+  );
+  const body = el("div", "camp-body");
+  body.appendChild(el("div", "layout-kicker", t("layout.campaign")));
+  body.appendChild(el("h1", "camp-h1", pres.title));
+  body.appendChild(
+    el("div", "camp-dates", [pres.date, pres.status].filter(Boolean).join("  →  ")),
+  );
+  if (pres.body) {
+    const box = el("div", "camp-copy");
+    for (const p of paras(pres.body)) box.appendChild(el("p", "", p));
+    body.appendChild(box);
+  }
+  const cta = el("button", "camp-cta", t("layout.signup"));
+  cta.type = "button";
+  body.appendChild(cta);
+  page.appendChild(body);
+  app.appendChild(page);
+}
+
+function cartOptsFromList(opts: ListOpts) {
+  return {
+    rows: opts.rows,
+    columns: opts.columns,
+    table: opts.primaryTable,
+    comments: opts.comments,
+    metas: opts.columnMetas,
+    apijsonBase: opts.apijsonBase,
+    recordId: opts.recordId,
+  };
+}
+
+function effectiveCartLines(opts: {
+  rows: FlatRow[];
+  columns: string[];
+  table: string | null;
+  comments?: SchemaComments | null;
+  metas?: Record<string, ColumnMeta> | null;
+  recordId: (row: FlatRow) => string | number | null;
+}): CartLine[] {
+  const stored = getCartLines();
+  if (stored.length) return stored;
+  const fromRows: CartLine[] = [];
+  for (const row of opts.rows) {
+    const id = opts.recordId(row);
+    if (id == null) continue;
+    const p = present(row, {
+      table: opts.table,
+      columns: opts.columns,
+      comments: opts.comments,
+      metas: opts.metas,
+      recordId: id,
+    });
+    fromRows.push({
+      table: opts.table || "Item",
+      id,
+      title: p.title || `#${id}`,
+      price: p.price ?? 0,
+      qty: 1,
+      image: p.coverUrl,
+    });
+  }
+  return fromRows;
+}
+
+function renderCartPanel(opts: {
+  rows: FlatRow[];
+  columns: string[];
+  table: string | null;
+  comments?: SchemaComments | null;
+  metas?: Record<string, ColumnMeta> | null;
+  apijsonBase: string;
+  recordId: (row: FlatRow) => string | number | null;
+  onGoCheckout?: () => void;
+}): HTMLElement {
+  const panel = el("div", "layout-cart az-cart");
+  panel.appendChild(el("h2", "layout-title", t("layout.cart")));
+  const linesHost = el("div", "layout-cart-lines");
+  const foot = el("div", "layout-cart-foot");
+  const totalEl = el("div", "layout-price layout-price-lg");
+
+  const paint = () => {
+    const lines = effectiveCartLines(opts);
+    linesHost.innerHTML = "";
+    if (!lines.length) {
+      linesHost.appendChild(el("div", "result-empty", t("layout.cartEmpty")));
+      totalEl.textContent = formatPrice(0);
+      return;
+    }
+    for (const line of lines) {
+      const row = el("div", "layout-cart-line");
+      row.appendChild(
+        thumb(line.image ?? null, opts.apijsonBase, "layout-cart-thumb", ""),
+      );
+      const info = el("div", "layout-cart-info");
+      info.appendChild(el("div", "layout-title", line.title));
+      info.appendChild(el("div", "layout-price", formatPrice(line.price)));
+      row.appendChild(info);
+      const qty = document.createElement("input");
+      qty.className = "layout-qty";
+      qty.type = "number";
+      qty.min = "0";
+      qty.value = String(line.qty);
+      qty.onchange = () => {
+        if (getCartLines().length) {
+          setCartQty(line.table, line.id, Number(qty.value) || 0);
+        }
+        paint();
+      };
+      row.appendChild(qty);
+      linesHost.appendChild(row);
+    }
+    const stored = getCartLines();
+    const total = stored.length
+      ? cartTotal()
+      : lines.reduce((n, l) => n + l.price * l.qty, 0);
+    totalEl.textContent = formatPrice(total);
+  };
+
+  paint();
+  panel.appendChild(linesHost);
+  foot.appendChild(totalEl);
+  const go = el("button", "az-btn az-btn-buy", t("layout.checkout"));
+  go.type = "button";
+  go.onclick = () => opts.onGoCheckout?.();
+  foot.appendChild(go);
+  panel.appendChild(foot);
+  return panel;
+}
+
+function renderOrderPanel(opts: {
+  rows: FlatRow[];
+  columns: string[];
+  table: string | null;
+  comments?: SchemaComments | null;
+  metas?: Record<string, ColumnMeta> | null;
+  apijsonBase: string;
+  recordId: (row: FlatRow) => string | number | null;
+  checkoutHandler?: (info: LayoutCheckoutInfo) => void;
+}): HTMLElement {
+  const panel = el("div", "layout-order az-order");
+  panel.appendChild(el("h2", "layout-title", t("layout.order")));
+  const lines = effectiveCartLines(opts);
+  const summary = el("div", "layout-order-items");
+  if (!lines.length) {
+    summary.appendChild(el("div", "result-empty", t("layout.cartEmpty")));
+  } else {
+    for (const line of lines) {
+      summary.appendChild(
+        el(
+          "div",
+          "layout-order-item",
+          `${line.title} × ${line.qty}  ${formatPrice(line.price * line.qty)}`,
+        ),
+      );
+    }
+  }
+  panel.appendChild(summary);
+
+  const form = el("div", "layout-order-form");
+  const field = (key: string, label: string, multiline = false) => {
+    const lab = el("label", "layout-field");
+    lab.appendChild(el("span", "", label));
+    const input = multiline
+      ? document.createElement("textarea")
+      : document.createElement("input");
+    input.className = "layout-input";
+    if (!multiline) (input as HTMLInputElement).type = "text";
+    input.dataset.key = key;
+    lab.appendChild(input);
+    form.appendChild(lab);
+    return input;
+  };
+  const name = field("name", t("layout.consignee"));
+  const phone = field("phone", t("layout.phone"));
+  const address = field("address", t("layout.address"), true);
+  const remark = field("remark", t("layout.remark"), true);
+
+  const total = getCartLines().length
+    ? cartTotal()
+    : lines.reduce((n, l) => n + l.price * l.qty, 0);
+  form.appendChild(el("div", "layout-price layout-price-lg", formatPrice(total)));
+
+  const submit = el("button", "az-btn az-btn-buy", t("layout.placeOrder"));
+  submit.type = "button";
+  submit.onclick = () => {
+    opts.checkoutHandler?.({
+      name: (name as HTMLInputElement).value.trim(),
+      phone: (phone as HTMLInputElement).value.trim(),
+      address: (address as HTMLTextAreaElement).value.trim(),
+      remark: (remark as HTMLTextAreaElement).value.trim(),
+      lines,
+      total,
+    });
+  };
+  form.appendChild(submit);
+  panel.appendChild(form);
+  return panel;
+}
+
+export function addRowToCart(
+  table: string | null,
+  row: FlatRow,
+  pres: RowPresentation,
+): void {
+  const id = pres.id ?? row.key;
+  addCartLine({
+    table: table || "Item",
+    id,
+    title: pres.title || `#${id}`,
+    price: pres.price ?? 0,
+    image: pres.coverUrl,
+  });
+}
+
+export function flashLayoutNote(text: string) {
+  document.getElementById("layout-toast")?.remove();
+  const toast = el("div", "layout-toast", text);
+  toast.id = "layout-toast";
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 1600);
+}
+
+export function shouldReplaceList(kind: LayoutKind): boolean {
+  return kind !== "data";
+}
+
+export function shouldHideDetailForm(kind: LayoutKind): boolean {
+  return isCartOrOrder(kind);
+}
