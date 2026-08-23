@@ -28,6 +28,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": "http://localhost:3000",
+      "/skills": "http://localhost:3000",
       // Use /apijson/ prefix (trailing slash) so /apijson-*.ts is never matched
       "/apijson/": apijsonViaNode(),
       "/apijson": {

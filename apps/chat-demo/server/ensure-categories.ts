@@ -29,7 +29,29 @@ const LAYOUT_TABLES = [
   "Activity",
   "Moment",
   "Message",
+  "Course",
+  "Book",
+  "Comic",
+  "Local",
+  "Recipe",
+  "Trip",
+  "Sport",
+  "Baby",
+  "Workout",
+  "Vehicle",
+  "Job",
+  "House",
+  "Beauty",
+  "Photo",
+  "Note",
 ] as const;
+
+const SCENE_PROBE = "Course";
+
+function scenesSqlPath(): string {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.join(here, "../sql/layout_demo_scenes.sql");
+}
 
 export type EnsureCategoriesResult = {
   ok: boolean;
@@ -154,7 +176,10 @@ function extractVerifyCode(body: unknown): string | null {
   return s || null;
 }
 
-async function reloadAccess(client: ApiJsonClient): Promise<boolean> {
+export async function reloadAccess(
+  client: ApiJsonClient,
+  type: "ACCESS" | "REQUEST" = "ACCESS",
+): Promise<boolean> {
   const phone = (
     process.env.APIJSON_ADMIN_LOGIN || "13000082001"
   ).replace(/\D/g, "") || "13000082001";
@@ -169,20 +194,33 @@ async function reloadAccess(client: ApiJsonClient): Promise<boolean> {
   if (!code) return false;
   const reloadRes = await client.execute(
     "post",
-    { type: "ACCESS", phone, verify: code },
+    { type, phone, verify: code },
     `${client.baseUrl}/reload`,
     { injectRole: false },
   );
   return reloadRes.ok && resultOk(reloadRes.body);
 }
 
-function runMysqlFile(file: string): Promise<void> {
-  const bin = mysqlBin();
-  const host = process.env.MYSQL_HOST || "127.0.0.1";
-  const port = process.env.MYSQL_PORT || "3306";
-  const user = process.env.MYSQL_USER || "root";
-  const password = process.env.MYSQL_PASSWORD ?? "apijson";
-  const database = process.env.MYSQL_DATABASE || schemaName();
+function mysqlArgs(): {
+  bin: string;
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  database: string;
+} {
+  return {
+    bin: mysqlBin(),
+    host: process.env.MYSQL_HOST || "127.0.0.1",
+    port: process.env.MYSQL_PORT || "3306",
+    user: process.env.MYSQL_USER || "root",
+    password: process.env.MYSQL_PASSWORD ?? "apijson",
+    database: process.env.MYSQL_DATABASE || schemaName(),
+  };
+}
+
+function runMysql(feed: (stdin: NodeJS.WritableStream) => void): Promise<void> {
+  const { bin, host, port, user, password, database } = mysqlArgs();
   return new Promise((resolve, reject) => {
     const child = spawn(
       bin,
@@ -220,10 +258,21 @@ function runMysqlFile(file: string): Promise<void> {
         ),
       );
     });
-    const fs = import("node:fs");
-    void fs.then(({ createReadStream }) => {
-      createReadStream(file).pipe(child.stdin);
+    feed(child.stdin);
+  });
+}
+
+export function runMysqlFile(file: string): Promise<void> {
+  return runMysql((stdin) => {
+    void import("node:fs").then(({ createReadStream }) => {
+      createReadStream(file).pipe(stdin);
     });
+  });
+}
+
+export function runMysqlSql(sql: string): Promise<void> {
+  return runMysql((stdin) => {
+    stdin.end(sql);
   });
 }
 
@@ -267,6 +316,25 @@ export async function ensureLayoutCategories(
     }
     reloaded = await reloadAccess(client);
   }
+  const scenesFile = scenesSqlPath();
+  const scenesReady = await tableExists(client, SCENE_PROBE);
+  if (!scenesReady && existsSync(scenesFile)) {
+    try {
+      await runMysqlFile(scenesFile);
+      created = true;
+      reloaded = (await reloadAccess(client)) || reloaded;
+    } catch (e) {
+      return {
+        ok: false,
+        table: SCENE_PROBE,
+        created,
+        reloaded,
+        comments: { tables: {}, columns: {}, types: {} },
+        error: e instanceof Error ? e.message : String(e),
+        sqlPath: scenesFile,
+      };
+    }
+  }
   clearSchemaCommentCache();
   const comments = await loadSchemaComments(client, [...LAYOUT_TABLES]);
   const okNow = await tableExists(client, CATEGORY_TABLE);
@@ -283,6 +351,76 @@ export async function ensureLayoutCategories(
           error:
             "Category table still missing after import. Run layout_demo_categories.sql and reload Access.",
         }),
+  };
+}
+
+async function pageAccessLive(client: ApiJsonClient): Promise<boolean> {
+  const res = await client.execute(
+    "get",
+    { "[]": { count: 1, Page: {} } },
+    undefined,
+    { injectRole: false },
+  );
+  if (res.ok && resultOk(res.body)) return true;
+  const body =
+    res.body && typeof res.body === "object"
+      ? (res.body as { code?: unknown; msg?: unknown })
+      : null;
+  const msg = String(body?.msg ?? "");
+  // UNKNOWN GET is refused only after Access.Page is loaded.
+  return body?.code === 401 && /Page/.test(msg);
+}
+
+export async function ensureLayoutPages(
+  client: ApiJsonClient,
+): Promise<EnsureCategoriesResult> {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const file = path.join(here, "../sql/layout_demo_pages.sql");
+  const table = "Page";
+  const exists = await tableExists(client, table);
+  const accessLive = exists ? await pageAccessLive(client) : false;
+  let created = false;
+  let reloaded = false;
+  if (!exists || !accessLive) {
+    if (!existsSync(file)) {
+      return {
+        ok: false,
+        table,
+        created: false,
+        reloaded: false,
+        comments: { tables: {}, columns: {}, types: {} },
+        error: `SQL file missing: ${file}`,
+        sqlPath: file,
+      };
+    }
+    try {
+      await runMysqlFile(file);
+      created = true;
+    } catch (e) {
+      return {
+        ok: false,
+        table,
+        created: false,
+        reloaded: false,
+        comments: { tables: {}, columns: {}, types: {} },
+        error: e instanceof Error ? e.message : String(e),
+        sqlPath: file,
+      };
+    }
+    reloaded = await reloadAccess(client);
+    reloaded = (await reloadAccess(client, "REQUEST")) || reloaded;
+  }
+  clearSchemaCommentCache();
+  const comments = await loadSchemaComments(client, [table]);
+  const okNow = await tableExists(client, table);
+  return {
+    ok: okNow,
+    table,
+    created,
+    reloaded,
+    comments,
+    sqlPath: file,
+    ...(okNow ? {} : { error: "Page table still missing after import." }),
   };
 }
 

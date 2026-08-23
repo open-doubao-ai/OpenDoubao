@@ -1,6 +1,12 @@
 import { SCHEMA_DICT } from "./schema-dict.js";
 import { planFromIntent, type BootstrapPlan } from "./intent.js";
 import { resolveLlmConfig, type LlmConfig } from "./llm-config.js";
+import {
+  planFromLayoutMessage,
+  planFromLayoutNav,
+  type PageChatContext,
+} from "./chat-mode.js";
+import { matchSkills, peekSkills, skillsPromptBlock } from "./skills.js";
 
 /**
  * Optional OpenAI-compatible refinement. Falls back to deterministic intent planner.
@@ -23,11 +29,16 @@ const RULES_LOCKED_KINDS = new Set<BootstrapPlan["kind"]>([
 export async function bootstrapFromMessage(
   message: string,
   llmOverride?: LlmConfig | null,
+  pageContext?: PageChatContext | null,
 ): Promise<{ plan: BootstrapPlan; source: "rules" | "llm" }> {
-  const rulesPlan = planFromIntent(message);
+  const layoutPlan =
+    pageContext?.generatePage ? planFromLayoutNav(pageContext) : null;
+  const rulesPlan =
+    layoutPlan ?? planFromLayoutMessage(message) ?? planFromIntent(message);
   const { apiKey, baseUrl, model, language } = resolveLlmConfig(llmOverride);
+  const layoutNav = Boolean(pageContext?.generatePage && layoutPlan);
 
-  if (!apiKey || RULES_LOCKED_KINDS.has(rulesPlan.kind)) {
+  if (!apiKey || (!layoutNav && RULES_LOCKED_KINDS.has(rulesPlan.kind))) {
     return { plan: rulesPlan, source: "rules" };
   }
 
@@ -47,9 +58,22 @@ export async function bootstrapFromMessage(
             role: "system",
             content: `You generate APIJSON proposeRequest bodies for A2API.
 Reply language preference: ${language}.
-${SCHEMA_DICT}
+${SCHEMA_DICT}${skillsPromptBlock(
+            matchSkills({
+              prompt: message,
+              table: pageContext?.table,
+              app: pageContext?.targetApp || pageContext?.app,
+            },
+            peekSkills(),
+            ),
+          )}
 Return JSON: { "method": "get|post|put|delete", "body": {...}, "title": "...", "bindingId": "optional for reads" }
-Only use APIJSON, never SQL.`,
+Only use APIJSON, never SQL.
+${
+  layoutNav
+    ? `Generate ONLY this one layout page (app=${pageContext?.targetApp || pageContext?.app} page=${pageContext?.targetPage || pageContext?.page}). Do not invent other pages. Keep bindingId "${rulesPlan.a2uiHint.surfaceId}". Never hardcode sample ids.`
+    : ""
+}`,
           },
           { role: "user", content: message },
         ],
@@ -79,8 +103,10 @@ Only use APIJSON, never SQL.`,
         ? "read"
         : "write";
     if (parsed.title) rulesPlan.title = parsed.title;
-    if (rulesPlan.bind && parsed.bindingId) {
-      rulesPlan.bind.bindingId = parsed.bindingId;
+    if (rulesPlan.bind) {
+      if (parsed.bindingId && !layoutNav) {
+        rulesPlan.bind.bindingId = parsed.bindingId;
+      }
       rulesPlan.bind.method = method;
       rulesPlan.bind.bodyTemplate = parsed.body;
     }

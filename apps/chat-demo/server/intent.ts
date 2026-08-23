@@ -177,19 +177,31 @@ function matchLayoutEntity(zh: string, text: string): LayoutEntity | null {
   return LAYOUT_ENTITIES.find((e) => e.about(hay, text)) ?? null;
 }
 
-function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
-  const table = entity.table;
+export function makeListPlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  count?: number;
+  order?: string;
+  keywordField?: string;
+  extra?: Record<string, unknown>;
+  kind?: BootstrapPlan["kind"];
+}): BootstrapPlan {
+  const table = opts.table;
+  const count = opts.count ?? 10;
+  const order = opts.order || "date-";
+  const keywordField = opts.keywordField || "title";
   const requestId = rid(`list_${table.toLowerCase()}`);
   const body = {
     "[]": {
       count,
       page: 0,
-      [table]: { "@order": "date-" },
+      [table]: { "@order": order, ...(opts.extra ?? {}) },
     },
   };
   return {
-    kind: "list_table",
-    title: entity.title,
+    kind: opts.kind ?? "list_table",
+    title: opts.title,
     viewMode: "list",
     propose: {
       requestId,
@@ -199,7 +211,7 @@ function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
       rationale: `List ${table}`,
     },
     bind: {
-      bindingId: `${table.toLowerCase()}_list`,
+      bindingId: opts.surfaceId,
       method: "get",
       url: `${DEFAULT_BASE}/get`,
       bodyTemplate: body,
@@ -207,13 +219,13 @@ function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
         { from: "/ui/page", to: "/[]/page" },
         { from: "/ui/count", to: "/[]/count" },
         { from: "/ui/order", to: `/[]/${table}/@order` },
-        { from: "/ui/keyword", to: `/[]/${table}/${entity.keywordField}$` },
+        { from: "/ui/keyword", to: `/[]/${table}/${keywordField}$` },
       ],
       resultPath: "/rows",
       triggerActions: ["search", "page_change", "sort_change"],
     },
     a2uiHint: {
-      surfaceId: `${table.toLowerCase()}_list`,
+      surfaceId: opts.surfaceId,
       filters: [
         { key: "keyword", label: "Keyword", type: "text" },
         { key: "count", label: "Page size", type: "number" },
@@ -222,31 +234,97 @@ function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
           key: "order",
           label: "Sort",
           type: "select",
-          options: ["date-", "date+", "id-", "id+"],
+          options: [order, "date-", "date+", "id-", "id+"].filter(
+            (v, i, a) => a.indexOf(v) === i,
+          ),
         },
       ],
     },
   };
 }
 
-function createTablePlan(entity: LayoutEntity): BootstrapPlan {
-  const table = entity.table;
-  const requestId = rid(`create_${table.toLowerCase()}`);
+export function makeCreatePlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  fields: Array<{ key: string; label: string; path: string }>;
+}): BootstrapPlan {
+  const requestId = rid(`create_${opts.table.toLowerCase()}`);
   return {
     kind: "create_table",
-    title: `Create ${table}`,
+    title: opts.title,
     viewMode: "detail",
     openCreate: true,
     propose: {
       requestId,
       method: "get",
-      body: { [table]: {} },
+      body: { [opts.table]: {} },
       risk: "read",
-      rationale: `Open empty ${table} create form`,
+      rationale: `Open empty ${opts.table} create form`,
     },
-    a2uiHint: { surfaceId: `${table.toLowerCase()}_create`, filters: [] },
-    writeForm: { fields: entity.createFields },
+    a2uiHint: { surfaceId: opts.surfaceId, filters: [] },
+    writeForm: { fields: opts.fields },
   };
+}
+
+export function makeDetailPlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  kind?: BootstrapPlan["kind"];
+}): BootstrapPlan {
+  return {
+    kind: opts.kind ?? (opts.table === "User" ? "get_user" : "unknown"),
+    title: opts.title,
+    viewMode: "detail",
+    propose: {
+      requestId: rid(`get_${opts.table.toLowerCase()}`),
+      method: "get",
+      body: { [opts.table]: {} },
+      risk: "read",
+      rationale: `Get ${opts.table} detail`,
+    },
+    a2uiHint: { surfaceId: opts.surfaceId, filters: [] },
+  };
+}
+
+export function makeUnknownPlan(): BootstrapPlan {
+  return {
+    kind: "unknown",
+    title: "Chat",
+    viewMode: "list",
+    propose: {
+      requestId: rid("chat"),
+      method: "get",
+      body: {},
+      risk: "read",
+      rationale: "No page to generate",
+    },
+    a2uiHint: { surfaceId: "chat", filters: [] },
+  };
+}
+
+export function isWritePlanKind(kind: BootstrapPlan["kind"]): boolean {
+  return kind === "update_comment" || kind === "delete_comment";
+}
+
+function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
+  return makeListPlan({
+    table: entity.table,
+    title: entity.title,
+    surfaceId: `${entity.table.toLowerCase()}_list`,
+    count,
+    keywordField: entity.keywordField,
+  });
+}
+
+function createTablePlan(entity: LayoutEntity): BootstrapPlan {
+  return makeCreatePlan({
+    table: entity.table,
+    title: `Create ${entity.table}`,
+    surfaceId: `${entity.table.toLowerCase()}_create`,
+    fields: entity.createFields,
+  });
 }
 
 /** Extract numeric id from Chinese or English entity phrases. */
@@ -639,7 +717,16 @@ export function planFromIntent(message: string): BootstrapPlan {
     return listTablePlan(layoutEntity, parseListCount(zh, text, 10));
   }
 
-  // Default: moment list (no User JOIN — OWNER already scopes to visitor)
+  const wantsMomentList =
+    aboutMoment ||
+    /动态列表|朋友圈|最近动态/.test(zh) ||
+    /\b(?:recent|latest)\s+moments?\b/.test(text) ||
+    /\blist\s+(?:the\s+)?(?:latest\s+|recent\s+)?moments?\b/.test(text);
+  if (!wantsMomentList) {
+    return makeUnknownPlan();
+  }
+
+  // Moment list (no User JOIN — OWNER already scopes to visitor)
   const requestId = rid("list_moments");
   const count = parseListCount(zh, text, 10);
   const body = {

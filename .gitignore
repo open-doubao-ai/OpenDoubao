@@ -16,6 +16,7 @@ dist-*/
 .a2api/
 coverage/
 apps/chat-demo/data/*.jsonl
+apps/chat-demo/data/skills/
 .idea
 /.idea
 */.idea

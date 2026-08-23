@@ -3,8 +3,16 @@
  * Used by YouTube watch / TikTok stage / Spotify bar.
  */
 
-import { t } from "./i18n/index.js";
-import { formatDuration } from "./page-layout.js";
+import { getUiLocale, t } from "./i18n/index.js";
+import {
+  formatDuration,
+  inferQualityFromUrl,
+  mediaSrc,
+  VIDEO_QUALITY_LADDER,
+  type MediaQuality,
+  type MediaSubtitle,
+  type VideoQualityLabel,
+} from "./page-layout.js";
 
 const SEEK_MAX = 1000;
 
@@ -32,6 +40,37 @@ function mediaDuration(media: HTMLMediaElement, hint?: number | null): number {
   if (Number.isFinite(d) && d > 0) return d;
   if (hint != null && Number.isFinite(hint) && hint > 0) return hint;
   return 0;
+}
+
+function captionSrc(url: string, apijsonBase: string): string {
+  const s = url.trim();
+  if (s.startsWith("/media/")) return s;
+  return mediaSrc(s, apijsonBase);
+}
+
+function stripCueHtml(text: string): string {
+  return text.replace(/<[^>]+>/g, "").replace(/\n+/g, "\n").trim();
+}
+
+function closeMenus(shell: HTMLElement) {
+  for (const node of shell.querySelectorAll(".mp-menu")) {
+    (node as HTMLElement).hidden = true;
+  }
+}
+
+function attachMenu(
+  shell: HTMLElement,
+  btn: HTMLButtonElement,
+  menu: HTMLElement,
+) {
+  menu.hidden = true;
+  btn.onclick = (ev) => {
+    ev.stopPropagation();
+    const open = menu.hidden;
+    closeMenus(shell);
+    menu.hidden = !open;
+  };
+  menu.addEventListener("click", (ev) => ev.stopPropagation());
 }
 
 /** Wire a range input to currentTime. Dragging seeks immediately and does not fight timeupdate. */
@@ -151,8 +190,14 @@ export function mountVideoChrome(opts: {
   variant: "youtube" | "tiktok";
   durationHint?: number | null;
   onNext?: () => void;
+  qualities?: MediaQuality[];
+  subtitles?: MediaSubtitle[];
+  apijsonBase?: string;
 }): void {
   const { shell, media, variant, durationHint, onNext } = opts;
+  const qualities = (opts.qualities ?? []).filter((q) => q.url);
+  const subtitles = opts.subtitles ?? [];
+  const apijsonBase = opts.apijsonBase ?? "";
   media.controls = false;
   media.removeAttribute("controls");
   media.playsInline = true;
@@ -160,12 +205,15 @@ export function mountVideoChrome(opts: {
   shell.classList.add("mp-shell", `mp-${variant}`);
   shell.tabIndex = 0;
   shell.classList.add("is-mp-active");
+  if (variant === "tiktok") shell.classList.add("is-mp-portrait");
 
   const hit = el("div", "mp-hit");
   const big = el("div", "mp-big", "▶");
   big.setAttribute("aria-hidden", "true");
   const empty = el("div", "mp-empty", t("layout.noMedia"));
   empty.hidden = !!media.currentSrc || !!media.getAttribute("src");
+  const cueEl = el("div", "mp-cue");
+  cueEl.hidden = true;
 
   const bar = el("div", variant === "tiktok" ? "mp-bar mp-bar-slim" : "mp-bar");
   const seek = document.createElement("input");
@@ -207,7 +255,240 @@ export function mountVideoChrome(opts: {
   const right = el("div", "mp-tools-right");
   right.append(muteBtn);
   if (variant === "youtube") right.append(vol);
-  right.append(fsBtn);
+
+  const uiLang = getUiLocale() === "zh-CN" ? "zh" : "en";
+  let subOn = subtitles.length > 0;
+  let subLang =
+    subtitles.find((s) => s.lang === uiLang)?.lang ??
+    subtitles.find((s) => s.lang.startsWith(uiLang))?.lang ??
+    subtitles[0]?.lang ??
+    "";
+  let qualityUrl = media.currentSrc || media.getAttribute("src") || qualities[0]?.url || "";
+  const blobUrls: string[] = [];
+
+  const paintCue = () => {
+    if (!subOn) {
+      cueEl.textContent = "";
+      cueEl.hidden = true;
+      return;
+    }
+    const track = [...media.textTracks].find((tr) => tr.mode === "hidden" || tr.mode === "showing");
+    const active = track?.activeCues?.[0] as VTTCue | undefined;
+    const text = active?.text ? stripCueHtml(active.text) : "";
+    cueEl.textContent = text;
+    cueEl.hidden = !text;
+  };
+
+  const clearTracks = () => {
+    for (const node of [...media.querySelectorAll("track")]) node.remove();
+    for (const url of blobUrls) URL.revokeObjectURL(url);
+    blobUrls.length = 0;
+    for (const tr of media.textTracks) tr.mode = "disabled";
+    cueEl.textContent = "";
+    cueEl.hidden = true;
+  };
+
+  const applySubtitles = () => {
+    clearTracks();
+    if (!subOn || !subLang) return;
+    const sub = subtitles.find((s) => s.lang === subLang) ?? subtitles[0];
+    if (!sub) return;
+    const track = document.createElement("track");
+    track.kind = "subtitles";
+    track.label = sub.label;
+    track.srclang = sub.lang;
+    track.default = true;
+    if (sub.vtt) {
+      const url = URL.createObjectURL(new Blob([sub.vtt], { type: "text/vtt" }));
+      blobUrls.push(url);
+      track.src = url;
+    } else if (sub.url) {
+      track.src = captionSrc(sub.url, apijsonBase);
+    } else {
+      return;
+    }
+    media.appendChild(track);
+    const ready = () => {
+      if (track.track) {
+        track.track.mode = "hidden";
+        track.track.addEventListener("cuechange", paintCue);
+      }
+      paintCue();
+    };
+    track.addEventListener("load", ready);
+    window.setTimeout(ready, 80);
+  };
+
+  const ccBtn = subtitles.length
+    ? iconBtn(
+        "mp-btn mp-btn-text",
+        t("layout.subtitles"),
+        subOn ? "CC" : "CC̸",
+      )
+    : null;
+  const ccMenu = el("div", "mp-menu");
+  if (ccBtn) {
+    const off = el("button", "mp-menu-item", t("layout.subtitlesOff"));
+    off.type = "button";
+    off.onclick = () => {
+      subOn = false;
+      applySubtitles();
+      setCcUi();
+      ccMenu.hidden = true;
+    };
+    ccMenu.appendChild(off);
+    for (const sub of subtitles) {
+      const item = el("button", "mp-menu-item", sub.label);
+      item.type = "button";
+      item.onclick = () => {
+        subOn = true;
+        subLang = sub.lang;
+        applySubtitles();
+        setCcUi();
+        ccMenu.hidden = true;
+      };
+      ccMenu.appendChild(item);
+    }
+    const other = subtitles.find((s) => s.lang !== subLang);
+    if (other) {
+      const tr = el("button", "mp-menu-item", t("layout.translateSubtitles"));
+      tr.type = "button";
+      tr.onclick = () => {
+        const cur = subtitles.find((s) => s.lang === subLang);
+        const next =
+          subtitles.find((s) => s.lang !== (cur?.lang ?? subLang)) ?? other;
+        subOn = true;
+        subLang = next.lang;
+        applySubtitles();
+        setCcUi();
+        ccMenu.hidden = true;
+      };
+      ccMenu.appendChild(tr);
+    }
+    attachMenu(shell, ccBtn, ccMenu);
+    right.append(ccBtn, ccMenu);
+  }
+
+  const setCcUi = () => {
+    if (!ccBtn) return;
+    ccBtn.textContent = subOn ? "CC" : "CC̸";
+    ccBtn.classList.toggle("is-on", subOn);
+    const label = subOn
+      ? `${t("layout.subtitles")}: ${
+          subtitles.find((s) => s.lang === subLang)?.label ?? subLang
+        }`
+      : t("layout.subtitlesOff");
+    ccBtn.title = label;
+    ccBtn.setAttribute("aria-label", label);
+    for (const node of ccMenu.querySelectorAll(".mp-menu-item")) {
+      const btn = node as HTMLButtonElement;
+      btn.classList.toggle(
+        "is-current",
+        subOn
+          ? btn.textContent ===
+              (subtitles.find((s) => s.lang === subLang)?.label ?? "")
+          : btn.textContent === t("layout.subtitlesOff"),
+      );
+    }
+  };
+
+  const qualityByLabel = new Map<VideoQualityLabel, string>();
+  for (const q of qualities) {
+    const label = (VIDEO_QUALITY_LADDER as readonly string[]).includes(q.label)
+      ? (q.label as VideoQualityLabel)
+      : inferQualityFromUrl(q.url);
+    if (label && q.url) qualityByLabel.set(label, q.url);
+  }
+  const fallbackSrc =
+    qualityUrl || media.currentSrc || media.getAttribute("src") || "";
+  if (!qualityByLabel.size && fallbackSrc) {
+    qualityByLabel.set(inferQualityFromUrl(fallbackSrc) ?? "480P", fallbackSrc);
+  }
+  const currentQualityLabel = (): VideoQualityLabel => {
+    for (const label of VIDEO_QUALITY_LADDER) {
+      const url = qualityByLabel.get(label);
+      if (url && (url === qualityUrl || mediaSrc(url, apijsonBase) === qualityUrl)) {
+        return label;
+      }
+    }
+    return (
+      inferQualityFromUrl(qualityUrl) ??
+      VIDEO_QUALITY_LADDER.find((label) => qualityByLabel.has(label)) ??
+      "480P"
+    );
+  };
+  const qBtn = iconBtn(
+    "mp-btn mp-btn-text",
+    t("layout.quality"),
+    currentQualityLabel(),
+  );
+  const qMenu = el("div", "mp-menu");
+  const paintQualityMenu = () => {
+    const cur = currentQualityLabel();
+    qBtn.textContent = cur;
+    for (const node of qMenu.querySelectorAll(".mp-menu-item")) {
+      const btn = node as HTMLButtonElement;
+      btn.classList.toggle("is-current", btn.dataset.quality === cur);
+    }
+  };
+  for (const label of VIDEO_QUALITY_LADDER) {
+    const url = qualityByLabel.get(label) ?? null;
+    const item = el("button", "mp-menu-item", label);
+    item.type = "button";
+    item.dataset.quality = label;
+    if (!url) {
+      item.disabled = true;
+      item.classList.add("is-off");
+      item.title = t("layout.qualityUnavailable");
+    } else {
+      item.onclick = () => {
+        if (url === qualityUrl) {
+          qMenu.hidden = true;
+          return;
+        }
+        const t0 = media.currentTime || 0;
+        const playing = !media.paused;
+        qualityUrl = url;
+        media.src = mediaSrc(url, apijsonBase);
+        const restore = () => {
+          try {
+            media.currentTime = t0;
+          } catch {
+            /* ignore */
+          }
+          applySubtitles();
+          if (playing) void media.play().catch(() => undefined);
+        };
+        media.addEventListener("loadedmetadata", restore, { once: true });
+        paintQualityMenu();
+        qMenu.hidden = true;
+      };
+    }
+    qMenu.appendChild(item);
+  }
+  attachMenu(shell, qBtn, qMenu);
+  right.append(qBtn, qMenu);
+  paintQualityMenu();
+
+  const orientBtn = iconBtn(
+    "mp-btn mp-btn-text",
+    t("layout.orientation"),
+    variant === "tiktok" ? t("layout.landscape") : t("layout.portrait"),
+  );
+  const setOrientUi = () => {
+    const portrait = shell.classList.contains("is-mp-portrait");
+    orientBtn.textContent = portrait ? t("layout.landscape") : t("layout.portrait");
+    orientBtn.title = t("layout.orientation");
+    orientBtn.setAttribute("aria-label", t("layout.orientation"));
+    shell.classList.toggle("is-mp-landscape", !portrait);
+  };
+  orientBtn.onclick = (ev) => {
+    ev.stopPropagation();
+    shell.classList.toggle("is-mp-portrait");
+    setOrientUi();
+  };
+
+  right.append(orientBtn, fsBtn);
   tools.append(right);
   bar.append(seekRow, tools);
 
@@ -273,6 +554,7 @@ export function mountVideoChrome(opts: {
 
   let clickTimer = 0;
   hit.addEventListener("click", () => {
+    closeMenus(shell);
     if (clickTimer) window.clearTimeout(clickTimer);
     clickTimer = window.setTimeout(() => {
       clickTimer = 0;
@@ -299,6 +581,8 @@ export function mountVideoChrome(opts: {
     empty.textContent = t("layout.mediaError");
     setPlayingUi(false);
   });
+  media.addEventListener("cuechange", paintCue);
+  media.textTracks.addEventListener("change", paintCue);
   document.addEventListener("fullscreenchange", setFsUi);
 
   bindSeekBar({ media, seek, currentEl: timeCur, totalEl: timeTot, durationHint });
@@ -309,6 +593,7 @@ export function mountVideoChrome(opts: {
     if (hideTimer) window.clearTimeout(hideTimer);
     if (!media.paused) {
       hideTimer = window.setTimeout(() => {
+        if (shell.querySelector(".mp-menu:not([hidden])")) return;
         shell.classList.remove("is-mp-active");
       }, 2400);
     }
@@ -338,6 +623,31 @@ export function mountVideoChrome(opts: {
     if (key === "m" || key === "M") {
       ev.preventDefault();
       muteBtn.click();
+      return;
+    }
+    if (key === "c" || key === "C") {
+      ev.preventDefault();
+      if (subtitles.length) {
+        subOn = !subOn;
+        applySubtitles();
+        setCcUi();
+      }
+      return;
+    }
+    if (key === "t" || key === "T") {
+      ev.preventDefault();
+      const next = subtitles.find((s) => s.lang !== subLang);
+      if (next) {
+        subOn = true;
+        subLang = next.lang;
+        applySubtitles();
+        setCcUi();
+      }
+      return;
+    }
+    if (key === "r" || key === "R") {
+      ev.preventDefault();
+      orientBtn.click();
       return;
     }
     if (key === "f" || key === "F") {
@@ -375,9 +685,26 @@ export function mountVideoChrome(opts: {
     }
   });
 
-  shell.append(hit, big, empty, bar);
+  const onDocClick = (ev: MouseEvent) => {
+    if (!shell.contains(ev.target as Node)) closeMenus(shell);
+  };
+  document.addEventListener("click", onDocClick);
+  const obs = new MutationObserver(() => {
+    if (document.body.contains(shell)) return;
+    document.removeEventListener("click", onDocClick);
+    document.removeEventListener("fullscreenchange", setFsUi);
+    clearTracks();
+    obs.disconnect();
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  shell.append(hit, big, empty, cueEl, bar);
   setPlayingUi(!media.paused);
   setMuteUi();
   setFsUi();
+  setOrientUi();
+  setCcUi();
+  applySubtitles();
+  media.addEventListener("timeupdate", paintCue);
   bumpChrome();
 }

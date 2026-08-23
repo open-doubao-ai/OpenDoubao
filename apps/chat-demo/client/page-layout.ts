@@ -13,7 +13,7 @@ import {
 } from "./smart-image-fields.js";
 import type { SchemaComments } from "./schema-types.js";
 
-/** Parent: product family (电商 / 视频 / …). */
+/** Parent: product family (电商购物 / 视频影像 / …). */
 export type LayoutApp =
   | "data"
   | "campaign"
@@ -25,7 +25,22 @@ export type LayoutApp =
   | "article"
   | "video"
   | "music"
-  | "commerce";
+  | "commerce"
+  | "education"
+  | "books"
+  | "comics"
+  | "lifestyle"
+  | "food"
+  | "travel"
+  | "sports"
+  | "parenting"
+  | "health"
+  | "auto"
+  | "jobs"
+  | "housing"
+  | "beauty"
+  | "photo"
+  | "office";
 
 /** Child: concrete page (首页 / 搜索 / 用户列表 / 排行 / …). */
 export type LayoutPage =
@@ -59,6 +74,7 @@ export type LayoutPage =
   | "blacklist"
   | "about"
   | "upgrade"
+  | "skills"
   | "scan";
 
 export type LayoutSpec = { app: LayoutApp; page: LayoutPage };
@@ -69,6 +85,16 @@ export type LayoutKind =
   | "cart"
   | "order";
 
+/**
+ * Parent scene (4-char zh) → item table. Child rows live in Category.app.
+ * 数据管理 Employee · 电商购物 Product · 视频影像 Video · 音乐歌曲 Music
+ * 新闻资讯 News · 资讯公告 Notice · 博客日志 Blog · 文章专栏 Article
+ * 图书阅读 Book · 漫画阅读 Comic · 社交动态 Moment · 即时通讯 Message
+ * 运营活动 Activity · 教育学习 Course · 办公效率 Note · 本地生活 Local
+ * 餐饮美食 Recipe · 旅游出行 Trip · 体育资讯 Sport · 母婴育儿 Baby
+ * 健康运动 Workout · 汽车服务 Vehicle · 招聘求职 Job · 房产家居 House
+ * 美业预约 Beauty · 摄影相册 Photo
+ */
 export const LAYOUT_APPS: readonly LayoutApp[] = [
   "data",
   "commerce",
@@ -78,9 +104,24 @@ export const LAYOUT_APPS: readonly LayoutApp[] = [
   "info",
   "blog",
   "article",
+  "books",
+  "comics",
   "social",
   "chat",
   "campaign",
+  "education",
+  "office",
+  "lifestyle",
+  "food",
+  "travel",
+  "sports",
+  "parenting",
+  "health",
+  "auto",
+  "jobs",
+  "housing",
+  "beauty",
+  "photo",
 ] as const;
 
 const ACCOUNT_PAGES = [
@@ -94,12 +135,82 @@ const ACCOUNT_PAGES = [
   "help",
   "blacklist",
   "about",
+  "skills",
 ] as const satisfies readonly LayoutPage[];
 
 const APP_ACCOUNT_PAGES = [
   ...ACCOUNT_PAGES,
   "upgrade",
 ] as const satisfies readonly LayoutPage[];
+
+const CONTENT_PAGES = [
+  "home",
+  "search",
+  "scan",
+  "history",
+  "rank",
+  "category",
+  "recommend",
+  "list",
+  "detail",
+  "create",
+  "users",
+  "user",
+  ...APP_ACCOUNT_PAGES,
+] as const satisfies readonly LayoutPage[];
+
+const CONTENT_TABS = [
+  "home",
+  "category",
+  "rank",
+  "user",
+] as const satisfies readonly LayoutPage[];
+
+/** News / notices / sports — portal + article. */
+export function isNewsLikeApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return app === "news" || app === "info" || app === "sports";
+}
+
+/** Long-form reading. */
+export function isArticleLikeApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return (
+    app === "blog" ||
+    app === "article" ||
+    app === "education" ||
+    app === "books" ||
+    app === "comics" ||
+    app === "office"
+  );
+}
+
+/** Cover + body cards (local services, campaigns). */
+export function isLocalLikeApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return (
+    app === "campaign" ||
+    app === "lifestyle" ||
+    app === "food" ||
+    app === "travel" ||
+    app === "parenting" ||
+    app === "health" ||
+    app === "auto" ||
+    app === "jobs" ||
+    app === "housing" ||
+    app === "beauty" ||
+    app === "photo"
+  );
+}
+
+export function isCatalogApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return isNewsLikeApp(app) || isArticleLikeApp(app) || isLocalLikeApp(app);
+}
 
 export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
   data: ["list", "detail", "create", "search", "users", "user", ...ACCOUNT_PAGES, "scan"],
@@ -242,21 +353,22 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "detail",
     ...APP_ACCOUNT_PAGES,
   ],
-  campaign: [
-    "home",
-    "search",
-    "scan",
-    "history",
-    "rank",
-    "category",
-    "recommend",
-    "list",
-    "detail",
-    "create",
-    "users",
-    "user",
-    ...APP_ACCOUNT_PAGES,
-  ],
+  campaign: CONTENT_PAGES,
+  education: CONTENT_PAGES,
+  books: CONTENT_PAGES,
+  comics: CONTENT_PAGES,
+  lifestyle: CONTENT_PAGES,
+  food: CONTENT_PAGES,
+  travel: CONTENT_PAGES,
+  sports: CONTENT_PAGES,
+  parenting: CONTENT_PAGES,
+  health: CONTENT_PAGES,
+  auto: CONTENT_PAGES,
+  jobs: CONTENT_PAGES,
+  housing: CONTENT_PAGES,
+  beauty: CONTENT_PAGES,
+  photo: CONTENT_PAGES,
+  office: CONTENT_PAGES,
 };
 
 export const LAYOUT_KINDS: readonly LayoutKind[] = [
@@ -277,6 +389,21 @@ const APP_I18N: Record<LayoutApp, `layout.${LayoutApp}`> = {
   video: "layout.video",
   music: "layout.music",
   commerce: "layout.commerce",
+  education: "layout.education",
+  books: "layout.books",
+  comics: "layout.comics",
+  lifestyle: "layout.lifestyle",
+  food: "layout.food",
+  travel: "layout.travel",
+  sports: "layout.sports",
+  parenting: "layout.parenting",
+  health: "layout.health",
+  auto: "layout.auto",
+  jobs: "layout.jobs",
+  housing: "layout.housing",
+  beauty: "layout.beauty",
+  photo: "layout.photo",
+  office: "layout.office",
 };
 
 const PAGE_I18N: Record<LayoutPage, `layout.page.${LayoutPage}`> = {
@@ -310,11 +437,52 @@ const PAGE_I18N: Record<LayoutPage, `layout.page.${LayoutPage}`> = {
   blacklist: "layout.page.blacklist",
   about: "layout.page.about",
   upgrade: "layout.page.upgrade",
+  skills: "layout.page.skills",
   scan: "layout.page.scan",
 };
 
 export function isLayoutApp(v: unknown): v is LayoutApp {
   return typeof v === "string" && (LAYOUT_APPS as readonly string[]).includes(v);
+}
+
+/** DB Skill row used to overlay inference (query / upload, no code change). */
+export type SkillHint = {
+  name: string;
+  title?: string | null;
+  titleEn?: string | null;
+  tableName?: string | null;
+  family?: string | null;
+  tokens?: string[];
+  description?: string | null;
+  /** File URL for the SKILL.md body (`/skills/education.md`). */
+  url?: string | null;
+};
+
+let skillHints: SkillHint[] = [];
+
+export function setSkillHints(rows: SkillHint[]) {
+  skillHints = Array.isArray(rows) ? rows : [];
+}
+
+export function getSkillHints(): SkillHint[] {
+  return skillHints;
+}
+
+export function familyToLayoutApp(
+  family: string | null | undefined,
+): LayoutApp {
+  const f = (family || "").trim().toLowerCase();
+  if (isLayoutApp(f)) return f;
+  if (f === "media") return "video";
+  if (f === "local" || f === "catalog") return "lifestyle";
+  if (f === "read" || f === "article") return "article";
+  if (f === "news") return "news";
+  return "data";
+}
+
+export function layoutAppFromSkill(skill: SkillHint): LayoutApp {
+  if (isLayoutApp(skill.name)) return skill.name;
+  return familyToLayoutApp(skill.family);
 }
 
 export function isLayoutPage(v: unknown): v is LayoutPage {
@@ -349,6 +517,21 @@ const USERS_LIST_I18N: Partial<Record<LayoutApp, `layout.users.list.${LayoutApp}
   chat: "layout.users.list.chat",
   campaign: "layout.users.list.campaign",
   data: "layout.users.list.data",
+  education: "layout.users.list.education",
+  books: "layout.users.list.books",
+  comics: "layout.users.list.comics",
+  lifestyle: "layout.users.list.lifestyle",
+  food: "layout.users.list.food",
+  travel: "layout.users.list.travel",
+  sports: "layout.users.list.sports",
+  parenting: "layout.users.list.parenting",
+  health: "layout.users.list.health",
+  auto: "layout.users.list.auto",
+  jobs: "layout.users.list.jobs",
+  housing: "layout.users.list.housing",
+  beauty: "layout.users.list.beauty",
+  photo: "layout.users.list.photo",
+  office: "layout.users.list.office",
 };
 
 const USER_DETAIL_I18N: Partial<Record<LayoutApp, `layout.users.detail.${LayoutApp}`>> = {
@@ -363,6 +546,21 @@ const USER_DETAIL_I18N: Partial<Record<LayoutApp, `layout.users.detail.${LayoutA
   chat: "layout.users.detail.chat",
   campaign: "layout.users.detail.campaign",
   data: "layout.users.detail.data",
+  education: "layout.users.detail.education",
+  books: "layout.users.detail.books",
+  comics: "layout.users.detail.comics",
+  lifestyle: "layout.users.detail.lifestyle",
+  food: "layout.users.detail.food",
+  travel: "layout.users.detail.travel",
+  sports: "layout.users.detail.sports",
+  parenting: "layout.users.detail.parenting",
+  health: "layout.users.detail.health",
+  auto: "layout.users.detail.auto",
+  jobs: "layout.users.detail.jobs",
+  housing: "layout.users.detail.housing",
+  beauty: "layout.users.detail.beauty",
+  photo: "layout.users.detail.photo",
+  office: "layout.users.detail.office",
 };
 
 export function layoutUserDetailLabel(app?: LayoutApp): string {
@@ -424,6 +622,21 @@ export const APP_TABS_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
   social: ["list", "users", "feed", "user"],
   chat: ["list", "users", "feed", "user"],
   campaign: ["home", "category", "list", "rank", "user"],
+  education: CONTENT_TABS,
+  books: CONTENT_TABS,
+  comics: CONTENT_TABS,
+  lifestyle: CONTENT_TABS,
+  food: CONTENT_TABS,
+  travel: CONTENT_TABS,
+  sports: CONTENT_TABS,
+  parenting: CONTENT_TABS,
+  health: CONTENT_TABS,
+  auto: CONTENT_TABS,
+  jobs: CONTENT_TABS,
+  housing: CONTENT_TABS,
+  beauty: CONTENT_TABS,
+  photo: CONTENT_TABS,
+  office: CONTENT_TABS,
 };
 
 export function shouldShowAppTabs(
@@ -612,6 +825,7 @@ const DATA_TABLES = new Set(
     "function",
     "response",
     "script",
+    "skill",
   ].map((s) => s.toLowerCase()),
 );
 
@@ -705,9 +919,57 @@ function scoreTableName(table: string, scores: KindScore) {
   if (has("comment", "comments", "评论")) add(scores, "social", 22);
   if (has("news", "headline", "新闻")) add(scores, "news", 34);
   if (has("blog", "博客")) add(scores, "blog", 34);
-  if (has("article", "essay", "story", "文章")) add(scores, "article", 32);
-  if (has("info", "information", "notice", "announcement", "资讯", "公告", "通知")) {
+  if (has("article", "essay", "文章")) add(scores, "article", 32);
+  if (has("info", "information", "notice", "announcement", "资讯公告", "公告", "通知")) {
     add(scores, "info", 30);
+  }
+  if (has("course", "lesson", "curriculum", "课程", "教育学习", "网课")) {
+    add(scores, "education", 36);
+  }
+  if (has("book", "ebook", "textbook", "图书", "图书阅读", "电子书")) {
+    add(scores, "books", 36);
+  }
+  if (has("comic", "manga", "manhua", "漫画", "漫画阅读")) {
+    add(scores, "comics", 36);
+  }
+  if (has("local", "localservice", "errand", "本地生活", "到家", "到店")) {
+    add(scores, "lifestyle", 34);
+  }
+  if (has("recipe", "dish", "cuisine", "catering", "菜谱", "餐饮美食", "美食")) {
+    add(scores, "food", 36);
+  }
+  if (has("trip", "hotel", "itinerary", "旅游", "旅游出行", "行程", "民宿")) {
+    add(scores, "travel", 36);
+  }
+  if (has("sport", "match", "league", "fixture", "体育", "体育资讯", "赛事")) {
+    add(scores, "sports", 36);
+  }
+  if (has("baby", "parenting", "infant", "母婴", "母婴育儿", "育儿")) {
+    add(scores, "parenting", 36);
+  }
+  if (has("workout", "fitness", "yoga", "健康运动", "健身", "运动打卡")) {
+    add(scores, "health", 36);
+  }
+  if (has("vehicle", "carinfo", "garage", "汽车", "汽车服务", "车型")) {
+    add(scores, "auto", 36);
+  }
+  if (has("job", "recruit", "vacancy", "招聘", "招聘求职", "职位")) {
+    add(scores, "jobs", 36);
+  }
+  if (has("house", "estate", "apartment", "房产", "房产家居", "房源")) {
+    add(scores, "housing", 36);
+  }
+  if (has("beauty", "salon", "spa", "美业", "美业预约", "美发")) {
+    add(scores, "beauty", 36);
+  }
+  if (has("photo", "gallery", "album", "摄影", "摄影相册", "相册")) {
+    add(scores, "photo", 34);
+  }
+  if (
+    tokens.includes("note") ||
+    has("notebook", "todolist", "办公效率", "待办", "笔记")
+  ) {
+    add(scores, "office", 36);
   }
   if (
     has(
@@ -725,6 +987,18 @@ function scoreTableName(table: string, scores: KindScore) {
     add(scores, "campaign", 32);
   }
   if (DATA_TABLES.has(normToken(table))) add(scores, "data", 28);
+  for (const skill of skillHints) {
+    const toks = [
+      skill.name,
+      skill.title,
+      skill.titleEn,
+      skill.tableName,
+      ...(skill.tokens ?? []),
+    ].filter((x): x is string => Boolean(x && String(x).trim()));
+    if (toks.length && has(...toks)) {
+      add(scores, layoutAppFromSkill(skill), 38);
+    }
+  }
 }
 
 function scoreFieldsAndComments(hay: string, scores: KindScore) {
@@ -747,8 +1021,23 @@ function scoreFieldsAndComments(hay: string, scores: KindScore) {
   hit(/\b(headline|newstime|source)\b|新闻|头条/, "news", 8);
   hit(/\b(blog|blogtitle)\b|博客/, "blog", 8);
   hit(/\b(article|bodyhtml|markdown)\b|正文|文章/, "article", 8);
-  hit(/\b(notice|announcement|infotitle)\b|资讯|公告/, "info", 8);
+  hit(/\b(notice|announcement|infotitle)\b|资讯公告|公告/, "info", 8);
   hit(/\b(campaign|activity|starttime|endtime|promo)\b|活动|运营|促销/, "campaign", 8);
+  hit(/\b(course|lesson|curriculum)\b|课程|教育学习|网课/, "education", 10);
+  hit(/\b(ebook|textbook|isbn)\b|图书阅读|电子书/, "books", 10);
+  hit(/\b(comic|manga|manhua)\b|漫画阅读|漫画/, "comics", 10);
+  hit(/\b(localservice|errand)\b|本地生活|到家|到店/, "lifestyle", 10);
+  hit(/\b(recipe|cuisine|catering)\b|餐饮美食|菜谱|美食/, "food", 10);
+  hit(/\b(itinerary|hotel|destination)\b|旅游出行|行程|民宿/, "travel", 10);
+  hit(/\b(match|league|fixture|scoreboard)\b|体育资讯|赛事/, "sports", 10);
+  hit(/\b(parenting|infant|monthage)\b|母婴育儿|育儿/, "parenting", 10);
+  hit(/\b(workout|fitness|kcal)\b|健康运动|健身/, "health", 10);
+  hit(/\b(vehicle|garage|mileage)\b|汽车服务|车型/, "auto", 10);
+  hit(/\b(recruit|vacancy|salary)\b|招聘求职|职位/, "jobs", 10);
+  hit(/\b(estate|apartment|floorarea)\b|房产家居|房源/, "housing", 10);
+  hit(/\b(salon|spa|manicure)\b|美业预约|美发/, "beauty", 10);
+  hit(/\b(gallery|exif|shotat)\b|摄影相册|相册/, "photo", 10);
+  hit(/\b(notebook|todolist)\b|办公效率|待办|笔记/, "office", 10);
 }
 
 function pickWinner(scores: KindScore, table: string): LayoutKind {
@@ -807,28 +1096,17 @@ function inferPageFromPrompt(
   if (!hay) return null;
   const allowed = LAYOUT_PAGES_BY_APP[app];
   const pick = (page: LayoutPage) => (allowed.includes(page) ? page : null);
-  if (
-    hayHits(
-      hay,
-      ["detail", "editing", "player", "playback"],
-      ["详情", "明细", "编辑", "修改", "播放"],
-    )
-  ) {
-    return pick(app === "music" ? "player" : "detail");
-  }
-  if (
-    hayHits(
-      hay,
-      ["create", "compose", "publish", "newpost"],
-      ["新增", "新建", "创建", "发布", "发帖", "发动态"],
-    )
-  ) {
-    return pick("create");
-  }
+  // Explore tabs first — "playCount" / 播放次数 must not steal rank/history.
   if (hayHits(hay, ["search", "find"], ["搜索", "查找", "检索"])) {
     return pick("search");
   }
-  if (hayHits(hay, ["scan", "qrcode", "qr"], ["扫码", "扫一扫", "二维码"])) {
+  if (
+    hayHits(
+      hay,
+      ["scan", "qrcode", "qr", "localfile"],
+      ["扫码", "扫一扫", "二维码", "扫描本地", "本地文件"],
+    )
+  ) {
     return pick("scan");
   }
   if (
@@ -848,6 +1126,24 @@ function inferPageFromPrompt(
   }
   if (hayHits(hay, ["history", "recent"], ["历史", "足迹", "最近"])) {
     return pick("history");
+  }
+  if (
+    hayHits(
+      hay,
+      ["create", "compose", "publish", "newpost"],
+      ["新增", "新建", "创建", "发布", "发帖", "发动态"],
+    )
+  ) {
+    return pick("create");
+  }
+  if (
+    hayHits(
+      hay,
+      ["detail", "editing", "player", "playback"],
+      ["详情", "明细", "编辑", "修改", "播放页", "播放器", "观看页"],
+    )
+  ) {
+    return pick(app === "music" ? "player" : "detail");
   }
   if (hayHits(hay, ["cart", "shoppingcart"], ["购物车", "购物篮"])) {
     return pick("cart");
@@ -882,6 +1178,9 @@ function inferPageFromPrompt(
   }
   if (hayHits(hay, ["settings", "preferences"], ["设置", "设定"])) {
     return pick("settings");
+  }
+  if (hayHits(hay, ["skills", "skill"], ["场景技能", "技能库"])) {
+    return pick("skills");
   }
   if (hayHits(hay, ["wallet", "balance"], ["钱包", "余额"])) {
     return pick("wallet");
@@ -1012,7 +1311,8 @@ export function isSettingsPage(page: LayoutPage | null | undefined): boolean {
     page === "help" ||
     page === "blacklist" ||
     page === "about" ||
-    page === "upgrade"
+    page === "upgrade" ||
+    page === "skills"
   );
 }
 
@@ -1029,6 +1329,11 @@ export function isExploreLayoutPage(page: LayoutPage | null | undefined): boolea
     page === "recommend" ||
     page === "scan"
   );
+}
+
+/** Explore lists (分类 / 排行 / 历史…) — never a player or record form. */
+export function isExploreListPage(page: LayoutPage | null | undefined): boolean {
+  return isExploreLayoutPage(page) && page !== "scan";
 }
 
 const TITLE_COLS = [
@@ -1239,6 +1544,9 @@ const HEADLINE_COLS = ["headline", "lead", "subtitle", "digest"];
 const SHARE_COLS = ["sharecount", "shares"];
 const PRAISE_LIST_COLS = ["praiseuseridlist", "likeuseridlist", "likedby"];
 const COLLECT_LIST_COLS = ["collectuseridlist", "favoriteuseridlist", "staruseridlist"];
+const LYRIC_COLS = ["lyrics", "lyric", "lrc", "lyrictext"];
+const QUALITY_COLS = ["qualitylist", "qualities", "qualityurls"];
+const SUBTITLE_COLS = ["subtitlelist", "subtitles", "captions", "captionlist"];
 
 function pickRaw(
   cells: Record<string, unknown>,
@@ -1273,6 +1581,59 @@ function parseIdListValue(raw: unknown): Array<string | number> {
     }
   }
   return [];
+}
+
+function parseJsonArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const v = JSON.parse(s);
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function parseMediaQualities(raw: unknown): MediaQuality[] {
+  const byLabel = new Map<VideoQualityLabel, string>();
+  for (const item of parseJsonArray(raw)) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as { label?: unknown; url?: unknown; src?: unknown };
+    const url = String(rec.url ?? rec.src ?? "").trim();
+    if (!url) continue;
+    const label = normalizeQualityLabel(String(rec.label ?? ""), url);
+    if (!label) continue;
+    byLabel.set(label, url);
+  }
+  return VIDEO_QUALITY_LADDER.filter((label) => byLabel.has(label)).map(
+    (label) => ({ label, url: byLabel.get(label)! }),
+  );
+}
+
+export function parseMediaSubtitles(raw: unknown): MediaSubtitle[] {
+  const out: MediaSubtitle[] = [];
+  for (const item of parseJsonArray(raw)) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as {
+      lang?: unknown;
+      language?: unknown;
+      label?: unknown;
+      url?: unknown;
+      src?: unknown;
+      vtt?: unknown;
+    };
+    const url = String(rec.url ?? rec.src ?? "").trim();
+    const vtt = String(rec.vtt ?? "").trim();
+    if (!url && !vtt) continue;
+    const lang = String(rec.lang ?? rec.language ?? "und").trim() || "und";
+    const label = String(rec.label ?? lang).trim() || lang;
+    out.push({ lang, label, url: url || undefined, vtt: vtt || undefined });
+  }
+  return out;
 }
 
 const AUTHOR_ID_COLS = [
@@ -1310,6 +1671,56 @@ function pickAuthorId(
   return best?.value ?? null;
 }
 
+export type MediaQuality = { label: string; url: string };
+export type MediaSubtitle = { lang: string; label: string; url?: string; vtt?: string };
+
+/** Player quality rungs — resolution only, never container names like MP4/WebM. */
+export const VIDEO_QUALITY_LADDER = ["480P", "720P", "1080P", "2K", "4K"] as const;
+export type VideoQualityLabel = (typeof VIDEO_QUALITY_LADDER)[number];
+
+const QUALITY_ALIAS: Record<string, VideoQualityLabel> = {
+  "320p": "480P",
+  "360p": "480P",
+  "480p": "480P",
+  "480": "480P",
+  "720p": "720P",
+  "720": "720P",
+  "1080p": "1080P",
+  "1080": "1080P",
+  "1440p": "2K",
+  "1440": "2K",
+  "2560": "2K",
+  "2k": "2K",
+  "2160p": "4K",
+  "2160": "4K",
+  "3840": "4K",
+  "4k": "4K",
+  uhd: "4K",
+};
+
+export function normalizeQualityLabel(
+  label: string,
+  url = "",
+): VideoQualityLabel | null {
+  const key = label.trim().toLowerCase().replace(/\s+/g, "");
+  if (QUALITY_ALIAS[key]) return QUALITY_ALIAS[key];
+  if (/^(mp4|webm|mkv|mov|源|source|auto|原画)$/.test(key)) {
+    return inferQualityFromUrl(url);
+  }
+  return inferQualityFromUrl(url);
+}
+
+export function inferQualityFromUrl(url: string): VideoQualityLabel | null {
+  const u = url.toLowerCase();
+  if (/2160|3840|4k|uhd/.test(u)) return "4K";
+  if (/1440|2560|2k/.test(u)) return "2K";
+  if (/1080/.test(u)) return "1080P";
+  if (/720/.test(u)) return "720P";
+  if (/480/.test(u)) return "480P";
+  if (/360|320/.test(u)) return "480P";
+  return url.trim() ? "480P" : null;
+}
+
 export type RowPresentation = {
   title: string;
   subtitle: string;
@@ -1331,6 +1742,9 @@ export type RowPresentation = {
   coverUrl: string | null;
   videoUrl: string | null;
   audioUrl: string | null;
+  lyrics: string;
+  qualities: MediaQuality[];
+  subtitles: MediaSubtitle[];
   id: string | number | null;
   authorId: string | number | null;
   praiseIds: Array<string | number>;
@@ -1396,6 +1810,17 @@ export function pickRowPresentation(
     ),
     videoUrl: pickMediaUrl(cells, columns, "video", table),
     audioUrl: pickMediaUrl(cells, columns, "audio", table),
+    lyrics: pickByNames(cells, columns, LYRIC_COLS, table),
+    qualities: parseMediaQualities([
+      ...parseJsonArray(pickRaw(cells, columns, QUALITY_COLS, table)),
+      ...(() => {
+        const u = pickMediaUrl(cells, columns, "video", table);
+        return u ? [{ label: inferQualityFromUrl(u) ?? "480P", url: u }] : [];
+      })(),
+    ]),
+    subtitles: parseMediaSubtitles(
+      pickRaw(cells, columns, SUBTITLE_COLS, table),
+    ),
     id: opts.recordId ?? null,
     authorId: pickAuthorId(cells, table, columns),
     praiseIds: parseIdListValue(

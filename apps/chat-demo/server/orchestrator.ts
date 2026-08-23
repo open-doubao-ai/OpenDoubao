@@ -14,6 +14,16 @@ import {
 } from "@a2api/runtime";
 import { bootstrapFromMessage, repairBody } from "./llm.js";
 import type { LlmConfig } from "./llm-config.js";
+import {
+  chatModeForPlan,
+  classifyChatMode,
+  explainCurrentPage,
+  hasCurrentPage,
+  modifyPageBind,
+  planFromModifiedBind,
+  type ChatMode,
+  type PageChatContext,
+} from "./chat-mode.js";
 import { FileApprovalLedger } from "./approval-store.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +33,7 @@ import {
   type BootstrapPlan,
 } from "./intent.js";
 import { commentsForPayload, type SchemaComments } from "./schema-comments.js";
+import { loadSkills } from "./skills.js";
 import {
   generateActionBind,
   type ActionBindContext,
@@ -412,6 +423,7 @@ export class Orchestrator {
         sessionId: session.id,
         assistantMessage: login.error,
         actionSlot: slot,
+        chatMode: "action" as ChatMode,
         pending: { status: "failed", issues: [login.error] },
         plan: { filters: [], surfaceId: "action" },
         dataModel: session.dataModel,
@@ -440,6 +452,7 @@ export class Orchestrator {
           sessionId: session.id,
           assistantMessage,
           actionSlot: slot,
+          chatMode: "action" as ChatMode,
           pending: { status: "failed", issues: [assistantMessage] },
           plan: {
             filters: session.plan?.a2uiHint.filters ?? [],
@@ -462,6 +475,7 @@ export class Orchestrator {
         sessionId: session.id,
         assistantMessage,
         actionSlot: slot,
+        chatMode: "action" as ChatMode,
         actionBind: bind,
         a2apiEnvelopes: envelopes,
         pending: {
@@ -489,6 +503,7 @@ export class Orchestrator {
     llm?: LlmConfig | null,
     auth?: ApijsonAuth | null,
     action?: { slot: ActionSlot; context?: ActionBindContext },
+    pageContext?: PageChatContext,
   ) {
     if (action?.slot) {
       return this.bindAction(
@@ -508,6 +523,7 @@ export class Orchestrator {
       session.messages.push({ role: "assistant", content: login.error });
       return {
         sessionId: session.id,
+        chatMode: "explain" as ChatMode,
         assistantMessage: login.error,
         pending: { status: "failed", issues: [login.error] },
         dataModel: session.dataModel,
@@ -515,18 +531,78 @@ export class Orchestrator {
     }
     this.bindClientCookie(session);
     try {
-      return await this.chatWithSession(session, message, llm);
+      return await this.chatWithSession(session, message, llm, pageContext);
     } finally {
       this.saveClientCookie(session);
     }
+  }
+
+  private async explainReply(
+    session: SessionState,
+    message: string,
+    pageContext: PageChatContext | undefined,
+    llm?: LlmConfig | null,
+  ) {
+    const assistantMessage = await explainCurrentPage(
+      message,
+      pageContext,
+      llm,
+    );
+    session.messages.push({ role: "assistant", content: assistantMessage });
+    return {
+      sessionId: session.id,
+      chatMode: "explain" as ChatMode,
+      assistantMessage,
+      pending: { status: "done", method: "get", body: {} },
+      plan: {
+        filters: [],
+        surfaceId: pageContext?.pageId || "explain",
+        viewMode: pageContext?.pageKind === "list" ? "list" : pageContext?.pageKind ? "detail" : undefined,
+        title: pageContext?.title,
+      },
+      dataModel: session.dataModel,
+    };
   }
 
   private async chatWithSession(
     session: SessionState,
     message: string,
     llm?: LlmConfig | null,
+    pageContext?: PageChatContext,
   ) {
-    const { plan, source } = await bootstrapFromMessage(message, llm);
+    await loadSkills(this.client).catch(() => undefined);
+    const classified = classifyChatMode(message, pageContext);
+    if (classified === "explain") {
+      return this.explainReply(session, message, pageContext, llm);
+    }
+
+    let plan: BootstrapPlan;
+    let source: "rules" | "llm";
+    let chatMode: ChatMode = classified;
+
+    if (classified === "modify") {
+      const modified = await modifyPageBind(message, pageContext, llm);
+      if (!modified || !hasCurrentPage(pageContext)) {
+        return this.explainReply(
+          session,
+          modified
+            ? message
+            : `${message}\n\n(Could not patch the current bind from that request. Say how to change sort/filter, or name a different page to generate.)`,
+          pageContext,
+          llm,
+        );
+      }
+      plan = planFromModifiedBind(modified.body, pageContext!, modified.title);
+      source = modified.source;
+    } else {
+      const boot = await bootstrapFromMessage(message, llm, pageContext);
+      plan = boot.plan;
+      source = boot.source;
+      chatMode = chatModeForPlan(plan);
+      if (chatMode === "explain") {
+        return this.explainReply(session, message, pageContext, llm);
+      }
+    }
     if (
       plan.propose.method === "post" ||
       plan.propose.method === "put" ||
@@ -691,6 +767,7 @@ export class Orchestrator {
     const response: Record<string, unknown> = {
       sessionId: session.id,
       source,
+      chatMode,
       title: plan.title,
       kind: plan.kind,
       a2uiMessages: session.a2uiMessages,
@@ -759,15 +836,22 @@ export class Orchestrator {
         this.bound.register(bind);
         session.bind = bind;
         envelopes.push(toBindEnvelope(bind));
+        const connected =
+          chatMode === "modify"
+            ? `Updated "${plan.title}". Filter/sort/pagination still call APIJSON directly (source: ${source}).`
+            : plan.openCreate
+              ? `Connected ${plan.title}. Opening the create form — fill required fields (*) and submit.`
+              : `Connected ${plan.title}. Filter/sort/pagination changes will call APIJSON directly without AI.`;
         session.messages.push({
           role: "assistant",
-          content: plan.openCreate
-            ? `Connected ${plan.title}. Opening the create form — fill required fields (*) and submit.`
-            : `Connected ${plan.title}. Filter/sort/pagination changes will call APIJSON directly without AI.`,
+          content: connected,
         });
-        response.assistantMessage = plan.openCreate
-          ? `Connected "${plan.title}". Fill the create form (required fields marked *) and click Create.`
-          : `Connected "${plan.title}" and bound UI. Condition changes call APIJSON directly (source: ${source}).`;
+        response.assistantMessage =
+          chatMode === "modify"
+            ? connected
+            : plan.openCreate
+              ? `Connected "${plan.title}". Fill the create form (required fields marked *) and click Create.`
+              : `Connected "${plan.title}" and bound UI. Condition changes call APIJSON directly (source: ${source}).`;
         response.bind = bind;
       } else if (plan.openCreate) {
         session.messages.push({

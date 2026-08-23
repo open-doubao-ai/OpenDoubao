@@ -5,7 +5,7 @@
 
 import { t } from "./i18n/index.js";
 import { fetchBoundGet } from "./layout-actions.js";
-import type { LayoutApp } from "./page-layout.js";
+import { getSkillHints, type LayoutApp } from "./page-layout.js";
 import type { SchemaComments } from "./schema-types.js";
 
 export type CategoryFlatRow = { key: string; cells: Record<string, unknown> };
@@ -61,6 +61,21 @@ const APP_ITEM_TOKENS: Record<LayoutApp, string[]> = {
   social: ["moment", "feed", "动态", "朋友圈"],
   chat: ["message", "chat", "消息", "聊天"],
   data: ["employee", "staff", "员工"],
+  education: ["course", "lesson", "curriculum", "课程", "教育学习", "网课"],
+  books: ["book", "ebook", "textbook", "图书", "图书阅读", "电子书"],
+  comics: ["comic", "manga", "manhua", "漫画", "漫画阅读"],
+  lifestyle: ["local", "localservice", "errand", "本地生活", "到家", "到店"],
+  food: ["recipe", "dish", "cuisine", "菜谱", "餐饮美食", "美食"],
+  travel: ["trip", "hotel", "itinerary", "旅游", "旅游出行", "行程"],
+  sports: ["sport", "match", "league", "体育", "体育资讯", "赛事"],
+  parenting: ["baby", "parenting", "infant", "母婴", "母婴育儿", "育儿"],
+  health: ["workout", "fitness", "yoga", "健康运动", "健身"],
+  auto: ["vehicle", "carinfo", "garage", "汽车", "汽车服务", "车型"],
+  jobs: ["job", "recruit", "vacancy", "招聘", "招聘求职", "职位"],
+  housing: ["house", "estate", "apartment", "房产", "房产家居", "房源"],
+  beauty: ["beauty", "salon", "spa", "美业", "美业预约", "美发"],
+  photo: ["photo", "gallery", "摄影", "摄影相册", "相册"],
+  office: ["note", "notebook", "todolist", "办公效率", "待办", "笔记"],
 };
 
 const CATEGORY_ID_TOKENS = [
@@ -133,6 +148,8 @@ export function inferItemTableForApp(
   comments: SchemaComments | null | undefined,
   exclude?: string | null,
 ): string | null {
+  const hinted = getSkillHints().find((s) => s.name === app)?.tableName?.trim();
+  if (hinted && comments?.tables?.[hinted]) return hinted;
   const tokens = APP_ITEM_TOKENS[app] ?? [];
   if (!comments?.tables || !tokens.length) return null;
   let best: { table: string; score: number } | null = null;
@@ -179,6 +196,16 @@ function pickField(
     if (!best || score > best.score) best = { field, score };
   }
   return best?.field ?? null;
+}
+
+/** Score table columns + comments against tokens. Do not hardcode Demo field names. */
+export function inferNamedField(
+  table: string,
+  comments: SchemaComments | null | undefined,
+  tokens: string[],
+  extra?: string[],
+): string | null {
+  return pickField(table, comments, tokens, extra);
 }
 
 export function inferCategoryIdField(

@@ -22,9 +22,11 @@ import {
   inferLayoutSpec,
   isAddressPage,
   isExploreLayoutPage,
+  isExploreListPage,
   isOrdersPage,
   isSettingsPage,
   isUserLayoutPage,
+  getSkillHints,
   LAYOUT_APPS,
   LAYOUT_PAGES_BY_APP,
   layoutAppLabel,
@@ -58,6 +60,11 @@ import {
   isOrderTable,
 } from "./layout-entities.js";
 import { flashLayoutNote } from "./layout-views.js";
+import { loadSkillCatalog } from "./layout-skills.js";
+import {
+  generateLayoutPagePrompt,
+  pageNeedsChatGenerate,
+} from "./layout-page-gen.js";
 import {
   actionBindPrompt,
   bindingFromPayload,
@@ -142,7 +149,11 @@ import {
   formatVersionShort,
   getActivePageRef,
   getPageVersion,
+  findSavedPageByLayout,
   getSavedPage,
+  latestVersion,
+  parseLayoutSurfaceId,
+  surfaceIdForLayout,
   getSavedPageThumb,
   listSavedPages,
   normalizePageIdentity,
@@ -162,6 +173,13 @@ import {
   schedulePageThumbCapture,
   setPageThumbSavedHandler,
 } from "./page-thumb.js";
+import {
+  initPageSync,
+  isPageUploadFailed,
+  isPageUploading,
+  syncSavedPagesAfterLogin,
+  uploadSavedPage,
+} from "./page-sync.js";
 
 applyDomI18n();
 mountLocaleToggle();
@@ -189,7 +207,10 @@ function syncAdminAccess() {
 // Mount account chrome first so Login/Settings always appear even if other init fails
 mountAccountUi({
   headerEl: document.querySelector(".top") as HTMLElement,
-  onAccountChange: () => syncAdminAccess(),
+  onAccountChange: () => {
+    syncAdminAccess();
+    void syncSavedPagesAfterLogin();
+  },
   onSettingsChange: (s) => {
     apijsonBaseUrl = s.apijsonBaseUrl || apijsonBaseUrl;
   },
@@ -492,6 +513,9 @@ function renderRows(response: unknown) {
     },
     layoutPrompt: state.lastUserPrompt,
     onSelectAppPage: (page) => selectAppPage(page),
+    onSelectLayoutApp: (app) => {
+      void selectLayoutPage(app, contentLandingPage(app));
+    },
     onOpenAppScan: () => openAppScanPage(),
     onOpenCategory: (id) => {
       void openCategoryItems(id);
@@ -791,7 +815,7 @@ function renderRows(response: unknown) {
       void openFkTableFiltered(info);
     },
     // Generated UI CRUD → reliable APIJSON only (no AI / HITL propose)
-    onWrite: (payload) => void executeWriteDirect(payload),
+    onWrite: (payload) => executeWriteDirect(payload),
     onRelateSync: (payload: RelateSyncPayload) => {
       syncRelateFromDetail(payload);
     },
@@ -914,6 +938,8 @@ function isAuxiliaryTable(table: string | null | undefined): boolean {
 }
 
 function itemTableForApp(app: LayoutApp): string | null {
+  const fromSkill = getSkillHints().find((s) => s.name === app)?.tableName?.trim();
+  if (fromSkill) return fromSkill;
   const cat = inferCategoryTable(state.comments);
   const inferred = inferItemTableForApp(app, state.comments, cat);
   if (inferred && !isAuxiliaryTable(inferred)) return inferred;
@@ -972,7 +998,7 @@ function tableForPageSync(app: LayoutApp, page: LayoutPage): string | null | und
 async function refreshLayoutComments() {
   try {
     const c = await api<SchemaComments>(
-      "/api/schema-comments?tables=User,Moment,Comment,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee",
+      "/api/schema-comments?tables=User,Moment,Comment,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee,Course,Book,Comic,Local,Recipe,Trip,Sport,Baby,Workout,Vehicle,Job,House,Beauty,Photo,Note,Skill",
     );
     state.comments = mergeComments(state.comments, c);
   } catch {
@@ -1251,12 +1277,12 @@ function syncLayoutKindControl() {
 
 function applyLayoutSpec(
   spec: LayoutSpec,
-  opts?: { manual?: boolean; rerender?: boolean },
+  opts?: { manual?: boolean; rerender?: boolean; persist?: boolean },
 ) {
   state.layoutSpec = spec;
   state.layoutKind = legacyKindFromSpec(spec);
   if (opts?.manual) state.layoutKindManual = true;
-  persistCurrentPageVersion({ captureThumb: false });
+  if (opts?.persist !== false) persistCurrentPageVersion({ captureThumb: false });
   syncLayoutKindControl();
   renderFilters(state.filters);
   if (opts?.rerender) {
@@ -1315,11 +1341,8 @@ async function openAppSearchPage(q: string) {
   const app = state.layoutSpec.app;
   const trimmed = q.trim();
   setPendingSearchQuery(app, trimmed);
-  if (state.pageKind !== "list" || state.viewMode !== "list") {
-    await returnToListPage();
-  }
-  if (LAYOUT_PAGES_BY_APP[app].includes("search")) {
-    applyLayoutSpec({ app, page: "search" }, { manual: true, rerender: true });
+  if (state.layoutSpec.page !== "search") {
+    await selectLayoutPage(app, "search");
   }
   applyInPlaceAppSearch(trimmed);
 }
@@ -1585,6 +1608,9 @@ function pageKindFromSnapshot(
   snap: SavedPageSnapshot,
   pageId: string,
 ): PageKind {
+  const layoutPage =
+    snap.layoutPage || parseLayoutSurfaceId(pageId)?.page || null;
+  if (isExploreListPage(layoutPage)) return "list";
   const body = snap.bindMeta?.bodyTemplate ?? {};
   const listBody = bodyLooksLikeListQuery(body);
   const slots = snap.detailSlots ?? [];
@@ -1653,6 +1679,11 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
           prompt: state.lastUserPrompt,
         });
   state.layoutKind = legacyKindFromSpec(state.layoutSpec);
+  if (isExploreListPage(state.layoutSpec.page)) {
+    state.pageKind = "list";
+    state.viewMode = "list";
+    state.hasBind = true;
+  }
   state.layoutKindManual = snap.layoutKindManual === true;
   state.actionBindings = snap.actionBindings
     ? structuredClone(snap.actionBindings)
@@ -1987,6 +2018,10 @@ setPageThumbSavedHandler(() => {
   refreshPagePickerGrid();
 });
 
+initPageSync({
+  onStatus: () => refreshPagePickerGrid(),
+});
+
 function makePagePickerCard(p: SavedPage): HTMLElement {
   const card = document.createElement("div");
   card.className = "page-picker-card";
@@ -2034,6 +2069,31 @@ function makePagePickerCard(p: SavedPage): HTMLElement {
   };
 
   card.append(openBtn, delBtn);
+
+  if (loadAccount() && isPageUploadFailed(p)) {
+    const upBtn = document.createElement("button");
+    upBtn.type = "button";
+    upBtn.className = "page-picker-upload";
+    const busy = isPageUploading(p);
+    if (busy) upBtn.classList.add("is-busy");
+    upBtn.title = busy
+      ? t("workspace.uploadingPage")
+      : p.syncError
+        ? `${t("workspace.uploadPageFailed")}: ${p.syncError}`
+        : t("workspace.uploadPage");
+    upBtn.setAttribute("aria-label", t("workspace.uploadPage"));
+    upBtn.innerHTML = busy
+      ? ""
+      : '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 16V5M8 8l4-4 4 4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    upBtn.disabled = busy;
+    upBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      void uploadSavedPage(p.id);
+    };
+    card.appendChild(upBtn);
+  }
+
   return card;
 }
 
@@ -2304,6 +2364,97 @@ function closePageMenus() {
   )) {
     menu.classList.remove("is-open");
   }
+  for (const group of Array.from(
+    document.querySelectorAll<HTMLElement>(".page-layout-group.is-open"),
+  )) {
+    group.classList.remove("is-open");
+  }
+  for (const sub of Array.from(
+    document.querySelectorAll<HTMLElement>(".page-layout-sub.is-placed"),
+  )) {
+    sub.classList.remove("is-placed");
+  }
+}
+
+const LAYOUT_MENU_MARGIN = 8;
+
+/** Cap the parent scene list to the space under the layout button. */
+function constrainPageLayoutMenu(menu: HTMLElement, anchor: HTMLElement) {
+  const vh = window.innerHeight;
+  const menuRect = menu.getBoundingClientRect();
+  const top =
+    menuRect.height > 0
+      ? menuRect.top
+      : (menu.parentElement ?? anchor).getBoundingClientRect().bottom;
+  menu.style.maxHeight = `${Math.max(120, Math.floor(vh - top - LAYOUT_MENU_MARGIN))}px`;
+}
+
+/**
+ * Pin a child page flyout beside its parent row.
+ * Prefer aligning with the row; shift up when the bottom would clip;
+ * clamp so neither edge leaves the viewport.
+ */
+function placePageLayoutSubmenu(
+  sub: HTMLElement,
+  parentBtn: HTMLElement,
+  menu?: HTMLElement,
+) {
+  const margin = LAYOUT_MENU_MARGIN;
+  const overlap = 4;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const rect = parentBtn.getBoundingClientRect();
+  if (menu) {
+    const menuRect = menu.getBoundingClientRect();
+    if (rect.bottom < menuRect.top + 2 || rect.top > menuRect.bottom - 2) {
+      sub.classList.add("is-offscreen");
+      sub.classList.remove("is-placed");
+      return;
+    }
+    sub.classList.remove("is-offscreen");
+  }
+  if (getComputedStyle(sub).display === "none") return;
+
+  sub.style.position = "fixed";
+  sub.style.right = "auto";
+  sub.style.bottom = "auto";
+  sub.style.maxHeight = `${Math.max(120, vh - margin * 2)}px`;
+  const subW = Math.min(sub.offsetWidth || 148, vw - margin * 2);
+  const subH = sub.offsetHeight || 0;
+  const h = Math.min(subH, Math.max(120, vh - margin * 2));
+
+  let left = Math.round(rect.right - overlap);
+  if (left + subW > vw - margin) {
+    left = Math.round(rect.left - subW + overlap);
+  }
+  if (left < margin) left = margin;
+
+  let top = Math.round(rect.top);
+  if (top + h > vh - margin) {
+    top = Math.round(vh - margin - h);
+  }
+  if (top < margin) top = margin;
+
+  sub.style.left = `${left}px`;
+  sub.style.top = `${top}px`;
+  sub.style.maxHeight = `${Math.max(120, vh - top - margin)}px`;
+  sub.classList.add("is-placed");
+}
+
+function activeLayoutGroup(menu: HTMLElement): HTMLElement | null {
+  return (
+    menu.querySelector<HTMLElement>(".page-layout-group:hover") ??
+    menu.querySelector<HTMLElement>(".page-layout-group.is-open")
+  );
+}
+
+function syncPageLayoutFlyouts(menu: HTMLElement, anchor: HTMLElement) {
+  constrainPageLayoutMenu(menu, anchor);
+  const group = activeLayoutGroup(menu);
+  if (!group) return;
+  const parentBtn = group.querySelector<HTMLElement>(".page-layout-parent");
+  const sub = group.querySelector<HTMLElement>(".page-layout-sub");
+  if (parentBtn && sub) placePageLayoutSubmenu(sub, parentBtn, menu);
 }
 
 /** Desktop: CSS :hover. Touch / no-hover: click toggles `.is-open`. */
@@ -2387,6 +2538,8 @@ function renderFilters(filters: FilterDef[]) {
       "page-layout-item page-layout-parent" +
       (app === state.layoutSpec.app ? " active" : "");
     parent.textContent = layoutAppLabel(app);
+    const sub = document.createElement("div");
+    sub.className = "page-layout-sub";
     parent.onclick = (ev) => {
       ev.stopPropagation();
       for (const g of Array.from(
@@ -2395,9 +2548,14 @@ function renderFilters(filters: FilterDef[]) {
         if (g !== group) g.classList.remove("is-open");
       }
       group.classList.toggle("is-open");
+      syncPageLayoutFlyouts(layoutMenu, layoutBtn);
     };
-    const sub = document.createElement("div");
-    sub.className = "page-layout-sub";
+    group.addEventListener("pointerenter", () => {
+      syncPageLayoutFlyouts(layoutMenu, layoutBtn);
+    });
+    group.addEventListener("pointerleave", () => {
+      sub.classList.remove("is-placed");
+    });
     for (const page of LAYOUT_PAGES_BY_APP[app]) {
       const item = document.createElement("button");
       item.type = "button";
@@ -2424,6 +2582,25 @@ function renderFilters(filters: FilterDef[]) {
     layoutMenu.appendChild(group);
   }
   bindHoverMenu(layoutBtn, layoutMenu);
+  const syncFlyouts = () => syncPageLayoutFlyouts(layoutMenu, layoutBtn);
+  layoutWrap.addEventListener("pointerenter", syncFlyouts);
+  layoutBtn.addEventListener("click", () => {
+    requestAnimationFrame(syncFlyouts);
+  });
+  layoutMenu.addEventListener("scroll", syncFlyouts, { passive: true });
+  const onLayoutMenuWin = () => {
+    if (!document.body.contains(layoutMenu)) {
+      window.removeEventListener("resize", onLayoutMenuWin);
+      return;
+    }
+    if (
+      layoutMenu.classList.contains("is-open") ||
+      layoutWrap.matches(":hover")
+    ) {
+      syncFlyouts();
+    }
+  };
+  window.addEventListener("resize", onLayoutMenuWin);
   layoutWrap.append(layoutBtn, layoutMenu);
   left.appendChild(layoutWrap);
 
@@ -3591,7 +3768,10 @@ function openAppScanPage() {
   const app = state.layoutSpec.app;
   const go = () => {
     if (LAYOUT_PAGES_BY_APP[app].includes("scan")) {
-      applyLayoutSpec({ app, page: "scan" }, { manual: true, rerender: true });
+      applyLayoutSpec(
+        { app, page: "scan" },
+        { manual: true, persist: false, rerender: true },
+      );
     }
   };
   if (state.pageKind !== "list" || state.viewMode !== "list") {
@@ -3635,7 +3815,10 @@ async function openCategoryItems(id: string | number) {
     : LAYOUT_PAGES_BY_APP[app].includes("home")
       ? "home"
       : "list";
-  applyLayoutSpec({ app, page: landing }, { manual: true, rerender: false });
+  applyLayoutSpec(
+    { app, page: landing },
+    { manual: true, persist: false, rerender: false },
+  );
   await openFkTableFiltered({ table: itemTable, ids: [id], field });
   applyLayoutSpec({ app, page: landing }, { manual: true, rerender: true });
 }
@@ -3656,17 +3839,22 @@ function applyReplacedFilters(filters: ColumnFilter[]) {
     filters.some((f) => filterHasValue(f));
   if (jumpExplore) {
     const landing = contentLandingPage(app);
-    const item = itemTableForApp(app);
-    const cur = currentPrimaryTable();
-    applyLayoutSpec({ app, page: landing }, { manual: true, rerender: false });
-    if (item && item !== cur) {
-      void openBoundTableList({
-        table: item,
-        filters,
-        keepLayout: true,
-      }).then(() => {
-        applyLayoutSpec({ app, page: landing }, { manual: true, rerender: true });
+    const existing = findSavedPageByLayout(app, landing);
+    if (existing && existing.id !== state.activePageId) {
+      void switchToSavedPage(existing.id).then(() => {
+        state.columnFilters = filters;
+        syncCombineExprAfterFilterChange(prev);
+        applyLayoutSpec({ app, page: landing }, { manual: true, rerender: false });
+        void bound("filter_change");
       });
+      return;
+    }
+    applyLayoutSpec(
+      { app, page: landing },
+      { manual: true, persist: false, rerender: false },
+    );
+    if (!existing) {
+      void selectLayoutPage(app, landing);
       return;
     }
   }
@@ -3677,80 +3865,116 @@ function selectAppPage(page: LayoutPage) {
   void selectLayoutPage(state.layoutSpec.app, page);
 }
 
+/** Saved 分类/排行/历史 that were stored as a player/detail must be rebuilt. */
+function explorePageNeedsRebuild(saved: SavedPage, page: LayoutPage): boolean {
+  if (!isExploreListPage(page)) return false;
+  const snap = latestVersion(saved);
+  if (!snap) return true;
+  if (snap.layoutPage === "detail" || snap.layoutPage === "player") return true;
+  if (snap.pageKind === "detail" || snap.pageKind === "create") return true;
+  if (snap.viewMode === "detail") return true;
+  return !bodyLooksLikeListQuery(snap.bindMeta?.bodyTemplate ?? {});
+}
+
+let layoutGenerateKey: string | null = null;
+
 async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
-  if (app === state.layoutSpec.app && page === state.layoutSpec.page) return;
+  const already = findSavedPageByLayout(app, page);
+  if (
+    app === state.layoutSpec.app &&
+    page === state.layoutSpec.page &&
+    (already?.id === state.activePageId || !pageNeedsChatGenerate(page)) &&
+    !(already && explorePageNeedsRebuild(already, page)) &&
+    !(isExploreListPage(page) && state.viewMode === "detail")
+  ) {
+    return;
+  }
+
   if (page === "scan") {
-    if (app !== state.layoutSpec.app) {
-      applyLayoutSpec({ app, page: state.layoutSpec.page }, { manual: true, rerender: false });
-    }
+    applyLayoutSpec(
+      { app, page: state.layoutSpec.page },
+      { manual: true, persist: false, rerender: false },
+    );
     openAppScanPage();
     return;
   }
-  if (page === "search") {
-    if (app !== state.layoutSpec.app) {
-      applyLayoutSpec({ app, page: "search" }, { manual: true, rerender: false });
+
+  const existing = findSavedPageByLayout(app, page);
+  if (existing && !explorePageNeedsRebuild(existing, page)) {
+    if (existing.id !== state.activePageId) {
+      await switchToSavedPage(existing.id);
     }
-    const item = itemTableForApp(app);
-    const cur = currentPrimaryTable();
-    if (item && item !== cur) {
-      await openBoundTableList({ table: item, keepLayout: true });
-    }
-    await openAppSearchPage("");
-    return;
-  }
-  if (page === "create") {
-    applyLayoutSpec({ app, page }, { manual: true, rerender: false });
-    if (!triggerListCreate()) {
+    if (
+      state.layoutSpec.app !== app ||
+      state.layoutSpec.page !== page
+    ) {
       applyLayoutSpec({ app, page }, { manual: true, rerender: true });
     }
     return;
   }
 
-  const current = currentPrimaryTable();
-  const quick = tableForPageSync(app, page);
-  if (
-    quick === undefined ||
-    (quick != null && quick === current && state.hasBind)
-  ) {
-    if (state.pageKind !== "list" && (page === "orders" || page === "address" || page === "list" || page === "home")) {
-      await returnToListPage();
+  if (isExploreListPage(page)) {
+    state.viewMode = "list";
+    state.pageKind = "list";
+  }
+
+  if (pageNeedsChatGenerate(page)) {
+    if (page === "category") {
+      const ensured = await ensureLayoutCategories();
+      if (ensured.comments) {
+        state.comments = mergeComments(state.comments, ensured.comments);
+      }
     }
-    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+    if (isAddressPage(page)) {
+      const ensured = await ensureLayoutAddress();
+      if (ensured.comments) {
+        state.comments = mergeComments(state.comments, ensured.comments);
+      }
+    }
+    const key = `${app}_${page}`;
+    if (layoutGenerateKey === key) return;
+    layoutGenerateKey = key;
+    applyLayoutSpec(
+      { app, page },
+      { manual: true, persist: false, rerender: false },
+    );
+    flashLayoutNote(
+      t("layout.generating", { label: layoutSpecLabel({ app, page }) }),
+    );
+    const tableHint = await resolveTableForPage(app, page);
+    try {
+      await sendChat(generateLayoutPagePrompt(app, page, { tableHint }), {
+        generatePage: true,
+        targetApp: app,
+        targetPage: page,
+      });
+    } finally {
+      if (layoutGenerateKey === key) layoutGenerateKey = null;
+    }
     return;
   }
 
-  applyLayoutSpec({ app, page }, { manual: true, rerender: false });
-  const target = await resolveTableForPage(app, page);
-  if (target === undefined) {
-    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
-    return;
-  }
-  if (!target) {
-    if (isOrdersPage(page)) flashLayoutNote(t("layout.explore.noOrderTable"));
-    else if (isAddressPage(page)) flashLayoutNote(t("layout.explore.noAddressTable"));
-    else if (isUserLayoutPage(page) || page === "feed") {
-      flashLayoutNote(t("layout.explore.noItemTable"));
-    } else {
-      flashLayoutNote(t("layout.explore.noItemTable"));
-    }
-    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
-    return;
-  }
-  if (target === currentPrimaryTable() && state.hasBind && state.pageKind === "list") {
-    applyLayoutSpec({ app, page }, { manual: true, rerender: true });
-    return;
-  }
-  await openBoundTableList({ table: target, keepLayout: true });
-  applyLayoutSpec({ app, page }, { manual: true, rerender: true });
+  applyLayoutSpec(
+    { app, page },
+    { manual: true, persist: false, rerender: true },
+  );
 }
 
-async function sendChat(message: string) {
+async function sendChat(
+  message: string,
+  opts?: {
+    generatePage?: boolean;
+    targetApp?: LayoutApp;
+    targetPage?: LayoutPage;
+  },
+) {
   state.lastUserPrompt = message.trim();
   addMessage("user", message);
   try {
     const data = await api<{
       sessionId: string;
       assistantMessage: string;
+      chatMode?: "generate" | "modify" | "explain" | "write" | "action";
       guideToDataApi?: boolean;
       pending: {
         requestId: string;
@@ -3786,10 +4010,90 @@ async function sendChat(message: string) {
       sessionId: state.sessionId,
       message,
       llm: llmConfigForApi(),
+      pageContext: {
+        pageId: state.activePageId,
+        title: state.pageTitle,
+        app: state.layoutSpec.app,
+        page: state.layoutSpec.page,
+        table: currentPrimaryTable(),
+        pageKind:
+          opts?.generatePage && isExploreListPage(opts.targetPage)
+            ? "list"
+            : state.pageKind,
+        columns: Object.keys(state.columnMetas),
+        bind: state.bindMeta,
+        generatePage: opts?.generatePage === true,
+        targetApp: opts?.targetApp ?? null,
+        targetPage: opts?.targetPage ?? null,
+        preferredMode: readChatMode(),
+      },
     });
 
     state.sessionId = data.sessionId;
-    state.viewMode = data.plan?.viewMode ?? "list";
+    if (data.schemaComments) {
+      state.comments = mergeComments(state.comments, data.schemaComments);
+    }
+    addMessage("assistant", data.assistantMessage);
+    const exploreGenerate =
+      opts?.generatePage === true && isExploreListPage(opts.targetPage);
+
+    if (data.chatMode === "explain") {
+      return;
+    }
+
+    if (
+      data.chatMode === "modify" &&
+      data.bind?.bodyTemplate &&
+      data.bind.url
+    ) {
+      const prevTable = currentPrimaryTable();
+      state.hasBind = true;
+      state.bindMeta = {
+        url: toBrowserApijsonUrl(data.bind.url, apijsonBaseUrl),
+        method: data.bind.method || "get",
+        bodyTemplate: data.bind.bodyTemplate,
+      };
+      const nextTable = inferPrimaryTable([], data.bind.bodyTemplate);
+      if (nextTable !== prevTable) {
+        state.columnSorts = [];
+        state.columnFilters = [];
+        state.filterCombineExpr = "";
+        state.tableJoins = {};
+        state.columnOrder = [];
+        state.columnMetas = {};
+        state.fkExpand = defaultFkExpandState(nextTable);
+        state.bindMeta.bodyTemplate = applyFkExpand(
+          data.bind.bodyTemplate,
+          nextTable,
+          state.fkExpand,
+        );
+      }
+      if (state.activePageId) {
+        saveGeneratedPage(
+          state.activePageId,
+          data.plan?.title || state.pageTitle,
+          state.filters,
+        );
+      }
+      syncDataPanel({
+        method: "POST",
+        url: state.bindMeta.url,
+        json: state.bindMeta.bodyTemplate,
+        response: data.lastResult,
+      });
+      if (data.lastResult) {
+        renderRows(data.lastResult);
+        dataPanel.fill({ response: data.lastResult });
+      } else {
+        await bound("search");
+      }
+      return;
+    }
+
+    state.viewMode = exploreGenerate
+      ? "list"
+      : (data.plan?.viewMode ?? "list");
+    if (exploreGenerate) state.pageKind = "list";
     const isOpenCreate =
       data.plan?.openCreate === true ||
       data.kind === "create_moment" ||
@@ -3807,11 +4111,12 @@ async function sendChat(message: string) {
             inferPrimaryTable([], data.bind?.bodyTemplate ?? null);
     // Single-record templates (User Detail, etc.) must never become a bound table
     if (
-      data.kind === "get_user" ||
-      data.kind === "get_moment" ||
-      data.kind === "get_comment" ||
-      data.plan?.viewMode === "detail" ||
-      isOpenCreate
+      !exploreGenerate &&
+      (data.kind === "get_user" ||
+        data.kind === "get_moment" ||
+        data.kind === "get_comment" ||
+        data.plan?.viewMode === "detail" ||
+        isOpenCreate)
     ) {
       persistCurrentPageVersion();
       state.viewMode = "detail";
@@ -3823,10 +4128,6 @@ async function sendChat(message: string) {
       typeof data.plan.writeForm.defaults === "object"
         ? { ...data.plan.writeForm.defaults }
         : null;
-    if (data.schemaComments) {
-      state.comments = mergeComments(state.comments, data.schemaComments);
-    }
-    addMessage("assistant", data.assistantMessage);
 
     // Approve/Reject only in Admin — demo tracks Apply / syncs Data panel.
     if (data.pending?.status === "awaiting_approval") {
@@ -3859,6 +4160,11 @@ async function sendChat(message: string) {
     // New comment / New moment → empty detail create form (never Table)
     if (isOpenCreate && createTable) {
       state.hasBind = false;
+      if (opts?.generatePage && opts.targetApp && opts.targetPage) {
+        state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
+        state.layoutKind = legacyKindFromSpec(state.layoutSpec);
+        state.layoutKindManual = true;
+      }
       activateIndependentPage({
         table: createTable,
         kind: "create",
@@ -3893,10 +4199,11 @@ async function sendChat(message: string) {
     }
 
     const forceDetail =
-      data.kind === "get_user" ||
-      data.kind === "get_moment" ||
-      data.kind === "get_comment" ||
-      data.plan?.viewMode === "detail";
+      !exploreGenerate &&
+      (data.kind === "get_user" ||
+        data.kind === "get_moment" ||
+        data.kind === "get_comment" ||
+        data.plan?.viewMode === "detail");
 
     if (data.bind?.bodyTemplate && data.bind.url && !forceDetail) {
       persistCurrentPageVersion();
@@ -3908,7 +4215,6 @@ async function sendChat(message: string) {
       state.columnOrder = [];
       state.columnMetas = {};
       state.displayKind = "table";
-      state.layoutKindManual = false;
       state.actionBindings = {};
       state.chartLabelPath = "";
       state.chartValuePath = "";
@@ -3922,7 +4228,14 @@ async function sendChat(message: string) {
         bodyTemplate: data.bind.bodyTemplate,
       };
       const primary = inferPrimaryTable([], data.bind.bodyTemplate);
-      seedLayoutFromTable(primary);
+      if (opts?.generatePage && opts.targetApp && opts.targetPage) {
+        state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
+        state.layoutKind = legacyKindFromSpec(state.layoutSpec);
+        state.layoutKindManual = true;
+      } else {
+        state.layoutKindManual = false;
+        seedLayoutFromTable(primary);
+      }
       state.fkExpand = defaultFkExpandState(primary);
       // Persist expanded FK tables into template so columns appear consistently
       state.bindMeta.bodyTemplate = applyFkExpand(
@@ -3941,7 +4254,10 @@ async function sendChat(message: string) {
       const identity = normalizePageIdentity({
         table: primary,
         kind: "list",
-        surfaceId: data.plan.surfaceId,
+        surfaceId:
+          opts?.generatePage && opts.targetApp && opts.targetPage
+            ? surfaceIdForLayout(opts.targetApp, opts.targetPage)
+            : data.plan.surfaceId,
         title: data.plan.title,
       });
       state.viewMode = "list";
@@ -3982,7 +4298,7 @@ async function sendChat(message: string) {
       } else if (!data.pending.sensitive && !isPendingEditDelete) {
         switchTab("data");
       }
-    } else if (state.viewMode === "detail") {
+    } else if (!exploreGenerate && state.viewMode === "detail") {
       state.hasBind = false;
       // Prefer chat kind — single-record bodies like { User: {} } used to
       // miss inferPrimaryTable (no []) and leave a stale Comment title.
@@ -4000,6 +4316,11 @@ async function sendChat(message: string) {
                   (data.pending?.body as Record<string, unknown>) ?? null,
                 );
       if (detailTable) {
+        if (opts?.generatePage && opts.targetApp && opts.targetPage) {
+          state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
+          state.layoutKind = legacyKindFromSpec(state.layoutSpec);
+          state.layoutKindManual = true;
+        }
         activateIndependentPage({
           table: detailTable,
           kind: "detail",
@@ -4035,6 +4356,125 @@ async function sendChat(message: string) {
     addMessage("assistant", e instanceof Error ? e.message : String(e));
   }
 }
+
+const CHAT_MODE_KEY = "a2api.chatMode";
+
+type ChatPreferredMode = "auto" | "generate" | "modify" | "explain";
+
+function isChatPreferredMode(v: string | null | undefined): v is ChatPreferredMode {
+  return v === "auto" || v === "generate" || v === "modify" || v === "explain";
+}
+
+function chatModeLabel(mode: ChatPreferredMode): string {
+  return mode === "generate"
+    ? t("chat.modeGenerate")
+    : mode === "modify"
+      ? t("chat.modeEdit")
+      : mode === "explain"
+        ? t("chat.modeAsk")
+        : t("chat.modeAuto");
+}
+
+function readChatMode(): ChatPreferredMode {
+  const root = document.getElementById("chat-mode");
+  const raw = root?.getAttribute("data-mode");
+  if (isChatPreferredMode(raw)) return raw;
+  try {
+    const saved = localStorage.getItem(CHAT_MODE_KEY);
+    if (isChatPreferredMode(saved)) return saved;
+  } catch {
+    /* ignore */
+  }
+  return "auto";
+}
+
+function syncChatPlaceholder() {
+  const input = $("chat-input") as HTMLInputElement;
+  const mode = readChatMode();
+  const key =
+    mode === "generate"
+      ? "chat.placeholderGenerate"
+      : mode === "modify"
+        ? "chat.placeholderEdit"
+        : mode === "explain"
+          ? "chat.placeholderAsk"
+          : "chat.placeholder";
+  input.setAttribute("data-i18n-placeholder", key);
+  input.placeholder = t(key);
+}
+
+function applyChatMode(mode: ChatPreferredMode) {
+  const root = document.getElementById("chat-mode");
+  const label = document.getElementById("chat-mode-label");
+  const menu = document.getElementById("chat-mode-menu");
+  if (!root) return;
+  root.setAttribute("data-mode", mode);
+  if (label) label.textContent = chatModeLabel(mode);
+  for (const item of Array.from(
+    root.querySelectorAll<HTMLButtonElement>(".chat-mode-item"),
+  )) {
+    item.classList.toggle("is-active", item.dataset.mode === mode);
+    item.setAttribute(
+      "aria-selected",
+      item.dataset.mode === mode ? "true" : "false",
+    );
+  }
+  menu?.classList.remove("is-open");
+  const btn = document.getElementById("chat-mode-btn");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  try {
+    localStorage.setItem(CHAT_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+  syncChatPlaceholder();
+}
+
+function placeChatModeMenu() {
+  const btn = document.getElementById("chat-mode-btn");
+  const menu = document.getElementById("chat-mode-menu");
+  if (!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.left = `${Math.round(r.left)}px`;
+  menu.style.width = `${Math.max(Math.round(r.width), 136)}px`;
+  menu.style.top = "auto";
+  menu.style.bottom = `${Math.round(window.innerHeight - r.top + 4)}px`;
+  menu.style.right = "auto";
+}
+
+function mountChatModeUi() {
+  const root = document.getElementById("chat-mode");
+  const btn = document.getElementById("chat-mode-btn");
+  const menu = document.getElementById("chat-mode-menu");
+  if (!root || !btn || !menu) return;
+  let mode: ChatPreferredMode = "auto";
+  try {
+    const saved = localStorage.getItem(CHAT_MODE_KEY);
+    if (isChatPreferredMode(saved)) mode = saved;
+  } catch {
+    /* ignore */
+  }
+  applyChatMode(mode);
+  bindHoverMenu(btn, menu);
+  root.addEventListener("pointerenter", () => placeChatModeMenu());
+  btn.addEventListener("click", () => placeChatModeMenu());
+  window.addEventListener("resize", () => {
+    if (menu.classList.contains("is-open") || root.matches(":hover")) {
+      placeChatModeMenu();
+    }
+  });
+  root.addEventListener("click", (ev) => {
+    const item = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+      ".chat-mode-item",
+    );
+    if (!item || !isChatPreferredMode(item.dataset.mode)) return;
+    ev.preventDefault();
+    applyChatMode(item.dataset.mode);
+  });
+}
+
+mountChatModeUi();
 
 $("chat-form").onsubmit = (ev) => {
   ev.preventDefault();
@@ -4076,7 +4516,7 @@ function mergeComments(
 
 // Prefetch Demo schema comments for tooltips before first query
 api<SchemaComments>(
-  "/api/schema-comments?tables=User,Moment,Comment,Privacy,apijson_privacy,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee",
+  "/api/schema-comments?tables=User,Moment,Comment,Privacy,apijson_privacy,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee,Skill",
 )
   .then((c) => {
     state.comments = mergeComments(state.comments, c);
@@ -4088,6 +4528,8 @@ api<SchemaComments>(
   .catch(() => {
     /* ignore until first successful chat */
   });
+
+void loadSkillCatalog(true).catch(() => undefined);
 
 // Re-check any writes still waiting on admin approval (every page load)
 void syncTrackedApprovalsOnLoad();

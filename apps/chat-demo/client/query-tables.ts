@@ -57,6 +57,8 @@ const APIJSON_CONFIG_TABLES = new Set(
     /** A2API admin permission queue — not chat business data */
     "Apply",
     "Call",
+    /** Saved layout sync — not chat business data */
+    "Page",
   ].map((t) => t.toLowerCase()),
 );
 

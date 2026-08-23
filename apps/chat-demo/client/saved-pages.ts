@@ -12,12 +12,14 @@ import type {
   DisplayKind,
   ViewMode,
 } from "./result-view.js";
-import type {
-  ActionBinding,
-  ActionSlot,
-  LayoutApp,
-  LayoutKind,
-  LayoutPage,
+import {
+  isLayoutApp,
+  isLayoutPage,
+  type ActionBinding,
+  type ActionSlot,
+  type LayoutApp,
+  type LayoutKind,
+  type LayoutPage,
 } from "./page-layout.js";
 import type { ColumnFilter, ColumnSort } from "./table-query.js";
 
@@ -36,6 +38,30 @@ export function pageKindFromViewMode(
   if (openCreate) return "create";
   if (viewMode === "detail") return "detail";
   return "list";
+}
+
+/** `music` + `rank` → `music_rank` (one saved page per layout page). */
+export function surfaceIdForLayout(app: LayoutApp, page: LayoutPage): string {
+  return `${app}_${page}`;
+}
+
+export function parseLayoutSurfaceId(
+  id: string,
+): { app: LayoutApp; page: LayoutPage } | null {
+  const raw = (id || "").trim();
+  const i = raw.indexOf("_");
+  if (i <= 0) return null;
+  const app = raw.slice(0, i);
+  const page = raw.slice(i + 1);
+  if (isLayoutApp(app) && isLayoutPage(page)) return { app, page };
+  return null;
+}
+
+export function layoutPagesEquivalent(a: LayoutPage, b: LayoutPage): boolean {
+  if (a === b) return true;
+  return (
+    (a === "home" || a === "list") && (b === "home" || b === "list")
+  );
 }
 
 /** `Moment` → `moment_list` / `moment_detail` / `moment_create` */
@@ -78,8 +104,17 @@ export function normalizePageIdentity(opts: {
   let surfaceId = (opts.surfaceId || "").trim();
   let title = (opts.title || "").trim();
 
-  // Bare table / missing → kind-suffixed id
+  // Layout pages keep app_page ids (music_rank). Bare table / missing → kind suffix.
+  const parsedLayout = surfaceId ? parseLayoutSurfaceId(surfaceId) : null;
   if (
+    parsedLayout &&
+    !(
+      kind === "list" &&
+      (parsedLayout.page === "detail" || parsedLayout.page === "player")
+    )
+  ) {
+    /* keep */
+  } else if (
     !surfaceId ||
     (table && surfaceId.toLowerCase() === table.toLowerCase()) ||
     (!/_(list|detail|create)$/i.test(surfaceId) && table)
@@ -208,22 +243,80 @@ export type SavedPageSnapshot = {
   ui: { page?: number; count?: number };
 };
 
+export type PageSyncStatus = "pending" | "syncing" | "ok" | "fail";
+
 export type SavedPage = {
   id: string;
   title: string;
   versions: SavedPageSnapshot[];
-  /** JPEG data URL of the workspace (#results) for the page picker grid. */
+  /** JPEG data URL or remote preview URL for the page picker grid. */
   thumbDataUrl?: string;
+  /** APIJSON `Page.id` after a successful upload. */
+  remoteId?: number | string;
+  syncStatus?: PageSyncStatus;
+  syncError?: string;
+  syncedHash?: string;
 };
 
-/** Non-empty, size-bounded data:image URL suitable for localStorage thumbs. */
-export function isValidPageThumb(url: unknown): url is string {
+export type SavedPagesChangeReason =
+  | "add"
+  | "update"
+  | "rename"
+  | "thumb"
+  | "delete"
+  | "sync-meta";
+
+type SavedPagesChangeHandler = (
+  pageId: string,
+  reason: SavedPagesChangeReason,
+  page?: SavedPage,
+) => void;
+
+let pagesChangeHandler: SavedPagesChangeHandler | null = null;
+
+export function setSavedPagesChangeHandler(
+  handler: SavedPagesChangeHandler | null,
+): void {
+  pagesChangeHandler = handler;
+}
+
+function notifyPagesChange(
+  pageId: string,
+  reason: SavedPagesChangeReason,
+  page?: SavedPage,
+) {
+  try {
+    pagesChangeHandler?.(pageId, reason, page);
+  } catch {
+    /* ignore sync/UI errors */
+  }
+}
+
+/** Local capture: data:image JPEG/PNG within localStorage size bounds. */
+export function isDataPageThumb(url: unknown): url is string {
   return (
     typeof url === "string" &&
     url.startsWith("data:image/") &&
     url.length > 64 &&
     url.length < 1_200_000
   );
+}
+
+/** Remote /upload preview (http(s) or same-origin download path). */
+export function isRemotePageThumb(url: unknown): url is string {
+  return (
+    typeof url === "string" &&
+    url.length > 8 &&
+    url.length < 2000 &&
+    (/^https?:\/\//i.test(url) ||
+      url.startsWith("/apijson/") ||
+      url.startsWith("/download/"))
+  );
+}
+
+/** Non-empty preview URL suitable for the page-picker grid. */
+export function isValidPageThumb(url: unknown): url is string {
+  return isDataPageThumb(url) || isRemotePageThumb(url);
 }
 
 export function getSavedPageThumb(pageId: string): string | null {
@@ -242,7 +335,34 @@ export function setSavedPageThumb(
   if (!page) return false;
   page.thumbDataUrl = thumbDataUrl;
   saveAll(pages);
+  notifyPagesChange(pageId, "thumb", page);
   return true;
+}
+
+/** Update sync metadata without bumping versions or re-uploading. */
+export function patchSavedPageSync(
+  pageId: string,
+  patch: Partial<
+    Pick<SavedPage, "remoteId" | "syncStatus" | "syncError" | "syncedHash">
+  >,
+): SavedPage | null {
+  const pages = loadAll();
+  const page = pages.find((p) => p.id === pageId);
+  if (!page) return null;
+  Object.assign(page, patch);
+  saveAll(pages);
+  notifyPagesChange(pageId, "sync-meta", page);
+  return page;
+}
+
+/** Insert or replace a page imported from APIJSON (does not trigger upload). */
+export function upsertImportedPage(page: SavedPage): SavedPage {
+  const pages = loadAll();
+  const i = pages.findIndex((p) => p.id === page.id);
+  if (i >= 0) pages[i] = page;
+  else pages.unshift(page);
+  saveAll(pages);
+  return page;
 }
 
 export type ActivePageRef = {
@@ -286,6 +406,31 @@ export function listSavedPages(): SavedPage[] {
 
 export function getSavedPage(pageId: string): SavedPage | null {
   return loadAll().find((p) => p.id === pageId) ?? null;
+}
+
+/** Saved page whose latest snapshot is this layout (or `app_page` id). */
+export function findSavedPageByLayout(
+  app: LayoutApp,
+  page: LayoutPage,
+): SavedPage | null {
+  const exact = getSavedPage(surfaceIdForLayout(app, page));
+  if (exact) return exact;
+  if (page === "home" || page === "list") {
+    const alt = page === "home" ? "list" : "home";
+    const other = getSavedPage(surfaceIdForLayout(app, alt));
+    if (other) return other;
+  }
+  for (const p of listSavedPages()) {
+    const snap = latestVersion(p);
+    if (
+      snap?.layoutApp === app &&
+      snap.layoutPage &&
+      layoutPagesEquivalent(snap.layoutPage, page)
+    ) {
+      return p;
+    }
+  }
+  return null;
 }
 
 export function getActivePageRef(): ActivePageRef | null {
@@ -341,6 +486,7 @@ export function renameSavedPage(pageId: string, title: string): SavedPage | null
   const next = title.trim() || page.title;
   page.title = next;
   saveAll(pages);
+  notifyPagesChange(pageId, "rename", page);
   return page;
 }
 
@@ -357,6 +503,7 @@ export function updatePageVersion(
   if (!snap) return null;
   Object.assign(snap, patch);
   saveAll(pages);
+  notifyPagesChange(pageId, "update", page);
   return snap;
 }
 
@@ -393,6 +540,7 @@ export function addPageVersion(
   const rest = pages.filter((p) => p.id !== pageId);
   saveAll([page, ...rest]);
   setActivePageRef({ pageId, version: nextVer });
+  notifyPagesChange(pageId, "add", page);
   return { page, snapshot: snap };
 }
 
@@ -412,11 +560,13 @@ export function latestVersion(page: SavedPage): SavedPageSnapshot | null {
 /** Remove an entire page. Returns true if removed. */
 export function deleteSavedPage(pageId: string): boolean {
   const pages = loadAll();
+  const page = pages.find((p) => p.id === pageId);
   const next = pages.filter((p) => p.id !== pageId);
   if (next.length === pages.length) return false;
   saveAll(next);
   const active = getActivePageRef();
   if (active?.pageId === pageId) setActivePageRef(null);
+  notifyPagesChange(pageId, "delete", page);
   return true;
 }
 
@@ -438,9 +588,11 @@ export function deletePageVersion(
     saveAll(pages.filter((p) => p.id !== pageId));
     const active = getActivePageRef();
     if (active?.pageId === pageId) setActivePageRef(null);
+    notifyPagesChange(pageId, "delete", page);
     return null;
   }
   saveAll(pages);
+  notifyPagesChange(pageId, "update", page);
   const active = getActivePageRef();
   if (active?.pageId === pageId && active.version === version) {
     const latest = latestVersion(page);

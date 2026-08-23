@@ -15,6 +15,7 @@ import { collectRowImageUrls } from "./smart-image-fields.js";
 import { renderUserList, renderUserProfile } from "./layout-users.js";
 import { renderMeSurface } from "./layout-me.js";
 import { fillChatBubble, mountChatComposer } from "./layout-chat.js";
+import { downloadOneMedia } from "./layout-media-library.js";
 import {
   parseCommentsFromResponse,
   type ActionRunContext,
@@ -38,9 +39,13 @@ import {
   getCartLines,
   appFromKind,
   isAddressPage,
+  isArticleLikeApp,
   isCartOrOrder,
+  isDataLayout,
   isCheckoutPage,
   isExploreLayoutPage,
+  isLocalLikeApp,
+  isNewsLikeApp,
   isOrdersPage,
   isMeHubPage,
   isSettingsPage,
@@ -75,10 +80,12 @@ export type LayoutListHandlers = {
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
   onSelectPage?: (page: LayoutPage) => void;
+  onSelectApp?: (app: LayoutApp) => void;
   onOpenProfile?: () => void;
   onOpenAuthor?: (userId: string | number) => void;
   onOpenCategory?: (id: string | number) => void;
   onComments?: (comments: SchemaComments) => void;
+  onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
 };
 
 export type LayoutCheckoutInfo = {
@@ -237,6 +244,61 @@ function chip(label: string, className = "app-chip"): HTMLButtonElement {
   return b;
 }
 
+const LYRIC_FIELD_NAMES = ["lyrics", "lyric", "lrc", "lyrictext"];
+
+function lyricRawFrom(
+  pres: RowPresentation,
+  cells?: Record<string, unknown>,
+): string {
+  if (pres.lyrics?.trim()) return pres.lyrics;
+  if (cells) {
+    for (const key of Object.keys(cells)) {
+      const short = (key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key)
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      if (!LYRIC_FIELD_NAMES.includes(short)) continue;
+      const v = cells[key];
+      if (typeof v === "string" && v.trim()) return v;
+    }
+  }
+  return "";
+}
+
+type LyricLine = { t: number; text: string };
+
+function parseLrcFrac(raw?: string): number {
+  if (!raw) return 0;
+  const pad = raw.padEnd(3, "0").slice(0, 3);
+  const n = Number(pad);
+  return Number.isFinite(n) ? n / 1000 : 0;
+}
+
+function parseLyricLines(raw: string): LyricLine[] {
+  const out: LyricLine[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const s = line.trim();
+    if (!s) continue;
+    const stamped = s.match(/^((?:\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\])+)(.*)$/);
+    if (stamped) {
+      const text = stamped[2]!.trim();
+      if (!text) continue;
+      for (const m of stamped[1]!.matchAll(
+        /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g,
+      )) {
+        const t =
+          Number(m[1]) * 60 + Number(m[2]) + parseLrcFrac(m[3]);
+        out.push({ t, text });
+      }
+      continue;
+    }
+    if (/^\[(?:ti|ar|al|by|offset):/i.test(s)) continue;
+    out.push({ t: -1, text: s });
+  }
+  const timed = out.filter((l) => l.t >= 0).sort((a, b) => a.t - b.t);
+  if (timed.length) return timed;
+  return out.filter((l) => l.text);
+}
+
 function paras(text: string): string[] {
   const blocks = text
     .split(/\n{2,}|\r\n|\n/)
@@ -355,8 +417,10 @@ function renderMePage(opts: ListOpts, app: LayoutApp): HTMLElement {
     recordId: opts.recordId,
     handlers: {
       onSelectPage: opts.handlers.onSelectPage,
+      onSelectApp: opts.handlers.onSelectApp,
       onOpenProfile: opts.handlers.onOpenProfile,
       onOpenRow: (key) => opts.handlers.onOpenRow(key),
+      onWrite: opts.handlers.onWrite,
     },
   });
 }
@@ -526,11 +590,11 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
   else if (opts.kind === "video") wrap.appendChild(renderYoutubeGrid(opts));
   else if (opts.kind === "commerce") wrap.appendChild(renderProductGrid(opts));
   else if (opts.kind === "social") wrap.appendChild(renderSocialFeed(opts));
-  else if (opts.kind === "news" || opts.kind === "info") {
+  else if (isNewsLikeApp(app) || isNewsLikeApp(opts.kind)) {
     wrap.appendChild(renderNewsPortal(opts));
-  } else if (opts.kind === "blog" || opts.kind === "article") {
+  } else if (isArticleLikeApp(app) || isArticleLikeApp(opts.kind)) {
     wrap.appendChild(renderArticleList(opts));
-  }   else wrap.appendChild(renderMediaList(opts));
+  } else wrap.appendChild(renderMediaList(opts));
 
   return finishLayoutList(container, wrap, opts);
 }
@@ -932,11 +996,11 @@ export function renderLayoutDetailHero(
   else if (opts.kind === "commerce") renderAmazonPdp(app, pres, related, opts);
   else if (opts.kind === "chat") renderWechatThread(app, pres, related, opts);
   else if (opts.kind === "social") renderTikTokStage(app, pres, opts);
-  else if (opts.kind === "news" || opts.kind === "info") {
+  else if (isNewsLikeApp(specApp) || isNewsLikeApp(opts.kind)) {
     renderNewsArticle(app, pres, related, opts);
-  } else if (opts.kind === "blog" || opts.kind === "article") {
+  } else if (isArticleLikeApp(specApp) || isArticleLikeApp(opts.kind)) {
     renderJuejinArticle(app, pres, related, opts);
-  } else if (opts.kind === "campaign") {
+  } else if (isLocalLikeApp(specApp) || isLocalLikeApp(opts.kind)) {
     renderCampaignLanding(app, pres, opts);
   } else {
     renderJuejinArticle(app, pres, related, opts);
@@ -1078,8 +1142,9 @@ type SocialMount = {
   recordId: string | number | null;
   apijsonBase: string;
   handlers: LayoutDetailHandlers;
-  likeBtn: HTMLElement;
+  likeBtn?: HTMLElement;
   collectBtn?: HTMLElement;
+  collectBtns?: HTMLElement[];
   shareBtn?: HTMLElement;
   dislikeBtn?: HTMLElement;
   followBtns: HTMLElement[];
@@ -1092,6 +1157,92 @@ type SocialMount = {
   collectCountEl?: HTMLElement;
   commentCountEl?: HTMLElement;
 };
+
+const PRAISE_LIST_FIELDS = [
+  "praiseuseridlist",
+  "likeuseridlist",
+  "likedby",
+];
+const COLLECT_LIST_FIELDS = [
+  "collectuseridlist",
+  "favoriteuseridlist",
+  "staruseridlist",
+];
+
+function collectButtons(ctx: SocialMount): HTMLElement[] {
+  return [ctx.collectBtn, ...(ctx.collectBtns ?? [])].filter(
+    (n): n is HTMLElement => !!n,
+  );
+}
+
+function inferSocialListField(
+  slot: "like" | "collect",
+  cells?: Record<string, unknown>,
+): string {
+  const names = slot === "collect" ? COLLECT_LIST_FIELDS : PRAISE_LIST_FIELDS;
+  let best: { key: string; score: number } | null = null;
+  for (const key of Object.keys(cells ?? {})) {
+    const short = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+    const n = short.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const hit = names.findIndex((x) => n === x || n.includes(x));
+    if (hit < 0) continue;
+    const score = n === names[0] ? 10 : 6 - hit;
+    if (!best || score > best.score) best = { key: short, score };
+  }
+  return best?.key ?? (slot === "collect" ? "collectUserIdList" : "praiseUserIdList");
+}
+
+async function writeSocialList(
+  ctx: SocialMount,
+  slot: "like" | "collect",
+  already: boolean,
+): Promise<boolean> {
+  const write = ctx.handlers.onWrite;
+  const table = ctx.table?.trim();
+  const me = visitorId();
+  if (!write || !table || ctx.recordId == null || me == null) return false;
+  const field = inferSocialListField(slot, ctx.cells);
+  const op = already ? `${field}}{` : `${field}<>`;
+  try {
+    const ok = await write({
+      method: "put",
+      table,
+      body: {
+        [table]: { id: ctx.recordId, [op]: me },
+        tag: table,
+      },
+      stayOnPage: true,
+      keepTag: true,
+      skipTemplate: true,
+    });
+    return ok !== false;
+  } catch {
+    return false;
+  }
+}
+
+async function runSocialToggle(
+  ctx: SocialMount,
+  slot: "like" | "collect",
+  already: boolean,
+): Promise<boolean> {
+  const bound = ctx.handlers.actionBindings?.[slot];
+  if (bound) {
+    const result = await runActionSlot(
+      ctx.handlers,
+      slot,
+      recordContext(ctx, { already }),
+    );
+    return result.ok;
+  }
+  if (await writeSocialList(ctx, slot, already)) return true;
+  const result = await runActionSlot(
+    ctx.handlers,
+    slot,
+    recordContext(ctx, { already }),
+  );
+  return result.ok;
+}
 
 function recordContext(
   ctx: SocialMount,
@@ -1135,20 +1286,34 @@ function mountSocialActions(ctx: SocialMount) {
     }
   };
 
+  const hearts = collectButtons(ctx);
+
   const paintCounts = () => {
-    ctx.likeBtn.classList.toggle("is-on", state.liked);
-    ctx.collectBtn?.classList.toggle("is-on", state.collected);
+    ctx.likeBtn?.classList.toggle("is-on", state.liked);
+    for (const btn of hearts) {
+      btn.classList.toggle("is-on", state.collected);
+      btn.setAttribute("aria-pressed", state.collected ? "true" : "false");
+      btn.title = state.collected
+        ? t("layout.collected")
+        : t("layout.slot.collect");
+      if (btn.classList.contains("app-chip") || btn.classList.contains("yt-save")) {
+        btn.textContent = `${t("layout.slot.collect")}${
+          state.collectCount ? ` ${formatCount(state.collectCount)}` : ""
+        }`;
+      }
+    }
     if (ctx.likeCountEl) {
       ctx.likeCountEl.textContent = formatCount(state.likeCount) || "0";
     }
     if (ctx.collectCountEl) {
       ctx.collectCountEl.textContent = formatCount(state.collectCount) || "0";
     }
-    if (ctx.likeBtn.classList.contains("app-chip") || ctx.likeBtn.classList.contains("yt-like")) {
+    if (
+      ctx.likeBtn &&
+      (ctx.likeBtn.classList.contains("app-chip") ||
+        ctx.likeBtn.classList.contains("yt-like"))
+    ) {
       ctx.likeBtn.textContent = `👍 ${t("layout.like")}${state.likeCount ? ` ${formatCount(state.likeCount)}` : ""}`;
-    }
-    if (ctx.collectBtn && (ctx.collectBtn.classList.contains("app-chip") || ctx.collectBtn.classList.contains("yt-save"))) {
-      ctx.collectBtn.textContent = `${t("layout.save")}${state.collectCount ? ` ${formatCount(state.collectCount)}` : ""}`;
     }
   };
 
@@ -1156,45 +1321,40 @@ function mountSocialActions(ctx: SocialMount) {
   paintCounts();
   bindAuthorClicks(ctx.authorNodes, ctx.pres.authorId, ctx.handlers.onOpenAuthor);
 
-  ctx.likeBtn.onclick = async () => {
-    if (needVisitor() == null) return;
-    const result = await runActionSlot(
-      ctx.handlers,
-      "like",
-      recordContext(ctx, { already: state.liked }),
-    );
-    if (!result.ok) return;
-    state.liked = !state.liked;
-    state.likeCount = Math.max(0, state.likeCount + (state.liked ? 1 : -1));
-    paintCounts();
-    flashLayoutNote(state.liked ? t("layout.liked") : t("layout.like"));
-  };
+  if (ctx.likeBtn) {
+    ctx.likeBtn.onclick = async () => {
+      if (needVisitor() == null) return;
+      const ok = await runSocialToggle(ctx, "like", state.liked);
+      if (!ok) return;
+      state.liked = !state.liked;
+      state.likeCount = Math.max(0, state.likeCount + (state.liked ? 1 : -1));
+      paintCounts();
+      flashLayoutNote(state.liked ? t("layout.liked") : t("layout.like"));
+    };
+  }
 
   if (ctx.dislikeBtn) {
     ctx.dislikeBtn.onclick = async () => {
-      if (!state.liked) return;
+      if (!state.liked || !ctx.likeBtn) return;
       ctx.likeBtn.click();
     };
   }
 
-  if (ctx.collectBtn) {
-    ctx.collectBtn.onclick = async () => {
-      if (needVisitor() == null) return;
-      const result = await runActionSlot(
-        ctx.handlers,
-        "collect",
-        recordContext(ctx, { already: state.collected }),
-      );
-      if (!result.ok) return;
-      state.collected = !state.collected;
-      state.collectCount = Math.max(
-        0,
-        state.collectCount + (state.collected ? 1 : -1),
-      );
-      paintCounts();
-      flashLayoutNote(state.collected ? t("layout.collected") : t("layout.save"));
-    };
-  }
+  const onCollect = async () => {
+    if (needVisitor() == null) return;
+    const ok = await runSocialToggle(ctx, "collect", state.collected);
+    if (!ok) return;
+    state.collected = !state.collected;
+    state.collectCount = Math.max(
+      0,
+      state.collectCount + (state.collected ? 1 : -1),
+    );
+    paintCounts();
+    flashLayoutNote(
+      state.collected ? t("layout.collected") : t("layout.slot.collect"),
+    );
+  };
+  for (const btn of hearts) btn.onclick = () => void onCollect();
 
   if (ctx.shareBtn) {
     ctx.shareBtn.onclick = async () => {
@@ -1364,6 +1524,9 @@ function renderYoutubeWatch(
     onNext: related[0]
       ? () => openRelated(opts.handlers, related[0]!.id)
       : undefined,
+    qualities: pres.qualities,
+    subtitles: pres.subtitles,
+    apijsonBase: opts.apijsonBase,
   });
   main.appendChild(player);
   main.appendChild(el("h1", "yt-title", pres.title));
@@ -1392,8 +1555,17 @@ function renderYoutubeWatch(
   const likeBtn = chip(`👍 ${t("layout.like")}`, "app-chip yt-like");
   const dislikeBtn = chip("👎", "app-chip");
   const shareBtn = chip(t("layout.share"), "app-chip");
-  const saveBtn = chip(t("layout.save"), "app-chip yt-save");
-  actions.append(likeBtn, dislikeBtn, shareBtn, saveBtn);
+  const saveBtn = chip(t("layout.slot.collect"), "app-chip yt-save");
+  const exportBtn = chip(t("layout.media.download"), "app-chip");
+  exportBtn.onclick = () => {
+    const url = pres.videoUrl || pres.audioUrl;
+    if (!url) {
+      flashLayoutNote(t("layout.media.downloadEmpty"));
+      return;
+    }
+    void downloadOneMedia(url, pres.title || "video", opts.apijsonBase);
+  };
+  actions.append(likeBtn, dislikeBtn, shareBtn, saveBtn, exportBtn);
   row.appendChild(actions);
   main.appendChild(row);
 
@@ -1469,8 +1641,14 @@ function renderYoutubeWatch(
 function renderSpotifyPlayer(
   app: HTMLElement,
   pres: RowPresentation,
-  related: Array<{ pres: RowPresentation; id: string | number }>,
-  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+  related: Array<{ pres: RowPresentation; id: string | number; row?: FlatRow }>,
+  opts: {
+    apijsonBase: string;
+    handlers: LayoutDetailHandlers;
+    primaryTable?: string | null;
+    recordId?: string | number | null;
+    row?: FlatRow;
+  },
 ) {
   const page = el("div", "sp-page");
   if (pres.coverUrl) {
@@ -1504,8 +1682,20 @@ function renderSpotifyPlayer(
   playBtn.type = "button";
   playBtn.title = t("layout.play");
   playRow.appendChild(playBtn);
-  playRow.appendChild(chip("♡", "sp-heart"));
-  playRow.appendChild(chip("···", "app-chip"));
+  const heartBtn = chip("♡", "sp-heart");
+  heartBtn.title = t("layout.slot.collect");
+  heartBtn.setAttribute("aria-label", t("layout.slot.collect"));
+  playRow.appendChild(heartBtn);
+  const exportBtn = chip(t("layout.media.download"), "app-chip");
+  exportBtn.onclick = () => {
+    const url = pres.audioUrl || pres.videoUrl;
+    if (!url) {
+      flashLayoutNote(t("layout.media.downloadEmpty"));
+      return;
+    }
+    void downloadOneMedia(url, pres.title || "track", opts.apijsonBase);
+  };
+  playRow.appendChild(exportBtn);
   info.appendChild(playRow);
   hero.appendChild(info);
   page.appendChild(hero);
@@ -1520,8 +1710,13 @@ function renderSpotifyPlayer(
   queue.appendChild(head);
 
   const tracks = [
-    { pres, id: pres.id ?? "", current: true },
-    ...related.map((r) => ({ pres: r.pres, id: r.id, current: false })),
+    { pres, id: pres.id ?? "", current: true, cells: opts.row?.cells },
+    ...related.map((r) => ({
+      pres: r.pres,
+      id: r.id,
+      current: false,
+      cells: r.row?.cells,
+    })),
   ];
   let trackIndex = 0;
   const audio = el("audio", "sp-audio-hidden");
@@ -1533,6 +1728,65 @@ function renderSpotifyPlayer(
   const barArtist = el("div", "sp-bar-artist", pres.author);
   const lyricTitle = el("div", "sp-lyric-title", pres.title);
   const lyricArtist = el("div", "sp-lyric-sub", [pres.author, pres.album].filter(Boolean).join(" · "));
+  const lyricLines = el("div", "sp-lyric-lines");
+  const lyricHint = el("button", "sp-lyric-hint", t("layout.lyrics"));
+  lyricHint.type = "button";
+  const lyricFsBtn = el("button", "sp-icon sp-lyric-fs-btn", "词");
+  lyricFsBtn.type = "button";
+  lyricFsBtn.title = t("layout.lyricsFullscreen");
+  lyricFsBtn.setAttribute("aria-label", t("layout.lyricsFullscreen"));
+
+  const paintLyricLines = (
+    p: RowPresentation,
+    cells?: Record<string, unknown>,
+  ) => {
+    const parsed = parseLyricLines(lyricRawFrom(p, cells));
+    lyricLines.replaceChildren();
+    if (!parsed.length) {
+      lyricLines.appendChild(
+        el("div", "sp-lyric-line is-empty", t("layout.lyricsEmpty")),
+      );
+      return;
+    }
+    for (const line of parsed) {
+      const node = el("div", "sp-lyric-line", line.text);
+      node.dataset.t = String(line.t);
+      lyricLines.appendChild(node);
+    }
+  };
+
+  const highlightLyrics = () => {
+    const nodes = Array.from(lyricLines.querySelectorAll(".sp-lyric-line"));
+    const usable = nodes.filter((n) => !n.classList.contains("is-empty"));
+    if (!usable.length) return;
+    const now = audio.currentTime || 0;
+    const times = usable.map((n) => Number((n as HTMLElement).dataset.t ?? -1));
+    const timed = times.some((t) => t >= 0);
+    let i = 0;
+    if (timed) {
+      i = 0;
+      for (let j = 0; j < times.length; j++) {
+        if (times[j]! >= 0 && times[j]! <= now) i = j;
+      }
+    } else {
+      const dur =
+        Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : tracks[trackIndex]?.pres.durationSec ?? 0;
+      i =
+        dur > 0
+          ? Math.min(
+              usable.length - 1,
+              Math.floor((now / dur) * usable.length),
+            )
+          : 0;
+    }
+    usable.forEach((n, j) => n.classList.toggle("is-current", j === i));
+    if (page.classList.contains("is-lyrics-fs")) {
+      usable[i]?.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  };
+  paintLyricLines(pres, opts.row?.cells);
   const timeCur = el("span", "sp-time", "0:00");
   const timeTot = el("span", "sp-time", formatDuration(pres.durationSec) || "0:00");
   const seek = document.createElement("input");
@@ -1572,6 +1826,8 @@ function renderSpotifyPlayer(
     seek.value = "0";
     timeCur.textContent = "0:00";
     markCurrent(index);
+    paintLyricLines(p, tracks[index]?.cells);
+    highlightLyrics();
     if (autoplay) void audio.play().catch(() => undefined);
   };
 
@@ -1588,6 +1844,8 @@ function renderSpotifyPlayer(
     totalEl: timeTot,
     durationHint: pres.durationSec,
   });
+  audio.addEventListener("timeupdate", highlightLyrics);
+  audio.addEventListener("seeked", highlightLyrics);
   audio.onended = () => {
     const next = (trackIndex + 1) % tracks.length;
     const item = tracks[next];
@@ -1620,12 +1878,71 @@ function renderSpotifyPlayer(
   });
 
   const lyrics = el("div", "sp-lyrics");
-  lyrics.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "sp-lyric-art", ""));
-  lyrics.appendChild(lyricTitle);
-  lyrics.appendChild(lyricArtist);
-  lyrics.appendChild(el("div", "sp-lyric-hint", t("layout.lyrics")));
+  const lyricClose = el("button", "sp-lyric-close", "✕");
+  lyricClose.type = "button";
+  lyricClose.title = t("layout.exitFullscreen");
+  lyricClose.setAttribute("aria-label", t("layout.exitFullscreen"));
+  lyrics.append(
+    lyricClose,
+    thumb(pres.coverUrl, opts.apijsonBase, "sp-lyric-art", ""),
+    lyricTitle,
+    lyricArtist,
+    lyricLines,
+    lyricHint,
+  );
   split.append(queue, lyrics);
   page.appendChild(split);
+
+  let lyricsFs = false;
+  const setLyricsFs = (on: boolean, skipBrowserFs = false) => {
+    lyricsFs = on;
+    page.classList.toggle("is-lyrics-fs", on);
+    lyricHint.textContent = on ? t("layout.exitFullscreen") : t("layout.lyrics");
+    lyricFsBtn.classList.toggle("is-on", on);
+    lyricFsBtn.title = on
+      ? t("layout.exitFullscreen")
+      : t("layout.lyricsFullscreen");
+    lyricFsBtn.setAttribute("aria-label", lyricFsBtn.title);
+    if (skipBrowserFs) return;
+    if (on) {
+      void page.requestFullscreen?.().catch(() => undefined);
+    } else if (document.fullscreenElement === page) {
+      void document.exitFullscreen?.();
+    }
+  };
+  const onFsChange = () => {
+    if (document.fullscreenElement !== page && lyricsFs) {
+      setLyricsFs(false, true);
+    }
+  };
+  const onLyricKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape" && lyricsFs) {
+      ev.preventDefault();
+      setLyricsFs(false);
+    }
+  };
+  document.addEventListener("fullscreenchange", onFsChange);
+  document.addEventListener("keydown", onLyricKey);
+  const lyricObs = new MutationObserver(() => {
+    if (document.body.contains(page)) return;
+    document.removeEventListener("fullscreenchange", onFsChange);
+    document.removeEventListener("keydown", onLyricKey);
+    lyricObs.disconnect();
+    if (document.fullscreenElement === page) void document.exitFullscreen?.();
+  });
+  lyricObs.observe(document.body, { childList: true, subtree: true });
+
+  lyricHint.onclick = (ev) => {
+    ev.stopPropagation();
+    setLyricsFs(!lyricsFs);
+  };
+  lyricClose.onclick = (ev) => {
+    ev.stopPropagation();
+    setLyricsFs(false);
+  };
+  lyrics.onclick = () => {
+    if (!lyricsFs) setLyricsFs(true);
+  };
 
   const bar = el("div", "sp-bar");
   const barLeft = el("div", "sp-bar-left");
@@ -1636,15 +1953,32 @@ function renderSpotifyPlayer(
   barTx.appendChild(barTitle);
   barTx.appendChild(barArtist);
   barLeft.appendChild(barTx);
+  const barHeart = chip("♡", "sp-heart");
+  barHeart.title = t("layout.slot.collect");
+  barHeart.setAttribute("aria-label", t("layout.slot.collect"));
+  barLeft.appendChild(barHeart);
+  lyricFsBtn.onclick = () => setLyricsFs(!lyricsFs);
   const barMid = el("div", "sp-bar-mid");
   const ctrls = el("div", "sp-bar-ctrls");
   ctrls.append(prev, midPlay, next);
   const seekRow = el("div", "sp-seek-row");
   seekRow.append(timeCur, seek, timeTot);
   barMid.append(ctrls, seekRow);
-  bar.append(barLeft, barMid, audio);
+  bar.append(barLeft, barMid, lyricFsBtn, audio);
   page.appendChild(bar);
   app.appendChild(page);
+  mountSocialActions({
+    pres,
+    cells: opts.row?.cells,
+    table: opts.primaryTable ?? null,
+    recordId: opts.recordId ?? pres.id,
+    apijsonBase: opts.apijsonBase,
+    handlers: opts.handlers,
+    collectBtn: heartBtn,
+    collectBtns: [barHeart],
+    followBtns: [],
+    authorNodes: [],
+  });
 }
 
 function renderAmazonPdp(
@@ -1934,6 +2268,9 @@ function renderTikTokStage(
       media: video,
       variant: "tiktok",
       durationHint: pres.durationSec,
+      qualities: pres.qualities,
+      subtitles: pres.subtitles,
+      apijsonBase: opts.apijsonBase,
     });
     void video.play().catch(() => undefined);
   } else {
@@ -2574,10 +2911,9 @@ export function shouldHideDetailForm(
   spec?: LayoutSpec,
 ): boolean {
   if (isCartOrOrder(kind) || isCartOrOrder(spec)) return true;
-  if (isOrdersPage(spec?.page) || isAddressPage(spec?.page)) return true;
-  if (spec?.page === "users" && spec.app !== "data") return true;
-  if (spec?.page === "profile" && spec.app !== "data" && kind !== "data") {
-    return true;
-  }
+  // Consumer scenes keep the skin only. The field editor (编辑字段 / 收起字段)
+  // is for toB 数据/内容管理 (data layout), not chat / shop / player / CMS skins.
+  if (spec) return !isDataLayout(spec);
+  if (kind) return !isDataLayout(kind);
   return false;
 }

@@ -7,6 +7,7 @@ import { loadAccount } from "./account.js";
 import { fetchBoundGet, inferPersonTable } from "./layout-actions.js";
 import { visitorId } from "./layout-social.js";
 import {
+  isCatalogApp,
   isSettingsPage,
   mediaSrc,
   pickRowPresentation,
@@ -14,15 +15,23 @@ import {
   type LayoutPage,
   type RowPresentation,
 } from "./page-layout.js";
+import { mountSkillLibrary } from "./layout-skills.js";
+import {
+  isMediaLibraryApp,
+  mountMediaLibraryMenu,
+} from "./layout-media-library.js";
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
+import type { WritePayload } from "./result-view.js";
 
 type FlatRow = { key: string; cells: Record<string, unknown> };
 
 export type MeHandlers = {
   onSelectPage?: (page: LayoutPage) => void;
+  onSelectApp?: (app: LayoutApp) => void;
   onOpenProfile?: () => void;
   onOpenRow?: (key: string) => void;
+  onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
 };
 
 export type MeOpts = {
@@ -198,20 +207,6 @@ function shortcutLinks(app: LayoutApp): MeLink[] {
         { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
         { page: "create", icon: "✎", label: t("layout.me.publish") },
       ];
-    case "news":
-    case "info":
-      return [
-        { page: "history", icon: "👁", label: t("layout.me.browse") },
-        { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
-        { page: "create", icon: "✎", label: t("layout.me.publish") },
-      ];
-    case "blog":
-    case "article":
-      return [
-        { page: "history", icon: "👁", label: t("layout.me.browse") },
-        { page: "create", icon: "✎", label: t("layout.me.create") },
-        { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
-      ];
     case "social":
       return [
         { page: "feed", icon: "☰", label: t("layout.page.feed") },
@@ -224,13 +219,14 @@ function shortcutLinks(app: LayoutApp): MeLink[] {
         { page: "users", icon: "☺", label: t("layout.tab.contacts") },
         { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
       ];
-    case "campaign":
-      return [
-        { page: "history", icon: "👁", label: t("layout.me.browse") },
-        { page: "create", icon: "✎", label: t("layout.me.publish") },
-        { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
-      ];
     default:
+      if (isCatalogApp(app)) {
+        return [
+          { page: "history", icon: "👁", label: t("layout.me.browse") },
+          { page: "create", icon: "✎", label: t("layout.me.publish") },
+          { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
+        ];
+      }
       return [
         { page: "profile", icon: "☺", label: t("layout.me.profile") },
         { page: "settings", icon: "⚙", label: t("layout.me.settings") },
@@ -242,6 +238,7 @@ function menuLinks(app: LayoutApp): MeLink[] {
   const rows: MeLink[] = [
     { page: "profile", icon: "☺", label: t("layout.page.profile") },
     { page: "settings", icon: "⚙", label: t("layout.page.settings") },
+    { page: "skills", icon: "✦", label: t("layout.page.skills") },
   ];
   if (app === "commerce") {
     rows.push(
@@ -264,6 +261,7 @@ function settingsLinks(app: LayoutApp): MeLink[] {
     { page: "favorite", icon: "♡", label: t("layout.page.favorite") },
     { page: "security", icon: "◌", label: t("layout.page.security") },
     { page: "help", icon: "?", label: t("layout.page.help") },
+    { page: "skills", icon: "✦", label: t("layout.page.skills") },
     { page: "blacklist", icon: "⊘", label: t("layout.page.blacklist") },
   ];
   if (app === "commerce") {
@@ -345,6 +343,21 @@ function renderMeHub(opts: MeOpts): HTMLElement {
     grid.appendChild(mountLink(link, (p) => goPage(opts, p), "grid"));
   }
   page.appendChild(grid);
+
+  if (isMediaLibraryApp(opts.app)) {
+    page.appendChild(
+      mountMediaLibraryMenu({
+        app: opts.app,
+        rows: opts.rows,
+        columns: opts.columns,
+        primaryTable: opts.primaryTable,
+        comments: opts.comments,
+        apijsonBase: opts.apijsonBase,
+        recordId: opts.recordId,
+        onWrite: opts.handlers.onWrite,
+      }),
+    );
+  }
 
   const menu = el("div", "me-menu");
   for (const link of menuLinks(opts.app)) {
@@ -495,6 +508,15 @@ function renderSettingsSection(opts: MeOpts): HTMLElement {
   }
   if (page === "security") {
     host.appendChild(el("div", "layout-meta", t("layout.me.securityHint")));
+    return host;
+  }
+  if (page === "skills") {
+    host.appendChild(
+      mountSkillLibrary({
+        app: opts.app,
+        onUse: (app) => opts.handlers.onSelectApp?.(app),
+      }),
+    );
     return host;
   }
   if (page === "help") {

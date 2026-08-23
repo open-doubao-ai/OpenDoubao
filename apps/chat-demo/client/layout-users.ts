@@ -18,6 +18,9 @@ import type { LayoutDetailHandlers } from "./layout-views.js";
 import {
   formatCount,
   formatPrice,
+  isArticleLikeApp,
+  isLocalLikeApp,
+  isNewsLikeApp,
   mediaSrc,
   pickRowPresentation,
   type LayoutApp,
@@ -115,18 +118,15 @@ function roleLabel(app: LayoutApp): string {
       return t("layout.users.artists");
     case "commerce":
       return t("layout.users.sellers");
-    case "news":
-    case "info":
-    case "blog":
-    case "article":
-      return t("layout.users.authors");
     case "social":
       return t("layout.users.contacts");
     case "chat":
       return t("layout.users.addressBook");
-    case "campaign":
-      return t("layout.users.hosts");
     default:
+      if (isNewsLikeApp(app) || isArticleLikeApp(app)) {
+        return t("layout.users.authors");
+      }
+      if (isLocalLikeApp(app)) return t("layout.users.hosts");
       return t("layout.users.people");
   }
 }
@@ -141,7 +141,7 @@ function statLine(pres: RowPresentation, app: LayoutApp): string {
   if (app === "video" && pres.playCount != null) {
     return `${formatCount(pres.playCount)} ${t("layout.users.subscribers")}`;
   }
-  if ((app === "article" || app === "blog") && pres.playCount != null) {
+  if ((isArticleLikeApp(app) || isNewsLikeApp(app)) && pres.playCount != null) {
     return `${formatCount(pres.playCount)} ${t("layout.reads")}`;
   }
   const bits = [
@@ -157,11 +157,11 @@ export function renderUserList(opts: UserListOpts): HTMLElement {
   if (app === "video") return renderYtChannels(opts);
   if (app === "music") return renderSpArtists(opts);
   if (app === "commerce") return renderAzSellers(opts);
-  if (app === "news" || app === "info") return renderNewsAuthors(opts);
-  if (app === "blog" || app === "article") return renderJjAuthors(opts);
+  if (isNewsLikeApp(app)) return renderNewsAuthors(opts);
+  if (isArticleLikeApp(app)) return renderJjAuthors(opts);
   if (app === "social") return renderWxContacts(opts);
   if (app === "chat") return renderChatContacts(opts);
-  if (app === "campaign") return renderCampHosts(opts);
+  if (isLocalLikeApp(app)) return renderCampHosts(opts);
   return renderDataDirectory(opts);
 }
 
@@ -360,23 +360,15 @@ export function renderUserProfile(host: HTMLElement, opts: UserProfileOpts): voi
     case "commerce":
       renderAzSeller(app, opts);
       break;
-    case "news":
-    case "info":
-      renderNewsAuthor(app, opts);
-      break;
-    case "blog":
-    case "article":
-      renderJjAuthor(app, opts);
-      break;
     case "social":
     case "chat":
       renderPersonProfile(app, opts);
       break;
-    case "campaign":
-      renderCampHost(app, opts);
-      break;
     default:
-      renderDataProfile(app, opts);
+      if (isNewsLikeApp(opts.app)) renderNewsAuthor(app, opts);
+      else if (isArticleLikeApp(opts.app)) renderJjAuthor(app, opts);
+      else if (isLocalLikeApp(opts.app)) renderCampHost(app, opts);
+      else renderDataProfile(app, opts);
   }
   host.appendChild(app);
 }

@@ -104,6 +104,65 @@
             <button type="button" data-i18n="chat.products" data-i18n-msg="chat.msgProducts" data-msg="List products">Products</button>
           </div>
           <form id="chat-form" class="chat-form">
+            <div class="chat-mode" id="chat-mode">
+              <button
+                type="button"
+                class="chat-mode-btn"
+                id="chat-mode-btn"
+                data-i18n-aria="chat.modeLegend"
+                aria-label="Chat mode"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span id="chat-mode-label" data-i18n="chat.modeAuto">Auto</span>
+              </button>
+              <div
+                class="page-menu chat-mode-menu"
+                id="chat-mode-menu"
+                role="listbox"
+              >
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="generate"
+                  data-i18n="chat.modeGenerate"
+                  data-i18n-title="chat.modeGenerateHint"
+                >
+                  Generate
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="modify"
+                  data-i18n="chat.modeEdit"
+                  data-i18n-title="chat.modeEditHint"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="explain"
+                  data-i18n="chat.modeAsk"
+                  data-i18n-title="chat.modeAskHint"
+                >
+                  Ask
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="auto"
+                  data-i18n="chat.modeAuto"
+                  data-i18n-title="chat.modeAutoHint"
+                >
+                  Auto
+                </button>
+              </div>
+            </div>
             <input
               id="chat-input"
               type="text"

@@ -121,6 +121,7 @@ import {
   clearCart,
   inferLayoutSpec,
   isCartOrOrder,
+  isExploreListPage,
   isLayoutKind,
   legacyKindFromSpec,
   pickRowPresentation,
@@ -130,6 +131,7 @@ import {
   contactLayoutFor,
   type ActionBinding,
   type ActionSlot,
+  type LayoutApp,
   type LayoutKind,
   type LayoutPage,
   type LayoutSpec,
@@ -263,7 +265,7 @@ export function mountCreateView(
     /** Restore multi-table slots (e.g. register = User + Privacy) */
     initialSlots?: DetailTableSlot[] | null;
     pageTitle?: string;
-    onSubmit: (payload: WritePayload) => void | Promise<void>;
+    onSubmit: WriteHandler;
     onBack?: () => void;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
@@ -1075,8 +1077,8 @@ export function renderResultView(
       ids: Array<string | number>;
       field?: string;
     }) => void;
-    onSaveDetail?: (payload: WritePayload) => void | Promise<void>;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onSaveDetail?: WriteHandler;
+    onWrite?: WriteHandler;
     primaryTable?: string | null;
     bodyTemplate?: Record<string, unknown> | null;
     apijsonBaseUrl?: string;
@@ -1114,6 +1116,7 @@ export function renderResultView(
     onOpenAppSearch?: (q: string) => void;
     layoutPrompt?: string;
     onSelectAppPage?: (page: LayoutPage) => void;
+    onSelectLayoutApp?: (app: LayoutApp) => void;
     onOpenAppScan?: () => void;
     onOpenCategory?: (id: string | number) => void;
     onComments?: (comments: SchemaComments) => void;
@@ -1129,12 +1132,15 @@ export function renderResultView(
   if (opts.onOpenAppScan) pendingOpenScan = opts.onOpenAppScan;
   const preferred = opts.viewMode;
   const parsed = parseResponse(opts.response);
-  const mode: ViewMode =
-    preferred === "detail"
-      ? "detail"
-      : parsed.mode === "list"
-        ? "list"
-        : "detail";
+  const incomingExplore = isExploreListPage(opts.layoutSpec?.page);
+  let mode: ViewMode =
+    incomingExplore
+      ? "list"
+      : preferred === "detail"
+        ? "detail"
+        : parsed.mode === "list"
+          ? "list"
+          : "detail";
   const comments = opts.comments ?? null;
   const sorts = opts.sorts ?? [];
   const filters = opts.filters ?? [];
@@ -1191,13 +1197,22 @@ export function renderResultView(
     pageKind,
     prompt: opts.layoutPrompt,
   });
-  const layoutSpec: LayoutSpec = opts.layoutKindManual && opts.layoutSpec
-    ? opts.layoutSpec
+  const keepIncomingSpec = Boolean(
+    opts.layoutSpec &&
+      (opts.layoutKindManual || isExploreListPage(opts.layoutSpec.page)),
+  );
+  const layoutSpec: LayoutSpec = keepIncomingSpec
+    ? opts.layoutSpec!
     : opts.layoutPrompt
       ? inferredSpec
       : opts.layoutSpec
         ? opts.layoutSpec
         : inferredSpec;
+  if (isExploreListPage(layoutSpec.page)) {
+    mode = "list";
+    state.viewMode = "list";
+    setDetailChrome(null);
+  }
   const layoutKind: LayoutKind = legacyKindFromSpec(layoutSpec);
   const openLayoutFilter = opts.onReplaceFilters
     ? (anchor: HTMLElement) => {
@@ -1530,6 +1545,7 @@ export function renderResultView(
         onOpenFilter: openLayoutFilter,
         filterActive,
         onSelectPage: opts.onSelectAppPage,
+        onSelectApp: opts.onSelectLayoutApp,
         onOpenProfile: () => {
           const table = inferPersonTable(comments) || primaryTable;
           const id = visitorId();
@@ -1567,6 +1583,7 @@ export function renderResultView(
         },
         onOpenCategory: opts.onOpenCategory,
         onComments: opts.onComments,
+        onWrite: write,
         onOpenAuthor: (userId) => {
           const personTable = inferPersonTable(comments);
           if (!apijsonBase || !personTable) {
@@ -4115,6 +4132,10 @@ export type WritePayload = {
   skipTemplate?: boolean;
 };
 
+export type WriteHandler = (
+  payload: WritePayload,
+) => void | Promise<boolean | void>;
+
 export type { CrudOp, DetailTableSlot, RelateSyncPayload } from "./detail-crud.js";
 
 /** @deprecated alias — use WritePayload */
@@ -6194,7 +6215,7 @@ function openCreateForm(
     initialSlots?: DetailTableSlot[];
     pageTitle?: string;
     onBack: () => void;
-    onSubmit: (payload: WritePayload) => void | Promise<void>;
+    onSubmit: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -6809,7 +6830,7 @@ async function openFkDetail(
     pageTitle?: string;
     initialSlots?: DetailTableSlot[] | null;
     onBack?: () => void;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onWrite?: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -6967,7 +6988,7 @@ function showDetail(
     mode?: "view" | "edit";
     columnMetas?: Record<string, ColumnMeta> | null;
     onBack?: () => void;
-    onSave?: (payload: WritePayload) => void | Promise<void>;
+    onSave?: WriteHandler;
     onDelete?: () => void;
     apijsonBase?: string;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
@@ -7018,9 +7039,9 @@ function renderDetailForm(
     pageTitle?: string;
     initialSlots?: DetailTableSlot[] | null;
     onBack: (() => void) | null;
-    onSave?: (payload: WritePayload) => void | Promise<void>;
+    onSave?: WriteHandler;
     onDelete?: () => void;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onWrite?: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -7106,11 +7127,7 @@ function renderDetailForm(
   let paintFieldsFn: (() => void) | null = null;
   let runDetailSave: (() => void) | null = null;
   let runDetailDelete: (() => void) | null = null;
-  const hideForm = !!(
-    opts.layoutKind &&
-    opts.layoutKind !== "data" &&
-    shouldHideDetailForm(opts.layoutKind, opts.layoutSpec)
-  );
+  const hideForm = shouldHideDetailForm(opts.layoutKind, opts.layoutSpec);
   if (!document.getElementById("detail-chrome")) {
     const header = document.createElement("div");
     header.id = "detail-chrome-fallback";
@@ -7355,10 +7372,14 @@ function renderDetailForm(
         },
       },
     });
-    if (shouldHideDetailForm(detailLayout, opts.layoutSpec)) {
-      container.appendChild(card);
-      return;
-    }
+  }
+
+  if (shouldHideDetailForm(detailLayout, opts.layoutSpec)) {
+    container.appendChild(card);
+    return;
+  }
+
+  if (showHero && detailLayout) {
     card.classList.add("is-layout-app", "layout-form-collapsed");
     const editToggle = document.createElement("button");
     editToggle.type = "button";

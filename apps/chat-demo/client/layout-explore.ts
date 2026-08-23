@@ -312,6 +312,7 @@ function searchHint(app: LayoutApp): string {
       return t("layout.explore.searchMusic");
     case "news":
     case "info":
+    case "sports":
       return t("layout.explore.searchNews");
     case "chat":
       return t("layout.explore.searchChat");
@@ -320,7 +321,7 @@ function searchHint(app: LayoutApp): string {
   }
 }
 
-function renderScanPage(): HTMLElement {
+function renderQrScanPage(): HTMLElement {
   const page = el("div", "ex-page ex-scan");
   page.appendChild(el("h2", "ex-title", t("layout.page.scan")));
   const stage = el("div", "scan-stage");
@@ -379,7 +380,7 @@ function renderScanPage(): HTMLElement {
 }
 
 export function renderExplorePage(opts: ExploreOpts): HTMLElement {
-  if (opts.page === "scan") return renderScanPage();
+  if (opts.page === "scan") return renderQrScanPage();
   if (opts.page === "search") return renderSearchLanding(opts);
   if (opts.page === "history") return renderHistoryPage(opts);
   if (opts.page === "rank") return renderRankPage(opts);
