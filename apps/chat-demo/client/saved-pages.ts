@@ -7,12 +7,14 @@ import type { FkJoinSpec } from "./fk-expand.js";
 import type { JoinOp } from "./join-query.js";
 import type { DetailTableSlot } from "./detail-crud.js";
 import type {
+  CatalogStyle,
   ChartDimension,
   ColumnMeta,
   DisplayKind,
   ViewMode,
 } from "./result-view.js";
 import {
+  isCatalogListPage,
   isLayoutApp,
   isLayoutPage,
   type ActionBinding,
@@ -62,6 +64,16 @@ export function layoutPagesEquivalent(a: LayoutPage, b: LayoutPage): boolean {
   return (
     (a === "home" || a === "list") && (b === "home" || b === "list")
   );
+}
+
+function snapshotLooksLikeRecord(
+  pageId: string,
+  snap: SavedPageSnapshot,
+): boolean {
+  if (snap.layoutPage === "detail" || snap.layoutPage === "player") return true;
+  if (snap.pageKind === "detail" || snap.pageKind === "create") return true;
+  if (snap.viewMode === "detail") return true;
+  return /_(detail|create)$/i.test(pageId);
 }
 
 /** `Moment` → `moment_list` / `moment_detail` / `moment_create` */
@@ -226,6 +238,7 @@ export type SavedPageSnapshot = {
   columnOrder: string[];
   columnMetas: Record<string, ColumnMeta>;
   displayKind: DisplayKind;
+  catalogStyle?: CatalogStyle;
   /** @deprecated use layoutApp + layoutPage */
   layoutKind?: LayoutKind;
   layoutApp?: LayoutApp;
@@ -413,17 +426,28 @@ export function findSavedPageByLayout(
   app: LayoutApp,
   page: LayoutPage,
 ): SavedPage | null {
-  const exact = getSavedPage(surfaceIdForLayout(app, page));
+  const skipRecords = isCatalogListPage(page);
+  const usable = (found: SavedPage | null): SavedPage | null => {
+    if (!found) return null;
+    if (!skipRecords) return found;
+    const snap = latestVersion(found);
+    if (!snap || snapshotLooksLikeRecord(found.id, snap)) return null;
+    return found;
+  };
+
+  const exact = usable(getSavedPage(surfaceIdForLayout(app, page)));
   if (exact) return exact;
   if (page === "home" || page === "list") {
     const alt = page === "home" ? "list" : "home";
-    const other = getSavedPage(surfaceIdForLayout(app, alt));
+    const other = usable(getSavedPage(surfaceIdForLayout(app, alt)));
     if (other) return other;
   }
   for (const p of listSavedPages()) {
     const snap = latestVersion(p);
+    if (!snap) continue;
+    if (skipRecords && snapshotLooksLikeRecord(p.id, snap)) continue;
     if (
-      snap?.layoutApp === app &&
+      snap.layoutApp === app &&
       snap.layoutPage &&
       layoutPagesEquivalent(snap.layoutPage, page)
     ) {

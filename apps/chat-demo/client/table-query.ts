@@ -485,6 +485,20 @@ export function applyTableQuery(
   return next;
 }
 
+export const PAGE_COUNT_OPTIONS = [5, 10, 15, 20, 50, 100] as const;
+export const DEFAULT_PAGE_COUNT = 20;
+
+export function normalizePageCount(n: unknown): number {
+  const num = Number(n);
+  if (
+    Number.isFinite(num) &&
+    (PAGE_COUNT_OPTIONS as readonly number[]).includes(num)
+  ) {
+    return num;
+  }
+  return DEFAULT_PAGE_COUNT;
+}
+
 /** Patch page/count onto list body. */
 export function applyPaging(
   body: Record<string, unknown>,

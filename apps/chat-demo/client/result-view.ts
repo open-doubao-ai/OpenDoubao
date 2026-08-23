@@ -121,7 +121,7 @@ import {
   clearCart,
   inferLayoutSpec,
   isCartOrOrder,
-  isExploreListPage,
+  isCatalogListPage,
   isLayoutKind,
   legacyKindFromSpec,
   pickRowPresentation,
@@ -158,6 +158,14 @@ import {
   shouldShowAppSearch,
 } from "./layout-explore.js";
 import { openAppFilterSheet } from "./layout-filter.js";
+import {
+  bindMobileListScroll,
+  resolveCatalogStyle,
+  shouldPageCatalog,
+  syncInlinePagerClass,
+  unbindMobileListScroll,
+  type CatalogStyle,
+} from "./layout-list-chrome.js";
 import { stripApiJsonRole, type SchemaComments } from "./schema-types.js";
 import {
   isAuthVerifyField,
@@ -170,6 +178,7 @@ import {
 } from "./verify-code.js";
 import {
   ALL_FILTER_OPS,
+  DEFAULT_PAGE_COUNT,
   FILTER_OP_LABELS,
   defaultFilterOp,
   emptyCondition,
@@ -177,6 +186,7 @@ import {
   filtersForPath,
   newConditionId,
   normalizeFilterOp,
+  normalizePageCount,
   sortDirOf,
   type ColumnFilter,
   type ColumnSort,
@@ -190,6 +200,7 @@ export type { ColumnMeta, ColumnShow, FieldType } from "./field-meta.js";
 
 export type ViewMode = "list" | "detail";
 export type DisplayKind = "combined" | "table" | "grid" | ChartKind;
+export type { CatalogStyle } from "./layout-list-chrome.js";
 
 function columnShowOf(
   path: string,
@@ -220,6 +231,14 @@ function appendResultSearchChrome(
     onOpenAppScan?: () => void;
     onOpenFilter?: (anchor: HTMLElement) => void;
     filterActive?: boolean;
+    catalogStyle?: CatalogStyle;
+    onToggleCatalog?: (next: CatalogStyle) => void;
+    pager?: {
+      page: number;
+      count: number;
+      onPage: (page: number) => void;
+      onCount: (count: number) => void;
+    };
   },
 ) {
   if (!shouldShowAppSearch(spec?.page, surface)) return;
@@ -236,6 +255,9 @@ function appendResultSearchChrome(
       onOpenScan: handlers.onOpenAppScan ?? pendingOpenScan ?? undefined,
       onOpenFilter: handlers.onOpenFilter,
       filterActive: handlers.filterActive,
+      catalogStyle: handlers.catalogStyle,
+      onToggleCatalog: handlers.onToggleCatalog,
+      pager: handlers.pager,
     }),
   );
 }
@@ -567,6 +589,20 @@ function extractListArray(
     if (isListKey(k) && Array.isArray(v)) return { key: k, arr: v };
   }
   return null;
+}
+
+export function listItemCount(response: unknown): number {
+  if (!isPlainObject(response)) return 0;
+  return extractListArray(response)?.arr.length ?? 0;
+}
+
+export function mergeListResponses(prev: unknown, next: unknown): unknown {
+  if (!isPlainObject(prev) || !isPlainObject(next)) return next;
+  const a = extractListArray(prev);
+  const b = extractListArray(next);
+  if (!a || !b) return next;
+  const key = a.key === b.key ? a.key : b.key;
+  return { ...next, [key]: [...a.arr, ...b.arr] };
 }
 
 /**
@@ -1121,6 +1157,14 @@ export function renderResultView(
     onOpenCategory?: (id: string | number) => void;
     onComments?: (comments: SchemaComments) => void;
     onReplaceFilters?: (filters: ColumnFilter[]) => void;
+    catalogStyle?: CatalogStyle | null;
+    onCatalogStyleChange?: (style: CatalogStyle) => void;
+    onListPageChange?: (page: number) => void;
+    onListCountChange?: (count: number) => void;
+    onListRefresh?: () => void | Promise<void>;
+    onListLoadMore?: () => void | Promise<void>;
+    listHasMore?: boolean;
+    listLoadingMore?: boolean;
     actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
     onActionSlot?: (
       slot: ActionSlot,
@@ -1132,7 +1176,7 @@ export function renderResultView(
   if (opts.onOpenAppScan) pendingOpenScan = opts.onOpenAppScan;
   const preferred = opts.viewMode;
   const parsed = parseResponse(opts.response);
-  const incomingExplore = isExploreListPage(opts.layoutSpec?.page);
+  const incomingExplore = isCatalogListPage(opts.layoutSpec?.page);
   let mode: ViewMode =
     incomingExplore
       ? "list"
@@ -1151,6 +1195,8 @@ export function renderResultView(
     "",
   );
 
+  unbindMobileListScroll(container);
+  syncInlinePagerClass(false);
   container.innerHTML = "";
   container.classList.remove("hidden");
   listCreateAction = null;
@@ -1199,7 +1245,7 @@ export function renderResultView(
   });
   const keepIncomingSpec = Boolean(
     opts.layoutSpec &&
-      (opts.layoutKindManual || isExploreListPage(opts.layoutSpec.page)),
+      (opts.layoutKindManual || isCatalogListPage(opts.layoutSpec.page)),
   );
   const layoutSpec: LayoutSpec = keepIncomingSpec
     ? opts.layoutSpec!
@@ -1208,7 +1254,7 @@ export function renderResultView(
       : opts.layoutSpec
         ? opts.layoutSpec
         : inferredSpec;
-  if (isExploreListPage(layoutSpec.page)) {
+  if (isCatalogListPage(layoutSpec.page)) {
     mode = "list";
     state.viewMode = "list";
     setDetailChrome(null);
@@ -1228,6 +1274,40 @@ export function renderResultView(
       }
     : undefined;
   const filterActive = filters.some((f) => filterHasValue(f));
+  const catalogStyle = resolveCatalogStyle(
+    opts.catalogStyle,
+    layoutSpec,
+    layoutKind,
+    displayKind,
+  );
+  const listPager =
+    mode === "list" &&
+    shouldPageCatalog(layoutSpec.page) &&
+    opts.onListPageChange &&
+    opts.onListCountChange
+      ? {
+          page: opts.page ?? 0,
+          count: normalizePageCount(opts.count ?? DEFAULT_PAGE_COUNT),
+          onPage: opts.onListPageChange,
+          onCount: opts.onListCountChange,
+        }
+      : undefined;
+  const listSearchExtras = {
+    catalogStyle,
+    onToggleCatalog: opts.onCatalogStyleChange,
+    pager: listPager,
+  };
+  const finishListSurface = () => {
+    const hasPager = Boolean(container.querySelector(".app-search-pager"));
+    syncInlinePagerClass(hasPager);
+    if (mode !== "list" || !shouldPageCatalog(layoutSpec.page)) return;
+    bindMobileListScroll(container, {
+      onRefresh: opts.onListRefresh,
+      onLoadMore: opts.onListLoadMore,
+      hasMore: opts.listHasMore !== false,
+      loading: opts.listLoadingMore,
+    });
+  };
   if (!opts.layoutKindManual) {
     if (!opts.layoutSpec || !specsEqual(layoutSpec, opts.layoutSpec)) {
       opts.onLayoutSpecResolved?.(layoutSpec);
@@ -1479,11 +1559,13 @@ export function renderResultView(
         ...opts,
         onOpenFilter: openLayoutFilter,
         filterActive,
+        ...listSearchExtras,
       });
       const empty = document.createElement("div");
       empty.className = "result-empty";
       empty.textContent = t("result.noMatching");
       container.appendChild(empty);
+      finishListSurface();
       return state;
     }
   }
@@ -1526,6 +1608,7 @@ export function renderResultView(
       comments,
       columnMetas: metas,
       apijsonBase,
+      catalogStyle,
       recordId: (row) => resolveRowRecordId(row, primaryTable),
       handlers: {
         onOpenRow: (key) => openListRow(key),
@@ -1544,6 +1627,9 @@ export function renderResultView(
         onOpenScan: opts.onOpenAppScan,
         onOpenFilter: openLayoutFilter,
         filterActive,
+        catalogStyle,
+        onToggleCatalog: opts.onCatalogStyleChange,
+        pager: listPager,
         onSelectPage: opts.onSelectAppPage,
         onSelectApp: opts.onSelectLayoutApp,
         onOpenProfile: () => {
@@ -1582,6 +1668,8 @@ export function renderResultView(
           });
         },
         onOpenCategory: opts.onOpenCategory,
+        onReplaceFilters: opts.onReplaceFilters,
+        filters,
         onComments: opts.onComments,
         onWrite: write,
         onOpenAuthor: (userId) => {
@@ -1622,6 +1710,7 @@ export function renderResultView(
     themedDetailHost.id = "result-detail-host";
     themedDetailHost.className = "hidden";
     container.appendChild(themedDetailHost);
+    finishListSurface();
     return state;
   }
 
@@ -1630,6 +1719,7 @@ export function renderResultView(
     ...opts,
     onOpenFilter: openLayoutFilter,
     filterActive,
+    ...listSearchExtras,
   });
   const viewTabs = document.createElement("div");
   viewTabs.className = "display-tabs";
@@ -2433,6 +2523,7 @@ export function renderResultView(
 
     // Charts / specific type: charts only, no table below
     if (isChartOnly || isCombined) {
+      finishListSurface();
       return state;
     }
   }
@@ -2954,6 +3045,7 @@ export function renderResultView(
   detailHost.className = "hidden";
   container.appendChild(detailHost);
 
+  finishListSurface();
   return state;
 }
 

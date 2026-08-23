@@ -1,6 +1,8 @@
 import { applyDomI18n, mountLocaleToggle, t } from "./i18n/index.js";
 import {
   inferPrimaryTable,
+  listItemCount,
+  mergeListResponses,
   mountCreateView,
   mountWorkspaceGuide,
   parseResponse,
@@ -9,6 +11,7 @@ import {
   renderResultView,
   setDetailChrome,
   triggerListCreate,
+  type CatalogStyle,
   type ChartDimension,
   type ColumnMeta,
   type DisplayKind,
@@ -19,10 +22,12 @@ import {
   type WritePayload,
 } from "./result-view.js";
 import {
+  appLandingPage,
+  defaultPageForApp,
   inferLayoutSpec,
   isAddressPage,
+  isCatalogListPage,
   isExploreLayoutPage,
-  isExploreListPage,
   isOrdersPage,
   isSettingsPage,
   isUserLayoutPage,
@@ -87,8 +92,11 @@ import {
   applyTableQuery,
   buildDefaultFieldCombine,
   cycleSort,
+  DEFAULT_PAGE_COUNT,
   filterHasValue,
   newConditionId,
+  normalizePageCount,
+  PAGE_COUNT_OPTIONS,
   type ColumnFilter,
   type ColumnSort,
 } from "./table-query.js";
@@ -332,6 +340,8 @@ type SessionUi = {
   columnOrder: string[];
   columnMetas: Record<string, ColumnMeta>;
   displayKind: DisplayKind;
+  /** User list/grid preference; null = layout default. */
+  catalogStyle: CatalogStyle | null;
   /** Business layout for list/detail (auto from table/fields, overridable). */
   layoutKind: LayoutKind;
   layoutSpec: LayoutSpec;
@@ -367,6 +377,9 @@ type SessionUi = {
   listPageRef: { pageId: string; version: number; title: string } | null;
 };
 
+let listHasMore = true;
+let listBusy = false;
+
 const state: SessionUi = {
   sessionId: null,
   pendingRequestId: null,
@@ -383,6 +396,7 @@ const state: SessionUi = {
   columnOrder: [],
   columnMetas: {},
   displayKind: "table",
+  catalogStyle: null,
   layoutKind: "data",
   layoutSpec: { app: "data", page: "list" },
   layoutKindManual: false,
@@ -465,8 +479,26 @@ function addMessage(role: "user" | "assistant", content: string) {
   box.scrollTop = box.scrollHeight;
 }
 
-function renderRows(response: unknown) {
-  state.lastResponse = response;
+function renderRows(response: unknown, opts?: { append?: boolean }) {
+  const keepY = opts?.append ? $("result-view").scrollTop : null;
+  if (opts?.append && state.lastResponse != null) {
+    const added = listItemCount(response);
+    if (added === 0) {
+      listHasMore = false;
+      const pageNum = Number(readUi().page || 0);
+      setUi({ ...readUi(), page: Math.max(0, pageNum - 1) });
+      response = state.lastResponse;
+    } else {
+      const count = Number(readUi().count || DEFAULT_PAGE_COUNT);
+      if (added < count) listHasMore = false;
+      state.lastResponse = mergeListResponses(state.lastResponse, response);
+      response = state.lastResponse;
+    }
+  } else {
+    const count = Number(readUi().count || DEFAULT_PAGE_COUNT);
+    listHasMore = listItemCount(response) >= count;
+    state.lastResponse = response;
+  }
   const ui = readUi();
   renderResultView($("result-view"), {
     response,
@@ -480,6 +512,7 @@ function renderRows(response: unknown) {
     columnOrder: state.columnOrder,
     columnMetas: state.columnMetas,
     displayKind: state.displayKind,
+    catalogStyle: state.catalogStyle,
     layoutKind: state.layoutKind,
     layoutSpec: state.layoutSpec,
     layoutKindManual: state.layoutKindManual,
@@ -523,6 +556,31 @@ function renderRows(response: unknown) {
     onReplaceFilters: (filters) => {
       applyReplacedFilters(filters);
     },
+    onCatalogStyleChange: (style) => {
+      state.catalogStyle = style;
+      if (state.layoutSpec.app === "data") {
+        state.displayKind = style === "grid" ? "grid" : "table";
+      }
+      persistCurrentPageVersion({ captureThumb: false });
+      renderRows(state.lastResponse);
+    },
+    onListPageChange: (page) => {
+      void bound("page_change", { page });
+    },
+    onListCountChange: (count) => {
+      void bound("search", { page: 0, count: normalizePageCount(count) });
+    },
+    onListRefresh: () => bound("search", { page: 0 }),
+    onListLoadMore: () => {
+      if (listBusy || !listHasMore || !state.hasBind) return;
+      listBusy = true;
+      const page = Number(readUi().page || 0) + 1;
+      void bound("page_change", { page }, { append: true }).finally(() => {
+        listBusy = false;
+      });
+    },
+    listHasMore,
+    listLoadingMore: listBusy,
     onComments: (c) => {
       state.comments = mergeComments(state.comments, c);
     },
@@ -573,6 +631,8 @@ function renderRows(response: unknown) {
     },
     onDisplayKindChange: (kind) => {
       state.displayKind = kind;
+      if (kind === "grid") state.catalogStyle = "grid";
+      else if (kind === "table") state.catalogStyle = "list";
       renderRows(state.lastResponse);
     },
     onChartConfigChange: (
@@ -834,6 +894,7 @@ function renderRows(response: unknown) {
     apijsonBaseUrl,
     createInitialValues: state.createInitialValues,
   });
+  if (keepY != null) $("result-view").scrollTop = keepY;
 }
 
 type PageNavRef = { pageId: string; version: number; title: string };
@@ -954,11 +1015,7 @@ function itemTableForApp(app: LayoutApp): string | null {
 }
 
 function contentLandingPage(app: LayoutApp): LayoutPage {
-  const allowed = LAYOUT_PAGES_BY_APP[app];
-  if (allowed.includes("list")) return "list";
-  if (allowed.includes("home")) return "home";
-  if (allowed.includes("feed")) return "feed";
-  return allowed[0] ?? "list";
+  return appLandingPage(app);
 }
 
 /** Sync table for a layout page, or `undefined` when the page should keep the current bind. */
@@ -1085,6 +1142,7 @@ async function openBoundTableList(opts: {
     state.columnMetas = {};
     state.tableJoins = {};
     state.displayKind = "table";
+    state.catalogStyle = null;
     if (!opts.keepLayout) {
       state.layoutKindManual = false;
       seedLayoutFromTable(table);
@@ -1200,18 +1258,22 @@ function syncRelateFromDetail(payload: RelateSyncPayload) {
   }
 }
 
-const PAGE_COUNT_OPTIONS = [5, 10, 15, 20, 50, 100] as const;
-const DEFAULT_PAGE_COUNT = 20;
-
-function normalizePageCount(n: unknown): number {
-  const num = Number(n);
+/** Persist detail/create as their own page kind — never keep home/list on a record snap. */
+function snapshotLayoutPage(): LayoutPage {
+  const page = state.layoutSpec.page;
+  if (state.pageKind === "create") return "create";
+  if (state.pageKind !== "detail") return page;
   if (
-    Number.isFinite(num) &&
-    (PAGE_COUNT_OPTIONS as readonly number[]).includes(num)
+    page === "detail" ||
+    page === "player" ||
+    page === "profile" ||
+    page === "user" ||
+    page === "orderDetail" ||
+    page === "addressDetail"
   ) {
-    return num;
+    return page;
   }
-  return DEFAULT_PAGE_COUNT;
+  return defaultPageForApp(state.layoutSpec.app, "detail");
 }
 
 function capturePageSnapshot(): Omit<
@@ -1244,6 +1306,7 @@ function capturePageSnapshot(): Omit<
     columnOrder: [...state.columnOrder],
     columnMetas: structuredClone(state.columnMetas),
     displayKind: state.displayKind,
+    catalogStyle: state.catalogStyle ?? undefined,
     layoutKind: state.layoutKind,
     layoutApp: state.layoutSpec.app,
     layoutPage: state.layoutSpec.page,
@@ -1610,7 +1673,9 @@ function pageKindFromSnapshot(
 ): PageKind {
   const layoutPage =
     snap.layoutPage || parseLayoutSurfaceId(pageId)?.page || null;
-  if (isExploreListPage(layoutPage)) return "list";
+  if (isCatalogListPage(layoutPage) && !/_(detail|create)$/i.test(pageId)) {
+    return "list";
+  }
   const body = snap.bindMeta?.bodyTemplate ?? {};
   const listBody = bodyLooksLikeListQuery(body);
   const slots = snap.detailSlots ?? [];
@@ -1663,6 +1728,7 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
   state.columnOrder = [...(snap.columnOrder || [])];
   state.columnMetas = structuredClone(snap.columnMetas || {});
   state.displayKind = snap.displayKind || "table";
+  state.catalogStyle = snap.catalogStyle ?? null;
   state.layoutSpec =
     snap.layoutApp || snap.layoutKind
       ? parseLayoutSpec(
@@ -1679,7 +1745,10 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
           prompt: state.lastUserPrompt,
         });
   state.layoutKind = legacyKindFromSpec(state.layoutSpec);
-  if (isExploreListPage(state.layoutSpec.page)) {
+  if (
+    isCatalogListPage(state.layoutSpec.page) &&
+    !/_(detail|create)$/i.test(state.activePageId || "")
+  ) {
     state.pageKind = "list";
     state.viewMode = "list";
     state.hasBind = true;
@@ -2475,7 +2544,17 @@ function isWorkspaceFormPage() {
   );
 }
 
-/** Left: Back · layout · title · version. Right switches list Search/paging vs detail #id/Save. */
+function mountAnalyzeButton(): HTMLButtonElement {
+  const analyzeBtn = document.createElement("button");
+  analyzeBtn.type = "button";
+  analyzeBtn.id = "btn-analyze";
+  analyzeBtn.textContent = t("common.analyze");
+  analyzeBtn.title = t("workspace.analyzeTitle");
+  analyzeBtn.onclick = () => void runAnalyze(analyzeBtn);
+  return analyzeBtn;
+}
+
+/** Left: Back · layout · title · version. Right switches list Search/paging vs detail #id/Save. Analyze is on every page. */
 function renderFilters(filters: FilterDef[]) {
   const pagingOnly = filters.filter(
     (f) => f.key === "page" || f.key === "count",
@@ -2690,6 +2769,7 @@ function renderFilters(filters: FilterDef[]) {
     const host = document.createElement("div");
     host.id = "detail-chrome";
     host.className = "detail-chrome";
+    right.appendChild(mountAnalyzeButton());
     right.appendChild(host);
     root.appendChild(right);
     paintDetailChrome();
@@ -2721,7 +2801,6 @@ function renderFilters(filters: FilterDef[]) {
   prevBtn.title = t("common.previousPage");
   prevBtn.setAttribute("aria-label", t("common.previousPage"));
   prevBtn.disabled = !state.hasBind;
-  right.appendChild(prevBtn);
 
   const pageWrap = document.createElement("span");
   pageWrap.className = "toolbar-inline";
@@ -2733,7 +2812,6 @@ function renderFilters(filters: FilterDef[]) {
   pageInput.title = t("workspace.pageZeroBased");
   pageInput.disabled = !state.hasBind;
   pageWrap.appendChild(pageInput);
-  right.appendChild(pageWrap);
 
   const nextBtn = document.createElement("button");
   nextBtn.type = "button";
@@ -2743,7 +2821,6 @@ function renderFilters(filters: FilterDef[]) {
   nextBtn.title = t("common.nextPage");
   nextBtn.setAttribute("aria-label", t("common.nextPage"));
   nextBtn.disabled = !state.hasBind;
-  right.appendChild(nextBtn);
 
   const countWrap = document.createElement("span");
   countWrap.className = "toolbar-inline";
@@ -2759,15 +2836,14 @@ function renderFilters(filters: FilterDef[]) {
     countSel.appendChild(o);
   }
   countWrap.appendChild(countSel);
-  right.appendChild(countWrap);
 
-  const analyzeBtn = document.createElement("button");
-  analyzeBtn.type = "button";
-  analyzeBtn.id = "btn-analyze";
-  analyzeBtn.textContent = t("common.analyze");
-  analyzeBtn.title = t("workspace.analyzeTitle");
-  analyzeBtn.disabled = !state.hasBind;
-  right.appendChild(analyzeBtn);
+  const toolbarPager = document.createElement("span");
+  toolbarPager.id = "toolbar-pager";
+  toolbarPager.className = "toolbar-pager";
+  toolbarPager.append(prevBtn, pageWrap, nextBtn, countWrap);
+  right.appendChild(toolbarPager);
+
+  right.appendChild(mountAnalyzeButton());
 
   const addBtn = document.createElement("button");
   addBtn.type = "button";
@@ -2791,7 +2867,6 @@ function renderFilters(filters: FilterDef[]) {
       addMessage("assistant", t("workspace.runListThenAdd"));
     }
   };
-  analyzeBtn.onclick = () => void runAnalyze(analyzeBtn);
   prevBtn.onclick = () => {
     const pageNum = Number(readUi().page || 0);
     void bound("page_change", { page: Math.max(0, pageNum - 1) });
@@ -2852,6 +2927,156 @@ function inlineMd(s: string): string {
   return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 }
 
+function clipDiagText(s: string, max = 6000): string {
+  const text = s.trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n…`;
+}
+
+function uniqueDiagLines(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of items) {
+    const line = raw.replace(/\s+/g, " ").trim();
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+  }
+  return out;
+}
+
+function envelopeErrorHint(response: unknown): string | null {
+  if (!response || typeof response !== "object" || Array.isArray(response)) {
+    return null;
+  }
+  const o = response as Record<string, unknown>;
+  const code = o.code;
+  const ok = o.ok;
+  const msg =
+    typeof o.msg === "string"
+      ? o.msg
+      : o.msg != null
+        ? JSON.stringify(o.msg)
+        : "";
+  const err =
+    typeof o.error === "string"
+      ? o.error
+      : o.error != null
+        ? JSON.stringify(o.error)
+        : "";
+  const failed =
+    (typeof code === "number" && code !== 200 && code !== 0) ||
+    ok === false ||
+    Boolean(err);
+  if (!failed) return null;
+  const parts: string[] = [];
+  if (code != null) parts.push(`code=${String(code)}`);
+  if (ok != null) parts.push(`ok=${String(ok)}`);
+  if (msg) parts.push(msg);
+  if (err && err !== msg) parts.push(err);
+  return parts.join(" ") || null;
+}
+
+function collectVisiblePageErrors(): string[] {
+  const skip = /^(加载中|Loading|发送中|Sending)/i;
+  const texts: string[] = [];
+  const result = document.getElementById("result-view");
+  if (result) {
+    for (const el of result.querySelectorAll(
+      ".result-empty, .auth-error, [role='alert']",
+    )) {
+      const text = el.textContent?.trim() ?? "";
+      if (text && !skip.test(text)) texts.push(text);
+    }
+  }
+  const toast = document.getElementById("layout-toast");
+  const toastText = toast?.textContent?.trim() ?? "";
+  if (toastText) texts.push(toastText);
+  return uniqueDiagLines(texts);
+}
+
+function recentChatErrorHints(): string[] {
+  const box = document.getElementById("messages");
+  if (!box) return [];
+  const bubbles = Array.from(box.querySelectorAll(".bubble.assistant"));
+  const re =
+    /fail|error|失败|错误|Apply|permission|illegal|参数|未登录|401|403|denied/i;
+  const skip =
+    /已生成 AI 分析|AI analysis report generated|Analysis report generated/i;
+  return uniqueDiagLines(
+    bubbles
+      .slice(-8)
+      .map((el) => el.textContent?.trim() ?? "")
+      .filter((s) => s && re.test(s) && !skip.test(s)),
+  );
+}
+
+function formatHttpResponseDump(): string {
+  const fromPanel = dataPanel.readResponse();
+  if (fromPanel && fromPanel !== "—") return clipDiagText(fromPanel);
+  if (state.lastResponse == null) return "—";
+  try {
+    return clipDiagText(JSON.stringify(state.lastResponse, null, 2));
+  } catch {
+    return clipDiagText(String(state.lastResponse));
+  }
+}
+
+function collectHttpApiBlock(): string {
+  const req = dataPanel.readRequest();
+  const lines = [
+    `${t("data.method")}: ${req.method || "POST"}`,
+    `${t("data.url")}: ${req.url || "—"}`,
+  ];
+  if (req.headers.trim()) {
+    lines.push(
+      `${t("data.requestHeaders")}:\n${clipDiagText(req.headers, 800)}`,
+    );
+  }
+  lines.push(
+    `${t("data.requestJson")}:\n\`\`\`json\n${clipDiagText(req.json || "{}", 5000)}\n\`\`\``,
+  );
+  lines.push(
+    `${t("data.responseJson")}:\n\`\`\`json\n${formatHttpResponseDump()}\n\`\`\``,
+  );
+  if (state.bindMeta) {
+    lines.push(`bind: ${state.bindMeta.method} ${state.bindMeta.url}`);
+  }
+  return lines.join("\n");
+}
+
+function buildSolveProblemMessage(): string {
+  const errors = uniqueDiagLines([
+    ...collectVisiblePageErrors(),
+    envelopeErrorHint(state.lastResponse) ?? "",
+    ...recentChatErrorHints(),
+  ]);
+  return [
+    t("workspace.solvePromptLead"),
+    "",
+    `## ${t("workspace.solveSectionPage")}`,
+    `${t("workspace.solvePageTitle")}: ${state.pageTitle || "—"}`,
+    `${t("workspace.solvePageKind")}: ${state.pageKind}`,
+    `${t("workspace.solveTable")}: ${currentPrimaryTable() || "—"}`,
+    `${t("workspace.solveLayout")}: ${state.layoutSpec.app}/${state.layoutSpec.page}`,
+    "",
+    `## ${t("workspace.solveSectionErrors")}`,
+    errors.length
+      ? errors.map((e) => `- ${e}`).join("\n")
+      : t("workspace.solveNoError"),
+    "",
+    `## ${t("workspace.solveSectionApi")}`,
+    collectHttpApiBlock(),
+    "",
+    t("workspace.solveAskFix"),
+  ].join("\n");
+}
+
+function sendSolveProblem() {
+  switchTab("ui");
+  void sendChat(buildSolveProblemMessage(), { preferredMode: "modify" });
+}
+
 function showAnalyzeReport(report: string, source: string) {
   document.getElementById("analyze-report-modal")?.remove();
   const modal = document.createElement("div");
@@ -2876,7 +3101,24 @@ function showAnalyzeReport(report: string, source: string) {
   const body = document.createElement("div");
   body.className = "analyze-body";
   body.innerHTML = simpleMarkdownToHtml(report);
-  panel.append(head, body);
+  const foot = document.createElement("div");
+  foot.className = "analyze-foot";
+  const reanalyze = document.createElement("button");
+  reanalyze.type = "button";
+  reanalyze.setAttribute("data-testid", "analyze-reanalyze");
+  reanalyze.textContent = t("workspace.reanalyze");
+  reanalyze.onclick = () => void runAnalyze(reanalyze);
+  const solve = document.createElement("button");
+  solve.type = "button";
+  solve.className = "primary";
+  solve.setAttribute("data-testid", "analyze-solve");
+  solve.textContent = t("workspace.solveProblem");
+  solve.onclick = () => {
+    modal.remove();
+    sendSolveProblem();
+  };
+  foot.append(reanalyze, solve);
+  panel.append(head, body, foot);
   modal.appendChild(panel);
   modal.addEventListener("mousedown", (e) => {
     if (e.target === modal) modal.remove();
@@ -2894,13 +3136,18 @@ async function runAnalyze(btn: HTMLButtonElement) {
     addMessage("assistant", t("workspace.noDataAnalyze"));
     return;
   }
-  const primary = inferPrimaryTable(
-    parsed.columns,
-    state.bindMeta?.bodyTemplate ?? null,
-  );
+  const primary =
+    inferPrimaryTable(
+      parsed.columns,
+      state.bindMeta?.bodyTemplate ?? null,
+    ) || currentPrimaryTable();
   const prev = btn.textContent;
   btn.disabled = true;
   btn.textContent = t("common.analyzing");
+  const solveBtn = document.querySelector<HTMLButtonElement>(
+    "#analyze-report-modal [data-testid='analyze-solve']",
+  );
+  if (solveBtn) solveBtn.disabled = true;
   try {
     const data = await api<{ report: string; source: string }>("/api/analyze", {
       title: primary ? t("workspace.analysisTitle", { table: primary }) : t("workspace.analysisTitleFallback"),
@@ -3529,6 +3776,7 @@ async function bound(
     order?: string;
     keyword?: string;
   },
+  fetchOpts?: { append?: boolean },
 ) {
   if (!state.hasBind || !state.bindMeta) {
     // Detail/create pages are not list-bound — avoid spamming chat on switch
@@ -3620,7 +3868,7 @@ async function bound(
     }
     const ok = res.ok && json.code === 200;
     if (ok) {
-      renderRows(json);
+      renderRows(json, fetchOpts?.append ? { append: true } : undefined);
       dataPanel.fill({ response: json });
       persistCurrentPageVersion();
     } else {
@@ -3810,11 +4058,7 @@ async function openCategoryItems(id: string | number) {
     flashLayoutNote(t("layout.explore.noCategoryId"));
     return;
   }
-  const landing: LayoutPage = LAYOUT_PAGES_BY_APP[app].includes("list")
-    ? "list"
-    : LAYOUT_PAGES_BY_APP[app].includes("home")
-      ? "home"
-      : "list";
+  const landing: LayoutPage = contentLandingPage(app);
   applyLayoutSpec(
     { app, page: landing },
     { manual: true, persist: false, rerender: false },
@@ -3865,9 +4109,9 @@ function selectAppPage(page: LayoutPage) {
   void selectLayoutPage(state.layoutSpec.app, page);
 }
 
-/** Saved 分类/排行/历史 that were stored as a player/detail must be rebuilt. */
+/** Saved 首页/分类/排行 that were stored as a player/detail must be rebuilt. */
 function explorePageNeedsRebuild(saved: SavedPage, page: LayoutPage): boolean {
-  if (!isExploreListPage(page)) return false;
+  if (!isCatalogListPage(page)) return false;
   const snap = latestVersion(saved);
   if (!snap) return true;
   if (snap.layoutPage === "detail" || snap.layoutPage === "player") return true;
@@ -3885,7 +4129,7 @@ async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
     page === state.layoutSpec.page &&
     (already?.id === state.activePageId || !pageNeedsChatGenerate(page)) &&
     !(already && explorePageNeedsRebuild(already, page)) &&
-    !(isExploreListPage(page) && state.viewMode === "detail")
+    !(isCatalogListPage(page) && state.viewMode === "detail")
   ) {
     return;
   }
@@ -3913,7 +4157,7 @@ async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
     return;
   }
 
-  if (isExploreListPage(page)) {
+  if (isCatalogListPage(page)) {
     state.viewMode = "list";
     state.pageKind = "list";
   }
@@ -3966,6 +4210,7 @@ async function sendChat(
     generatePage?: boolean;
     targetApp?: LayoutApp;
     targetPage?: LayoutPage;
+    preferredMode?: ChatPreferredMode;
   },
 ) {
   state.lastUserPrompt = message.trim();
@@ -4017,7 +4262,7 @@ async function sendChat(
         page: state.layoutSpec.page,
         table: currentPrimaryTable(),
         pageKind:
-          opts?.generatePage && isExploreListPage(opts.targetPage)
+          opts?.generatePage && isCatalogListPage(opts.targetPage)
             ? "list"
             : state.pageKind,
         columns: Object.keys(state.columnMetas),
@@ -4025,7 +4270,7 @@ async function sendChat(
         generatePage: opts?.generatePage === true,
         targetApp: opts?.targetApp ?? null,
         targetPage: opts?.targetPage ?? null,
-        preferredMode: readChatMode(),
+        preferredMode: opts?.preferredMode ?? readChatMode(),
       },
     });
 
@@ -4035,7 +4280,7 @@ async function sendChat(
     }
     addMessage("assistant", data.assistantMessage);
     const exploreGenerate =
-      opts?.generatePage === true && isExploreListPage(opts.targetPage);
+      opts?.generatePage === true && isCatalogListPage(opts.targetPage);
 
     if (data.chatMode === "explain") {
       return;
@@ -4215,6 +4460,7 @@ async function sendChat(
       state.columnOrder = [];
       state.columnMetas = {};
       state.displayKind = "table";
+      state.catalogStyle = null;
       state.actionBindings = {};
       state.chartLabelPath = "";
       state.chartValuePath = "";

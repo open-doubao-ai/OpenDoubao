@@ -11,6 +11,8 @@ import {
   renderExplorePage,
   shouldShowAppSearch,
 } from "./layout-explore.js";
+import type { CatalogStyle, ListPagerOpts } from "./layout-list-chrome.js";
+import { mountHomeChrome, shouldShowHomeChrome } from "./layout-home.js";
 import { collectRowImageUrls } from "./smart-image-fields.js";
 import { renderUserList, renderUserProfile } from "./layout-users.js";
 import { renderMeSurface } from "./layout-me.js";
@@ -29,6 +31,7 @@ import {
 } from "./layout-social.js";
 import type { WritePayload } from "./result-view.js";
 import type { ActionBinding, ActionSlot } from "./page-layout.js";
+import type { ColumnFilter } from "./table-query.js";
 import {
   addCartLine,
   APP_TABS_BY_APP,
@@ -79,11 +82,16 @@ export type LayoutListHandlers = {
   onOpenScan?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
+  catalogStyle?: CatalogStyle;
+  onToggleCatalog?: (next: CatalogStyle) => void;
+  pager?: ListPagerOpts;
   onSelectPage?: (page: LayoutPage) => void;
   onSelectApp?: (app: LayoutApp) => void;
   onOpenProfile?: () => void;
   onOpenAuthor?: (userId: string | number) => void;
   onOpenCategory?: (id: string | number) => void;
+  onReplaceFilters?: (filters: ColumnFilter[]) => void;
+  filters?: ColumnFilter[];
   onComments?: (comments: SchemaComments) => void;
   onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
 };
@@ -334,6 +342,7 @@ type ListOpts = {
   apijsonBase: string;
   recordId: (row: FlatRow) => string | number | null;
   handlers: LayoutListHandlers;
+  catalogStyle?: CatalogStyle;
 };
 
 function listApp(opts: { kind: LayoutKind; spec?: LayoutSpec }): LayoutApp {
@@ -472,7 +481,9 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
   const app = listApp(opts);
   const wrap = el(
     "div",
-    `layout-wrap layout-${opts.kind}` + (page ? ` layout-page-${page}` : ""),
+    `layout-wrap layout-${opts.kind}` +
+      (page ? ` layout-page-${page}` : "") +
+      (opts.catalogStyle ? ` catalog-style-${opts.catalogStyle}` : ""),
   );
   wrap.id = "result-layout-wrap";
 
@@ -492,8 +503,33 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onOpenScan: opts.handlers.onOpenScan,
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
+        catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
+        onToggleCatalog: opts.handlers.onToggleCatalog,
+        pager: opts.handlers.pager,
       }),
     );
+  }
+
+  let feedHost: HTMLElement = wrap;
+  if (shouldShowHomeChrome(app, page)) {
+    wrap.classList.add("has-home-chrome");
+    const chrome = mountHomeChrome({
+      app,
+      rows: opts.rows,
+      columns: opts.columns,
+      primaryTable: opts.primaryTable,
+      comments: opts.comments,
+      columnMetas: opts.columnMetas,
+      apijsonBase: opts.apijsonBase,
+      recordId: opts.recordId,
+      filters: opts.handlers.filters,
+      onOpenRow: (key) => opts.handlers.onOpenRow(key),
+      onReplaceFilters: opts.handlers.onReplaceFilters,
+      onOpenCategory: opts.handlers.onOpenCategory,
+      onComments: opts.handlers.onComments,
+    });
+    wrap.appendChild(chrome.root);
+    feedHost = chrome.feed;
   }
 
   if (page === "users") {
@@ -536,6 +572,9 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onOpenScan: opts.handlers.onOpenScan,
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
+        catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
+        onToggleCatalog: opts.handlers.onToggleCatalog,
+        pager: opts.handlers.pager,
         onOpenCategory: opts.handlers.onOpenCategory,
         onComments: opts.handlers.onComments,
       }),
@@ -575,26 +614,26 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
   }
 
   if (!opts.rows.length) {
-    wrap.appendChild(el("div", "result-empty", t("result.noMatching")));
+    feedHost.appendChild(el("div", "result-empty", t("result.noMatching")));
     return finishLayoutList(container, wrap, opts);
   }
 
-  if (page === "feed") wrap.appendChild(renderSocialFeed(opts));
+  if (page === "feed") feedHost.appendChild(renderSocialFeed(opts));
   else if (
     page === "list" &&
     (app === "chat" || app === "social" || opts.kind === "chat")
   ) {
-    wrap.appendChild(renderChatList(opts));
-  } else if (opts.kind === "chat") wrap.appendChild(renderChatList(opts));
-  else if (opts.kind === "music") wrap.appendChild(renderKugouList(opts));
-  else if (opts.kind === "video") wrap.appendChild(renderYoutubeGrid(opts));
-  else if (opts.kind === "commerce") wrap.appendChild(renderProductGrid(opts));
-  else if (opts.kind === "social") wrap.appendChild(renderSocialFeed(opts));
+    feedHost.appendChild(renderChatList(opts));
+  } else if (opts.kind === "chat") feedHost.appendChild(renderChatList(opts));
+  else if (opts.kind === "music") feedHost.appendChild(renderKugouList(opts));
+  else if (opts.kind === "video") feedHost.appendChild(renderYoutubeGrid(opts));
+  else if (opts.kind === "commerce") feedHost.appendChild(renderProductGrid(opts));
+  else if (opts.kind === "social") feedHost.appendChild(renderSocialFeed(opts));
   else if (isNewsLikeApp(app) || isNewsLikeApp(opts.kind)) {
-    wrap.appendChild(renderNewsPortal(opts));
+    feedHost.appendChild(renderNewsPortal(opts));
   } else if (isArticleLikeApp(app) || isArticleLikeApp(opts.kind)) {
-    wrap.appendChild(renderArticleList(opts));
-  } else wrap.appendChild(renderMediaList(opts));
+    feedHost.appendChild(renderArticleList(opts));
+  } else feedHost.appendChild(renderMediaList(opts));
 
   return finishLayoutList(container, wrap, opts);
 }
@@ -670,7 +709,7 @@ function renderNewsPortal(opts: ListOpts): HTMLElement {
   portal.appendChild(top);
 
   const grid = el("div", "news-grid");
-  for (const row of opts.rows.slice(1)) {
+  for (const row of opts.rows) {
     const pres = rowPres(opts, row);
     const card = el("button", "news-card");
     card.type = "button";
@@ -821,7 +860,7 @@ function renderKugouList(opts: ListOpts): HTMLElement {
   const featured = el("div", "kg-featured");
   featured.appendChild(el("h3", "kg-h", t("layout.music")));
   const featGrid = el("div", "kg-feat-grid");
-  for (const row of opts.rows.slice(0, 5)) {
+  for (const row of opts.rows) {
     const pres = rowPres(opts, row);
     const card = el("button", "kg-feat-card");
     card.type = "button";

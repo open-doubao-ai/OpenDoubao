@@ -621,7 +621,7 @@ export const APP_TABS_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
   article: ["home", "category", "rank", "create", "user"],
   social: ["list", "users", "feed", "user"],
   chat: ["list", "users", "feed", "user"],
-  campaign: ["home", "category", "list", "rank", "user"],
+  campaign: CONTENT_TABS,
   education: CONTENT_TABS,
   books: CONTENT_TABS,
   comics: CONTENT_TABS,
@@ -1334,6 +1334,16 @@ export function isExploreLayoutPage(page: LayoutPage | null | undefined): boolea
 /** Explore lists (分类 / 排行 / 历史…) — never a player or record form. */
 export function isExploreListPage(page: LayoutPage | null | undefined): boolean {
   return isExploreLayoutPage(page) && page !== "scan";
+}
+
+/** Home / feed / list portals + explore lists — never a record form. */
+export function isCatalogListPage(page: LayoutPage | null | undefined): boolean {
+  return (
+    page === "home" ||
+    page === "list" ||
+    page === "feed" ||
+    isExploreListPage(page)
+  );
 }
 
 const TITLE_COLS = [

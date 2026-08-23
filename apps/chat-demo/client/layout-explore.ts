@@ -20,6 +20,13 @@ import {
   type CategoryFlatRow,
 } from "./layout-category.js";
 import { mountFilterButton } from "./layout-filter.js";
+import {
+  mountCatalogToggle,
+  mountListPager,
+  shouldPageCatalog,
+  type CatalogStyle,
+  type ListPagerOpts,
+} from "./layout-list-chrome.js";
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
 
@@ -41,6 +48,9 @@ export type ExploreOpts = {
   onOpenScan?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
+  catalogStyle?: CatalogStyle;
+  onToggleCatalog?: (next: CatalogStyle) => void;
+  pager?: ListPagerOpts;
   onOpenCategory?: (id: string | number) => void;
   onComments?: (comments: SchemaComments) => void;
 };
@@ -222,6 +232,9 @@ export type SearchChromeOpts = {
   onOpenScan?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
+  catalogStyle?: CatalogStyle;
+  onToggleCatalog?: (next: CatalogStyle) => void;
+  pager?: ListPagerOpts;
 };
 
 export function mountScanButton(onOpen?: () => void): HTMLButtonElement {
@@ -264,7 +277,19 @@ export function mountAppSearchChrome(opts: SearchChromeOpts): HTMLElement {
       }),
     );
   }
-  wrap.append(mountScanButton(opts.onOpenScan), icon, field);
+  if (opts.surface === "list" && opts.onToggleCatalog && opts.catalogStyle) {
+    wrap.appendChild(
+      mountCatalogToggle({
+        style: opts.catalogStyle,
+        onToggle: opts.onToggleCatalog,
+      }),
+    );
+  }
+  wrap.append(mountScanButton(opts.onOpenScan));
+  if (opts.surface === "list" && opts.pager && shouldPageCatalog(opts.page)) {
+    wrap.appendChild(mountListPager(opts.pager));
+  }
+  wrap.append(icon, field);
 
   const submit = (q: string) => {
     const trimmed = q.trim();
@@ -412,7 +437,17 @@ function renderSearchLanding(opts: ExploreOpts): HTMLElement {
       }),
     );
   }
-  bar.append(mountScanButton(opts.onOpenScan), input, go);
+  if (opts.onToggleCatalog && opts.catalogStyle) {
+    bar.appendChild(
+      mountCatalogToggle({
+        style: opts.catalogStyle,
+        onToggle: opts.onToggleCatalog,
+      }),
+    );
+  }
+  bar.append(mountScanButton(opts.onOpenScan));
+  if (opts.pager) bar.appendChild(mountListPager(opts.pager));
+  bar.append(input, go);
   page.appendChild(bar);
 
   const histBox = el("div", "ex-block");

@@ -96,6 +96,16 @@ const APP_SCOPE_TOKENS = ["app", "appname", "kind", "scene", "biz", "应用", "�
 
 const SORT_TOKENS = ["sort", "rank", "orderno", "orderindex", "排序"];
 
+const PARENT_TOKENS = [
+  "parentid",
+  "parent",
+  "pid",
+  "parentcategory",
+  "父级",
+  "上级",
+  "父分类",
+];
+
 function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
 }
@@ -342,6 +352,13 @@ export async function ensureLayoutCategories(): Promise<EnsureCategoriesPayload>
   return json;
 }
 
+const CAT_CACHE_MS = 30_000;
+const categoryCache = new Map<
+  string,
+  { at: number; result: CategoryLoadResult }
+>();
+let parentEnsureTried = false;
+
 export async function loadCategoryRows(opts: {
   app: LayoutApp;
   apijsonBase: string;
@@ -350,6 +367,14 @@ export async function loadCategoryRows(opts: {
   boundRows?: CategoryFlatRow[];
   boundColumns?: string[];
 }): Promise<CategoryLoadResult> {
+  const cached = categoryCache.get(opts.app);
+  if (cached && Date.now() - cached.at < CAT_CACHE_MS && cached.result.rows.length) {
+    const cols = cached.result.columns.join(" ").toLowerCase();
+    if (cols.includes("parentid") || cols.includes("parent_id")) {
+      return cached.result;
+    }
+    categoryCache.delete(opts.app);
+  }
   let comments = opts.comments;
   let created = false;
   let table = inferCategoryTable(comments);
@@ -384,13 +409,15 @@ export async function loadCategoryRows(opts: {
         )
       : opts.boundRows!;
     if (rows.length) {
-      return {
+      const result: CategoryLoadResult = {
         table,
         rows,
         columns: opts.boundColumns ?? [],
         created: false,
         comments,
       };
+      categoryCache.set(opts.app, { at: Date.now(), result });
+      return result;
     }
   }
 
@@ -402,7 +429,7 @@ export async function loadCategoryRows(opts: {
     if (sortField) filter["@order"] = `${sortField}+`;
     return fetchBoundGet(opts.apijsonBase, {
       "[]": {
-        count: 50,
+        count: 80,
         page: 0,
         [name]: filter,
       },
@@ -453,8 +480,31 @@ export async function loadCategoryRows(opts: {
       error: t("layout.explore.ensureFailed"),
     };
   }
-  const parsed = flattenCategoryRows(json, table);
-  return { table, ...parsed, created, comments };
+  let parsed = flattenCategoryRows(json, table);
+  if (
+    !parentEnsureTried &&
+    table &&
+    parsed.rows.length &&
+    !inferNamedField(table, comments, PARENT_TOKENS, parsed.columns)
+  ) {
+    parentEnsureTried = true;
+    const ensured = await ensureLayoutCategories();
+    created = created || !!ensured.created;
+    if (ensured.comments) {
+      comments = {
+        tables: { ...(comments?.tables ?? {}), ...ensured.comments.tables },
+        columns: { ...(comments?.columns ?? {}), ...ensured.comments.columns },
+        types: { ...(comments?.types ?? {}), ...ensured.comments.types },
+      };
+    }
+    json = await fetchOnce(table);
+    if (json && apijsonOk(json)) parsed = flattenCategoryRows(json, table);
+  }
+  const result: CategoryLoadResult = { table, ...parsed, created, comments };
+  if (result.rows.length) {
+    categoryCache.set(opts.app, { at: Date.now(), result });
+  }
+  return result;
 }
 
 export function categoryRecordId(

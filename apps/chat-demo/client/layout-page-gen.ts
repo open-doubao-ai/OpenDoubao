@@ -54,6 +54,8 @@ export function generateLayoutPagePrompt(
     hints.push("Use the person / User table.");
   } else if (page === "favorite") {
     hints.push("List the app's item table (favorites).");
+  } else if (page === "home" || page === "list" || page === "feed") {
+    hints.push("List many rows (array GET). Do not open a single-record detail.");
   }
   const shape =
     page === "create"

@@ -14,10 +14,12 @@ CREATE TABLE IF NOT EXISTS `Category` (
   `app` varchar(20) NOT NULL COMMENT '应用大类：commerce/music/news/video/info/blog/article/campaign/social/chat',
   `name` varchar(40) NOT NULL COMMENT '分类名',
   `cover` varchar(400) DEFAULT NULL COMMENT '分类封面图',
+  `parentId` bigint DEFAULT NULL COMMENT '父分类 Category.id，空为一级',
   `sort` int NOT NULL DEFAULT 0 COMMENT '排序',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建日期',
   PRIMARY KEY (`id`),
-  KEY `app_sort` (`app`, `sort`)
+  KEY `app_sort` (`app`, `sort`),
+  KEY `parentId` (`parentId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通用分类/栏目/流派';
 
 INSERT INTO `Category` (`id`,`userId`,`app`,`name`,`cover`,`sort`,`date`) VALUES
@@ -169,6 +171,31 @@ ON DUPLICATE KEY UPDATE
   `cover` = VALUES(`cover`),
   `sort` = VALUES(`sort`);
 
+SET @db := DATABASE();
+SET @sql := (SELECT IF(
+  EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Category')
+  AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Category' AND COLUMN_NAME='parentId'),
+  'ALTER TABLE `Category` ADD COLUMN `parentId` bigint DEFAULT NULL COMMENT ''父分类 Category.id，空为一级''', 'SELECT 1'));
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+INSERT INTO `Category` (`id`,`userId`,`app`,`name`,`cover`,`parentId`,`sort`,`date`) VALUES
+(1601, 82001, 'news', '互联网', 'https://picsum.photos/id/1/400/400', 1323, 1, '2026-08-01 10:00:00'),
+(1602, 82001, 'news', '数码', 'https://picsum.photos/id/180/400/400', 1323, 2, '2026-08-01 10:00:00'),
+(1611, 82001, 'article', '入门', 'https://picsum.photos/id/24/400/400', 1361, 1, '2026-08-01 10:00:00'),
+(1612, 82001, 'article', '实战', 'https://picsum.photos/id/96/400/400', 1361, 2, '2026-08-01 10:00:00'),
+(1621, 82001, 'video', '手游', 'https://picsum.photos/id/96/400/400', 1342, 1, '2026-08-01 10:00:00'),
+(1622, 82001, 'video', '电竞', 'https://picsum.photos/id/160/400/400', 1342, 2, '2026-08-01 10:00:00'),
+(1631, 82001, 'music', '华语', 'https://picsum.photos/id/39/400/400', 1311, 1, '2026-08-01 10:00:00'),
+(1632, 82001, 'music', '欧美', 'https://picsum.photos/id/45/400/400', 1311, 2, '2026-08-01 10:00:00'),
+(1641, 82001, 'blog', '前端', 'https://picsum.photos/id/2/400/400', 1351, 1, '2026-08-01 10:00:00'),
+(1642, 82001, 'blog', '后端', 'https://picsum.photos/id/180/400/400', 1351, 2, '2026-08-01 10:00:00')
+ON DUPLICATE KEY UPDATE
+  `app` = VALUES(`app`),
+  `name` = VALUES(`name`),
+  `cover` = VALUES(`cover`),
+  `parentId` = VALUES(`parentId`),
+  `sort` = VALUES(`sort`);
+
 -- categoryId on content tables (skip if already present)
 SET @db := DATABASE();
 SET @sql := (SELECT IF(
@@ -259,6 +286,7 @@ UPDATE `News` SET `categoryId` = 1326 WHERE `id` = 403 AND (`categoryId` IS NULL
 UPDATE `News` SET `categoryId` = 1324 WHERE `id` = 404 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `News` SET `categoryId` = 1325 WHERE `id` = 405 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `News` SET `categoryId` = 1322 WHERE `id` = 406 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `News` SET `categoryId` = 1601 WHERE `id` = 402;
 
 UPDATE `Notice` SET `categoryId` = 1331 WHERE `id` = 501 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `Notice` SET `categoryId` = 1332 WHERE `id` = 502 AND (`categoryId` IS NULL OR `categoryId` = 0);
@@ -287,6 +315,9 @@ UPDATE `Article` SET `categoryId` = 1361 WHERE `id` = 703 AND (`categoryId` IS N
 UPDATE `Article` SET `categoryId` = 1363 WHERE `id` = 704 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `Article` SET `categoryId` = 1361 WHERE `id` = 705 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `Article` SET `categoryId` = 1363 WHERE `id` = 706 AND (`categoryId` IS NULL OR `categoryId` = 0);
+UPDATE `Article` SET `categoryId` = 1611 WHERE `id` = 703;
+UPDATE `Blog` SET `categoryId` = 1641 WHERE `id` = 603;
+UPDATE `Music` SET `categoryId` = 1631 WHERE `id` = 901;
 
 UPDATE `Activity` SET `categoryId` = 1371 WHERE `id` = 201 AND (`categoryId` IS NULL OR `categoryId` = 0);
 UPDATE `Activity` SET `categoryId` = 1372 WHERE `id` = 202 AND (`categoryId` IS NULL OR `categoryId` = 0);

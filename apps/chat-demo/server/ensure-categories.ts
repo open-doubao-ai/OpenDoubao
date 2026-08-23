@@ -285,7 +285,10 @@ export async function ensureLayoutCategories(
   const itemFk = exists
     ? await columnExists(client, "Product", "categoryId")
     : false;
-  const ready = exists && count != null && count > 0 && itemFk;
+  const parentCol = exists
+    ? await columnExists(client, CATEGORY_TABLE, "parentId")
+    : false;
+  const ready = exists && count != null && count > 0 && itemFk && parentCol;
   let created = false;
   let reloaded = false;
   if (!ready) {

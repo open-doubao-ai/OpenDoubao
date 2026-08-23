@@ -244,10 +244,12 @@ CREATE TABLE `Category` (
   `app` varchar(20) NOT NULL COMMENT '应用大类：commerce/music/news/video/info/blog/article/campaign/social/chat',
   `name` varchar(40) NOT NULL COMMENT '分类名',
   `cover` varchar(400) DEFAULT NULL COMMENT '分类封面图',
+  `parentId` bigint DEFAULT NULL COMMENT '父分类 Category.id，空为一级',
   `sort` int NOT NULL DEFAULT 0 COMMENT '排序',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建日期',
   PRIMARY KEY (`id`),
-  KEY `app_sort` (`app`, `sort`)
+  KEY `app_sort` (`app`, `sort`),
+  KEY `parentId` (`parentId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='通用分类/栏目/流派';
 
 DROP TABLE IF EXISTS `Address`;
