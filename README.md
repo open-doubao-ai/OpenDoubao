@@ -1,28 +1,24 @@
-中文 | [English](./README.en.md)
+English | [中文](./README-Chinese.md)
+# OpenDoubao
 
-# A2API - 一次 AI，次次 API 安全、快速、稳定读写数据
+Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. <br />
+**AI generate UI once, API repeat everytime safely, quickly and stably.**
 
-用 A2UI 聊天即兴生成 UI 来安全、快速、稳定调用 HTTP API 增删改查表格、表单、图表等数据。<br />
-**AI 生成一次 UI，API 每次都安全、快速、稳定执行。**
+Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
+**without going through the LLM again, no more token cost**.
 
-Agent-to-API 协议、引擎与 Demo：生成任务 UI，之后改筛选/排序/分页直接调用 HTTP API，<br />
-**不再调用大语言模型，不费任何 Token**。
+No SQL execution path. **Sensitive writes** (default: `delete`) wait in the Admin approval queue; **other writes** auto-execute and leave an `auto_approved` audit record on the server.
 
-不走 SQL 执行路径，**写操作或敏感读操作**自动申请权限，管理员审批通过后才能调通。
+![](https://github.com/user-attachments/assets/27928660-ab00-41ec-ad2a-fd318eaeacf5)
+![](https://github.com/user-attachments/assets/173aa5ac-84ce-40c3-9453-1d98051585b3)
+![](https://github.com/user-attachments/assets/976c2893-2a58-412c-8c14-efa2bfe2e477)
 
-![](https://oscimg.oschina.net/oscnet/up-39ca373e7841adf66d4267623c52d902c8e.jpg)
-![](https://github.com/user-attachments/assets/d1edc623-350a-4ee4-a951-1db3c615f457)
-![](https://github.com/user-attachments/assets/2b85a3c3-9f43-45b8-948e-99d87d5a5dfe)
-![](https://github.com/user-attachments/assets/31b9b341-c775-47ef-b2ad-d217a28fff08)
-![](https://github.com/user-attachments/assets/9c7138e6-0906-4117-8020-86452ddfaf04)
-
-
-## 环境要求
+## Requirements
 
 - Node.js 18+
-- 本地 [APIJSONBoot-MultiDataSource](https://github.com/APIJSON/APIJSON-Demo/tree/master/APIJSON-Java-Server/APIJSONBoot-MultiDataSource)（或兼容服务）运行在 `http://localhost:8080`
+- Local [APIJSONBoot-MultiDataSource](https://github.com/APIJSON/APIJSON-Demo) (or compatible) at `http://localhost:8080`
 
-## 快速开始
+## Quick start
 
 ```bash
 cd ~/a2api
@@ -33,91 +29,92 @@ npm run build
 npm run dev
 ```
 
-- 客户端（Vite）：http://localhost:5173  
-- API（Hono）：http://localhost:3000  
-- 管理后台（配置审批）：`npm run dev:admin` → http://localhost:5174  
-  - 申请表 `Apply`、调用日志表 `Call`：执行 `apps/admin/sql/sys_Apply.sql` 与 `sys_Call.sql` 后重载 Access/Request。
-  - 普通增删改查直连 APIJSON HTTP；管理端仅保留「批准写入 Access/Request/Document/Chain」复杂流程  
-  - 管理台页签：Apply · Call logs · Stats  
+- Client (Vite): http://localhost:5173  
+- Admin (config approvals): `npm run dev:admin` → http://localhost:5174  
+  - Tables `Apply` + `Call`: run `apps/admin/sql/sys_Apply.sql` and `sys_Call.sql`, reload Access/Request. If Call logs say GET denied for LOGIN, run `apps/admin/sql/patch_Call_access.sql` (Access id 9003; 9002 is Apply).  
+  - Ordinary CRUD hits APIJSON HTTP directly; admin server only runs approve → Access/Request/Document/Chain  
+  - Admin tabs: Apply · Call logs · Stats  
 
 
 
+- API (Hono): http://localhost:3000  
 
-打开客户端地址。右上角 **Login** 可登录/注册，并配置 **AI Model / Base URL / API Key**（参考 APIAuto）。可点快捷芯片（例如 **List the latest 3 moments with authors**），再改排序/分页并点击 **Query / Refresh** —— 右侧会显示 `usedLlm: false` 以及实际发出的 APIJSON 请求体。
+Open the client URL. Use **Login** (top-right) to open the account menu and set **AI Model / Base URL / API Key** (APIAuto-style). Try chips such as **List the latest 3 moments with authors**, then change sort/page and click **Query / Refresh** — the right panel shows `usedLlm: false` and the exact APIJSON body.
 
-对话示例见 [`conversations/`](./conversations/)；项目 Agent skills 见 [`.cursor/skills/`](./.cursor/skills/)。
+Curated chat examples live in [`conversations/`](./conversations/); project Agent skills in [`.cursor/skills/`](./.cursor/skills/).
 
-可选：在 `.env` 中设置 `OPENAI_API_KEY`，用 LLM 辅助 Bootstrap。未配置时，内置意图规则仍可识别 User / Moment / Comment（中英文说法均可）。
+Optional: set `OPENAI_API_KEY` in `.env` to refine bootstrap with an LLM. Without it, built-in intent rules for User / Moment / Comment still work (English and Chinese phrases).
 
-## 仓库结构
+## Monorepo layout
 
-| 路径 | 作用 |
+| Path | Role |
 |------|------|
-| `packages/protocol` | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
-| `packages/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
-| `apps/chat-demo` | 编排器 + 聊天 UI(生成) + 绑定筛选(稳态) |
-| `apps/admin` | 配置申请审批：批准后写入 Access / Request / Document |
+| `packages/protocol` | OpenDoubao 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
+| `packages/runtime` | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
+| `apps/chat-demo` | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
+| `apps/admin` | Config application approvals → write Access / Request / Document / Chain |
 
-## 协议
+## Protocol (MVP)
 
-信封格式：`{ "version": "0.1", "<type>": { ... } }`
+Envelopes: `{ "version": "0.1", "<type>": { ... } }`
 
-- `proposeRequest` — 候选 APIJSON 调用  
-- `reviseRequest` / `decision` — 修改 / 批准|拒绝  
-- `bindRequest` — `code == 200` 后，产出模板 + `paramMap` 供 UI 驱动调用  
-- `requestResult` / `status` — 结果与状态  
+- `proposeRequest` — candidate APIJSON call  
+- `reviseRequest` / `decision` — edit / approve|reject  
+- `bindRequest` — after `code == 200`, template + `paramMap` for UI-driven calls  
+- `requestResult` / `status` — outcomes  
 
-读操作自动执行，敏感方法（默认 `post`,`put`,`delete`,`gets`,`heads`，可用 `SENSITIVE_METHODS` 覆盖）需在 **Admin** 页签批准/拒绝。
+Read methods auto-execute. Non-sensitive `post` / `put` auto-execute with an audit row. Sensitive methods (default `delete`, override `SENSITIVE_METHODS`) wait for **Admin** Approve/Reject.
 
-## 两阶段体验
+## Two-phase UX
 
-1. **生成(聊天 / AI 或规则)** — 生成 UI + 提出 APIJSON → 校验 → 执行至成功 → 发出 `bindRequest`  
-2. **稳态(无 LLM)** — 筛选/排序/分页 → `BoundExecutor` 将 `paramMap` 合并进 `bodyTemplate` → `POST {baseUrl}/{method}`  
+1. **Bootstrap (chat / AI or rules)** — generate UI + propose APIJSON → validate → execute until success → emit `bindRequest`  
+2. **Steady-state (no LLM)** — filter/sort/page → `BoundExecutor` merges `paramMap` into `bodyTemplate` → `POST {baseUrl}/{method}`  
 
-## Agent 自动化：
+## UI | Data tabs
+
+Top tabs:
+
+- **UI** — chat bootstrap + bound table/detail/charts  
+- **Data** — APIAuto-style HTTP debugger  
+- **Admin** — sensitive approval queue + audit trail (`auto_approved` / approved / rejected)  
+
+Also:
+
+- **Embed APIAuto** — iframe `http://localhost:8080/api/index.html?send=true&type=JSON&url=...&json=...` (share-link auto fill + send)  
+- **Open APIAuto in new window** — same share URL in a new tab  
+
+Agent / console automation:
 
 ```js
 a2apiAgent.switchTab("data")
 a2apiAgent.debug({
   url: "http://localhost:8080/get",
   json: { User: { id: 38710 } },
-  send: true,          // 内置发送
-  // useApiAuto: true, // 或加载 iframe 并自动发送
+  send: true,          // builtin send
+  // useApiAuto: true, // or load iframe + auto send
 })
 ```
 
-## 配置 APIJSON
+## Configure APIJSON
 
 ```bash
 export APIJSON_BASE_URL=http://localhost:8080
-# 或编辑 .env
+# or edit .env
 ```
 
-请确保 Demo 库表（User / Moment / Comment）在该服务上可用。
+Ensure the Demo schema (User / Moment / Comment) is available on that server.
 
-**写操作（POST/PUT/DELETE）：** Demo 常要求已登录会话（`@role` OWNER/LOGIN）。MVP 仍会生成请求并展示 HITL 批准/拒绝界面；若 APIJSON 返回未登录，请通过 Demo/APIAuto 会话 Cookie 登录，或在本地放宽 Access。**读操作**可直接使用公开 Demo 数据。
+**Writes (POST/PUT/DELETE):** the Demo often requires a logged-in session (`@role` OWNER/LOGIN). The MVP still generates the request and shows the HITL Approve/Reject UI; if APIJSON returns "not logged in", log in via your Demo/APIAuto session cookies or relax Access for local testing. **Reads** work out of the box against the public Demo data.
 
-## 脚本
+## Scripts
 
 ```bash
-npm test          # protocol + runtime 单元测试
-npm run build     # 编译 packages + demo
+npm test          # protocol + runtime unit tests
+npm run build     # compile packages + demo
 npm run dev       # API :3000 + Vite :5173
 npm run typecheck
 ```
 
-## 二期
+## Phase 2 (not in this MVP)
 
-跨设备同步（数据库表或文件导入导出）——见设计方案。
-
-### 关于作者
-[https://github.com/TommyLemon](https://github.com/TommyLemon)<br />
-![](https://github.com/user-attachments/assets/cef2bd45-b20d-469e-8781-1d647cf0477f)
-
-如果有什么问题或建议可以 [提 Issue](https://github.com/TommyLemon/A2API/issues) 交流技术，分享经验。 <br >
-如果你解决了某些 bug，或者新增了一些功能，欢迎 [贡献代码](https://github.com/TommyLemon/A2API/pulls)，感激不尽~ <br >
-步骤可参考：https://github.com/Tencent/APIJSON/blob/master/CONTRIBUTING.md#pull-request
-
-### 我要赞赏
-创作不易，右上角点亮 ⭐ Star 来收藏/支持下吧，谢谢 ^_^ <br />
-https://github.com/TommyLemon/A2API
+Versioned snapshots (reuse / auto-adjust / manual-adjust), local-first store, cross-device sync via APIJSON tables or file import/export — see the design plan.
