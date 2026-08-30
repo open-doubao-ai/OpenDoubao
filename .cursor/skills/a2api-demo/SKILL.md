@@ -51,7 +51,7 @@ npm install && npm run dev
 - Detail/create field show/hide: click table name → same list table DDL popover (`ColumnMeta.visible`); left checkbox = show on detail; field row × hides; hidden fields omitted from Save. ▾ next to table name changes table. Schema keys honor logical↔physical aliases (`Privacy` / `apijson_privacy`) so DDL lists all columns, not just `id`
 - List / Detail / Create are **independent pages** — titles & surfaceIds must include the kind (`Moment List` / `Moment Detail` / `Create Moment`; `moment_list` / `moment_detail` / `moment_create`). Never collapse both to a bare table name.
 - Detail/create header title is an **editable input** (synced with top page selector). Editing the title on detail/create **forks a new saved page** (e.g. Create User → `register`); the previous page is left unchanged. Multi-table slots persist so the new page can be reopened from the top menu.
-- Detail header keeps `#` + **id search input** to the right of the title — Enter/blur reloads that record; page title itself does not embed `#id`
+- List and Detail share one workspace top bar (`#filters`). Left: **Back** (after a page jump, returns to the previous page) · layout · page title · version. Right switches automatically: list = Search / Clear / paging / Analyze / Add; detail/create = Analyze / `#` id search / Raw·Smart / Save / Delete (create: Save / Cancel). **Analyze is on every workspace page.** Do not keep a second form header with the same controls. Page title does not embed `#id`; Enter/blur on the id box reloads that record.
 
 ## Before finishing
 

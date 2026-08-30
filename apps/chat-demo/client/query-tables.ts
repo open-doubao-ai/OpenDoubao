@@ -9,7 +9,23 @@ import {
 import { listTablesInBody, setListJoin } from "./join-query.js";
 
 /** Demo fallback when Access / available-requests has not loaded yet. */
-export const CATALOG_TABLES = ["Moment", "User", "Comment"] as const;
+export const CATALOG_TABLES = [
+  "User",
+  "Employee",
+  "Activity",
+  "Moment",
+  "Comment",
+  "Message",
+  "News",
+  "Notice",
+  "Blog",
+  "Article",
+  "Video",
+  "Music",
+  "Product",
+  "Cart",
+  "ShopOrder",
+] as const;
 
 /**
  * APIJSON config / schema-introspection tables (not business data).
@@ -41,6 +57,8 @@ const APIJSON_CONFIG_TABLES = new Set(
     /** A2API admin permission queue — not chat business data */
     "Apply",
     "Call",
+    /** Saved layout sync — not chat business data */
+    "Page",
   ].map((t) => t.toLowerCase()),
 );
 

@@ -92,8 +92,77 @@
             <button type="button" data-i18n="chat.comments" data-i18n-msg="chat.msgComments" data-msg="List comments">Comments</button>
             <button type="button" data-i18n="chat.newMoment" data-i18n-msg="chat.msgNewMoment" data-msg="Create moment">New moment</button>
             <button type="button" data-i18n="chat.addComment" data-i18n-msg="chat.msgAddComment" data-msg="Create comment">Add Comment</button>
+            <button type="button" data-i18n="chat.employees" data-i18n-msg="chat.msgEmployees" data-msg="List employees">Employees</button>
+            <button type="button" data-i18n="chat.campaigns" data-i18n-msg="chat.msgCampaigns" data-msg="List campaigns">Campaigns</button>
+            <button type="button" data-i18n="chat.messages" data-i18n-msg="chat.msgMessages" data-msg="List chat messages">Messages</button>
+            <button type="button" data-i18n="chat.news" data-i18n-msg="chat.msgNews" data-msg="List news">News</button>
+            <button type="button" data-i18n="chat.notices" data-i18n-msg="chat.msgNotices" data-msg="List notices">Notices</button>
+            <button type="button" data-i18n="chat.blogs" data-i18n-msg="chat.msgBlogs" data-msg="List blogs">Blogs</button>
+            <button type="button" data-i18n="chat.articles" data-i18n-msg="chat.msgArticles" data-msg="List articles">Articles</button>
+            <button type="button" data-i18n="chat.videos" data-i18n-msg="chat.msgVideos" data-msg="List videos">Videos</button>
+            <button type="button" data-i18n="chat.music" data-i18n-msg="chat.msgMusic" data-msg="List music">Music</button>
+            <button type="button" data-i18n="chat.products" data-i18n-msg="chat.msgProducts" data-msg="List products">Products</button>
           </div>
           <form id="chat-form" class="chat-form">
+            <div class="chat-mode" id="chat-mode">
+              <button
+                type="button"
+                class="chat-mode-btn"
+                id="chat-mode-btn"
+                data-i18n-aria="chat.modeLegend"
+                aria-label="Chat mode"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span id="chat-mode-label" data-i18n="chat.modeAuto">Auto</span>
+              </button>
+              <div
+                class="page-menu chat-mode-menu"
+                id="chat-mode-menu"
+                role="listbox"
+              >
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="generate"
+                  data-i18n="chat.modeGenerate"
+                  data-i18n-title="chat.modeGenerateHint"
+                >
+                  Generate
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="modify"
+                  data-i18n="chat.modeEdit"
+                  data-i18n-title="chat.modeEditHint"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="explain"
+                  data-i18n="chat.modeAsk"
+                  data-i18n-title="chat.modeAskHint"
+                >
+                  Ask
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="auto"
+                  data-i18n="chat.modeAuto"
+                  data-i18n-title="chat.modeAutoHint"
+                >
+                  Auto
+                </button>
+              </div>
+            </div>
             <input
               id="chat-input"
               type="text"

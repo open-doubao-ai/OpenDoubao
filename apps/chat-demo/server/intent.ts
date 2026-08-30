@@ -17,6 +17,8 @@ export interface BootstrapPlan {
     | "get_comment"
     | "create_moment"
     | "create_comment"
+    | "create_table"
+    | "list_table"
     | "update_comment"
     | "delete_comment"
     | "unknown";
@@ -43,6 +45,287 @@ function rid(prefix: string): string {
 }
 
 const DEFAULT_BASE = process.env.APIJSON_BASE_URL ?? "http://localhost:8080";
+
+const PAGE_COUNTS = [5, 10, 15, 20, 50, 100];
+
+type LayoutEntity = {
+  table: string;
+  title: string;
+  keywordField: string;
+  createFields: Array<{ key: string; label: string; path: string }>;
+  about: (zh: string, text: string) => boolean;
+};
+
+/** Business layout tables (User / Moment / Comment stay on dedicated plans). */
+const LAYOUT_ENTITIES: LayoutEntity[] = [
+  {
+    table: "Cart",
+    title: "Cart",
+    keywordField: "title",
+    createFields: [
+      { key: "title", label: "Title", path: "/Cart/title" },
+      { key: "productId", label: "Product ID", path: "/Cart/productId" },
+    ],
+    about: (zh) => /购物车|\bcarts?\b|\bbasket\b/.test(zh),
+  },
+  {
+    table: "ShopOrder",
+    title: "Order List",
+    keywordField: "consignee",
+    createFields: [
+      { key: "consignee", label: "Name", path: "/ShopOrder/consignee" },
+      { key: "phone", label: "Phone", path: "/ShopOrder/phone" },
+      { key: "address", label: "Address", path: "/ShopOrder/address" },
+    ],
+    about: (zh) => /订单|下单|结算|\borders?\b|\bcheckout\b/.test(zh),
+  },
+  {
+    table: "Product",
+    title: "Product List",
+    keywordField: "name",
+    createFields: [{ key: "name", label: "Name", path: "/Product/name" }],
+    about: (zh) => /商品|电商|货品|\bproducts?\b|\bgoods\b|\bshop\b/.test(zh),
+  },
+  {
+    table: "Music",
+    title: "Music List",
+    keywordField: "title",
+    createFields: [
+      { key: "title", label: "Title", path: "/Music/title" },
+      { key: "audioUrl", label: "Audio URL", path: "/Music/audioUrl" },
+    ],
+    about: (zh) => /音乐|歌曲|专辑|\bmusic\b|\bsongs?\b|\btracks?\b|\baudio\b/.test(zh),
+  },
+  {
+    table: "Video",
+    title: "Video List",
+    keywordField: "title",
+    createFields: [
+      { key: "title", label: "Title", path: "/Video/title" },
+      { key: "videoUrl", label: "Video URL", path: "/Video/videoUrl" },
+    ],
+    about: (zh) => /视频|影片|\bvideos?\b|\bmovies?\b|\bvod\b/.test(zh),
+  },
+  {
+    table: "Article",
+    title: "Article List",
+    keywordField: "title",
+    createFields: [{ key: "title", label: "Title", path: "/Article/title" }],
+    about: (zh) => /文章|\barticles?\b|\bessays?\b/.test(zh),
+  },
+  {
+    table: "Blog",
+    title: "Blog List",
+    keywordField: "title",
+    createFields: [{ key: "title", label: "Title", path: "/Blog/title" }],
+    about: (zh) => /博客|\bblogs?\b/.test(zh),
+  },
+  {
+    table: "News",
+    title: "News List",
+    keywordField: "title",
+    createFields: [{ key: "title", label: "Title", path: "/News/title" }],
+    about: (zh) => /新闻|\bnews\b|\bheadlines?\b/.test(zh),
+  },
+  {
+    table: "Notice",
+    title: "Notice List",
+    keywordField: "title",
+    createFields: [{ key: "title", label: "Title", path: "/Notice/title" }],
+    about: (zh) => /资讯|公告|通知|\bnotices?\b|\bannouncements?\b/.test(zh),
+  },
+  {
+    table: "Message",
+    title: "Message List",
+    keywordField: "content",
+    createFields: [
+      { key: "content", label: "Content", path: "/Message/content" },
+      { key: "toUserId", label: "To user id", path: "/Message/toUserId" },
+    ],
+    about: (zh) => /聊天|私信|会话|消息|\bchats?\b|\bmessages?\b|\binbox\b/.test(zh),
+  },
+  {
+    table: "Activity",
+    title: "Campaign List",
+    keywordField: "title",
+    createFields: [{ key: "title", label: "Title", path: "/Activity/title" }],
+    about: (zh) => /运营活动|促销|campaign|\bpromos?\b|\bactivities\b/.test(zh) ||
+      (/活动/.test(zh) && !/动态/.test(zh)),
+  },
+  {
+    table: "Employee",
+    title: "Employee List",
+    keywordField: "name",
+    createFields: [{ key: "name", label: "Name", path: "/Employee/name" }],
+    about: (zh) => /员工|花名册|数据管理|\bemployees?\b|\bstaff\b/.test(zh),
+  },
+];
+
+function parseListCount(zh: string, text: string, fallback = 10): number {
+  const countMatch =
+    zh.match(/(\d+)\s*条/) ||
+    text.match(/\b(?:last|recent|top)\s+(\d+)\b/) ||
+    text.match(
+      /(\d+)\s+(?:moments?|items?|records?|rows?|employees?|products?|videos?|songs?|articles?|blogs?|messages?)\b/,
+    );
+  const asked = countMatch ? Number(countMatch[1]) : fallback;
+  return PAGE_COUNTS.includes(asked) ? asked : fallback;
+}
+
+function matchLayoutEntity(zh: string, text: string): LayoutEntity | null {
+  const hay = `${zh} ${text}`;
+  return LAYOUT_ENTITIES.find((e) => e.about(hay, text)) ?? null;
+}
+
+export function makeListPlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  count?: number;
+  order?: string;
+  keywordField?: string;
+  extra?: Record<string, unknown>;
+  kind?: BootstrapPlan["kind"];
+}): BootstrapPlan {
+  const table = opts.table;
+  const count = opts.count ?? 10;
+  const order = opts.order || "date-";
+  const keywordField = opts.keywordField || "title";
+  const requestId = rid(`list_${table.toLowerCase()}`);
+  const body = {
+    "[]": {
+      count,
+      page: 0,
+      [table]: { "@order": order, ...(opts.extra ?? {}) },
+    },
+  };
+  return {
+    kind: opts.kind ?? "list_table",
+    title: opts.title,
+    viewMode: "list",
+    propose: {
+      requestId,
+      method: "get",
+      body,
+      risk: riskForMethod("get"),
+      rationale: `List ${table}`,
+    },
+    bind: {
+      bindingId: opts.surfaceId,
+      method: "get",
+      url: `${DEFAULT_BASE}/get`,
+      bodyTemplate: body,
+      paramMap: [
+        { from: "/ui/page", to: "/[]/page" },
+        { from: "/ui/count", to: "/[]/count" },
+        { from: "/ui/order", to: `/[]/${table}/@order` },
+        { from: "/ui/keyword", to: `/[]/${table}/${keywordField}$` },
+      ],
+      resultPath: "/rows",
+      triggerActions: ["search", "page_change", "sort_change"],
+    },
+    a2uiHint: {
+      surfaceId: opts.surfaceId,
+      filters: [
+        { key: "keyword", label: "Keyword", type: "text" },
+        { key: "count", label: "Page size", type: "number" },
+        { key: "page", label: "Page", type: "number" },
+        {
+          key: "order",
+          label: "Sort",
+          type: "select",
+          options: [order, "date-", "date+", "id-", "id+"].filter(
+            (v, i, a) => a.indexOf(v) === i,
+          ),
+        },
+      ],
+    },
+  };
+}
+
+export function makeCreatePlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  fields: Array<{ key: string; label: string; path: string }>;
+}): BootstrapPlan {
+  const requestId = rid(`create_${opts.table.toLowerCase()}`);
+  return {
+    kind: "create_table",
+    title: opts.title,
+    viewMode: "detail",
+    openCreate: true,
+    propose: {
+      requestId,
+      method: "get",
+      body: { [opts.table]: {} },
+      risk: "read",
+      rationale: `Open empty ${opts.table} create form`,
+    },
+    a2uiHint: { surfaceId: opts.surfaceId, filters: [] },
+    writeForm: { fields: opts.fields },
+  };
+}
+
+export function makeDetailPlan(opts: {
+  table: string;
+  title: string;
+  surfaceId: string;
+  kind?: BootstrapPlan["kind"];
+}): BootstrapPlan {
+  return {
+    kind: opts.kind ?? (opts.table === "User" ? "get_user" : "unknown"),
+    title: opts.title,
+    viewMode: "detail",
+    propose: {
+      requestId: rid(`get_${opts.table.toLowerCase()}`),
+      method: "get",
+      body: { [opts.table]: {} },
+      risk: "read",
+      rationale: `Get ${opts.table} detail`,
+    },
+    a2uiHint: { surfaceId: opts.surfaceId, filters: [] },
+  };
+}
+
+export function makeUnknownPlan(): BootstrapPlan {
+  return {
+    kind: "unknown",
+    title: "Chat",
+    viewMode: "list",
+    propose: {
+      requestId: rid("chat"),
+      method: "get",
+      body: {},
+      risk: "read",
+      rationale: "No page to generate",
+    },
+    a2uiHint: { surfaceId: "chat", filters: [] },
+  };
+}
+
+export function isWritePlanKind(kind: BootstrapPlan["kind"]): boolean {
+  return kind === "update_comment" || kind === "delete_comment";
+}
+
+function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
+  return makeListPlan({
+    table: entity.table,
+    title: entity.title,
+    surfaceId: `${entity.table.toLowerCase()}_list`,
+    count,
+    keywordField: entity.keywordField,
+  });
+}
+
+function createTablePlan(entity: LayoutEntity): BootstrapPlan {
+  return makeCreatePlan({
+    table: entity.table,
+    title: `Create ${entity.table}`,
+    surfaceId: `${entity.table.toLowerCase()}_create`,
+    fields: entity.createFields,
+  });
+}
 
 /** Extract numeric id from Chinese or English entity phrases. */
 function matchEntityId(message: string): RegExpMatchArray | null {
@@ -86,6 +369,12 @@ export function planFromIntent(message: string): BootstrapPlan {
     /动态|moment|朋友圈/.test(zh) ||
     /moment/.test(text) ||
     /\bmoments?\b/.test(text);
+
+  const layoutEntity = matchLayoutEntity(zh, text);
+
+  if (wantsCreate && layoutEntity && !aboutComment && !aboutMoment) {
+    return createTablePlan(layoutEntity);
+  }
 
   // Delete / update: never invent id — only when the user typed an explicit id.
   // Template chips must not embed sample ids (permission / OWNER issues).
@@ -427,15 +716,22 @@ export function planFromIntent(message: string): BootstrapPlan {
     };
   }
 
-  // Default: moment list — JOIN User for author name / avatar
+  if (layoutEntity && !wantsCreate && !wantsUpdate && !wantsDelete) {
+    return listTablePlan(layoutEntity, parseListCount(zh, text, 10));
+  }
+
+  const wantsMomentList =
+    aboutMoment ||
+    /动态列表|朋友圈|最近动态/.test(zh) ||
+    /\b(?:recent|latest)\s+moments?\b/.test(text) ||
+    /\blist\s+(?:the\s+)?(?:latest\s+|recent\s+)?moments?\b/.test(text);
+  if (!wantsMomentList) {
+    return makeUnknownPlan();
+  }
+
+  // Moment list (no User JOIN — OWNER already scopes to visitor)
   const requestId = rid("list_moments");
-  const PAGE_COUNTS = [5, 10, 15, 20, 50, 100];
-  const countMatch =
-    zh.match(/(\d+)\s*条/) ||
-    text.match(/\b(?:last|recent|top)\s+(\d+)\b/) ||
-    text.match(/(\d+)\s+(?:moments?|items?|records?|rows?)\b/);
-  const asked = countMatch ? Number(countMatch[1]) : 10;
-  const count = PAGE_COUNTS.includes(asked) ? asked : 10;
+  const count = parseListCount(zh, text, 10);
   const body = {
     "[]": {
       count,

@@ -15,6 +15,16 @@ import {
 } from "@a2api/runtime";
 import { bootstrapFromMessage, repairBody } from "./llm.js";
 import type { LlmConfig } from "./llm-config.js";
+import {
+  chatModeForPlan,
+  classifyChatMode,
+  explainCurrentPage,
+  hasCurrentPage,
+  modifyPageBind,
+  planFromModifiedBind,
+  type ChatMode,
+  type PageChatContext,
+} from "./chat-mode.js";
 import { FileApprovalLedger } from "./approval-store.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +34,12 @@ import {
   type BootstrapPlan,
 } from "./intent.js";
 import { commentsForPayload, type SchemaComments } from "./schema-comments.js";
+import { loadSkills } from "./skills.js";
+import {
+  generateActionBind,
+  type ActionBindContext,
+  type ActionSlot,
+} from "./action-bind.js";
 import {
   applyTableQuery,
   type ColumnFilter,
@@ -436,12 +452,119 @@ export class Orchestrator {
     return next;
   }
 
+  /**
+   * Bind a UI action slot (like / comment / …) via A2API bindRequest.
+   * Does not replace the session list bind or execute the write.
+   */
+  async bindAction(
+    sessionId: string | undefined,
+    message: string,
+    slot: ActionSlot,
+    context: ActionBindContext | undefined,
+    llm?: LlmConfig | null,
+    auth?: ApijsonAuth | null,
+  ) {
+    const session = this.getOrCreateSession(sessionId);
+    session.messages.push({ role: "user", content: message });
+    const login = await this.ensureApijsonLogin(session, auth);
+    if (!login.ok) {
+      session.messages.push({ role: "assistant", content: login.error });
+      return {
+        sessionId: session.id,
+        assistantMessage: login.error,
+        actionSlot: slot,
+        chatMode: "action" as ChatMode,
+        pending: { status: "failed", issues: [login.error] },
+        plan: { filters: [], surfaceId: "action" },
+        dataModel: session.dataModel,
+      };
+    }
+    this.bindClientCookie(session);
+    try {
+      const generated = await generateActionBind(
+        slot,
+        {
+          table: context?.table ?? null,
+          columns: context?.columns ?? [],
+          comments:
+            context?.comments ??
+            session.dataModel.schemaComments ??
+            null,
+          app: context?.app,
+          page: context?.page,
+        },
+        llm,
+      );
+      if (!generated) {
+        const assistantMessage = `Could not bind "${slot}" from the current project's schema. Add table/column comments or try again after loading a list.`;
+        session.messages.push({ role: "assistant", content: assistantMessage });
+        return {
+          sessionId: session.id,
+          assistantMessage,
+          actionSlot: slot,
+          chatMode: "action" as ChatMode,
+          pending: { status: "failed", issues: [assistantMessage] },
+          plan: {
+            filters: session.plan?.a2uiHint.filters ?? [],
+            surfaceId: session.plan?.a2uiHint.surfaceId ?? "action",
+            viewMode: session.plan?.viewMode,
+            title: session.plan?.title,
+          },
+          dataModel: session.dataModel,
+        };
+      }
+      const { bind, source } = generated;
+      this.bound.register(bind);
+      const envelopes = [toBindEnvelope(bind)];
+      const assistantMessage =
+        source === "llm"
+          ? `Bound "${slot}" via A2API bindRequest (${bind.method}). Page list bind unchanged.`
+          : `Bound "${slot}" via A2API bindRequest from this project's schema (${bind.method}). Page list bind unchanged.`;
+      session.messages.push({ role: "assistant", content: assistantMessage });
+      return {
+        sessionId: session.id,
+        assistantMessage,
+        actionSlot: slot,
+        chatMode: "action" as ChatMode,
+        actionBind: bind,
+        a2apiEnvelopes: envelopes,
+        pending: {
+          status: "done",
+          requestId: bind.bindingId,
+          method: bind.method,
+          body: bind.bodyTemplate,
+        },
+        plan: {
+          filters: session.plan?.a2uiHint.filters ?? [],
+          surfaceId: session.plan?.a2uiHint.surfaceId ?? "action",
+          viewMode: session.plan?.viewMode,
+          title: session.plan?.title,
+        },
+        dataModel: session.dataModel,
+      };
+    } finally {
+      this.saveClientCookie(session);
+    }
+  }
+
   async chat(
     sessionId: string | undefined,
     message: string,
     llm?: LlmConfig | null,
     auth?: ApijsonAuth | null,
+    action?: { slot: ActionSlot; context?: ActionBindContext },
+    pageContext?: PageChatContext,
   ) {
+    if (action?.slot) {
+      return this.bindAction(
+        sessionId,
+        message,
+        action.slot,
+        action.context,
+        llm,
+        auth,
+      );
+    }
     const session = this.getOrCreateSession(sessionId);
     session.messages.push({ role: "user", content: message });
 
@@ -450,6 +573,7 @@ export class Orchestrator {
       session.messages.push({ role: "assistant", content: login.error });
       return {
         sessionId: session.id,
+        chatMode: "explain" as ChatMode,
         assistantMessage: login.error,
         pending: { status: "failed", issues: [login.error] },
         dataModel: session.dataModel,
@@ -457,18 +581,78 @@ export class Orchestrator {
     }
     this.bindClientCookie(session);
     try {
-      return await this.chatWithSession(session, message, llm);
+      return await this.chatWithSession(session, message, llm, pageContext);
     } finally {
       this.saveClientCookie(session);
     }
+  }
+
+  private async explainReply(
+    session: SessionState,
+    message: string,
+    pageContext: PageChatContext | undefined,
+    llm?: LlmConfig | null,
+  ) {
+    const assistantMessage = await explainCurrentPage(
+      message,
+      pageContext,
+      llm,
+    );
+    session.messages.push({ role: "assistant", content: assistantMessage });
+    return {
+      sessionId: session.id,
+      chatMode: "explain" as ChatMode,
+      assistantMessage,
+      pending: { status: "done", method: "get", body: {} },
+      plan: {
+        filters: [],
+        surfaceId: pageContext?.pageId || "explain",
+        viewMode: pageContext?.pageKind === "list" ? "list" : pageContext?.pageKind ? "detail" : undefined,
+        title: pageContext?.title,
+      },
+      dataModel: session.dataModel,
+    };
   }
 
   private async chatWithSession(
     session: SessionState,
     message: string,
     llm?: LlmConfig | null,
+    pageContext?: PageChatContext,
   ) {
-    const { plan, source } = await bootstrapFromMessage(message, llm);
+    await loadSkills(this.client).catch(() => undefined);
+    const classified = classifyChatMode(message, pageContext);
+    if (classified === "explain") {
+      return this.explainReply(session, message, pageContext, llm);
+    }
+
+    let plan: BootstrapPlan;
+    let source: "rules" | "llm";
+    let chatMode: ChatMode = classified;
+
+    if (classified === "modify") {
+      const modified = await modifyPageBind(message, pageContext, llm);
+      if (!modified || !hasCurrentPage(pageContext)) {
+        return this.explainReply(
+          session,
+          modified
+            ? message
+            : `${message}\n\n(Could not patch the current bind from that request. Say how to change sort/filter, or name a different page to generate.)`,
+          pageContext,
+          llm,
+        );
+      }
+      plan = planFromModifiedBind(modified.body, pageContext!, modified.title);
+      source = modified.source;
+    } else {
+      const boot = await bootstrapFromMessage(message, llm, pageContext);
+      plan = boot.plan;
+      source = boot.source;
+      chatMode = chatModeForPlan(plan);
+      if (chatMode === "explain") {
+        return this.explainReply(session, message, pageContext, llm);
+      }
+    }
     if (
       plan.propose.method === "post" ||
       plan.propose.method === "put" ||
@@ -633,6 +817,7 @@ export class Orchestrator {
     const response: Record<string, unknown> = {
       sessionId: session.id,
       source,
+      chatMode,
       title: plan.title,
       kind: plan.kind,
       a2uiMessages: session.a2uiMessages,
@@ -701,15 +886,22 @@ export class Orchestrator {
         this.bound.register(bind);
         session.bind = bind;
         envelopes.push(toBindEnvelope(bind));
+        const connected =
+          chatMode === "modify"
+            ? `Updated "${plan.title}". Filter/sort/pagination still call APIJSON directly (source: ${source}).`
+            : plan.openCreate
+              ? `Connected ${plan.title}. Opening the create form — fill required fields (*) and submit.`
+              : `Connected ${plan.title}. Filter/sort/pagination changes will call APIJSON directly without AI.`;
         session.messages.push({
           role: "assistant",
-          content: plan.openCreate
-            ? `Connected ${plan.title}. Opening the create form — fill required fields (*) and submit.`
-            : `Connected ${plan.title}. Filter/sort/pagination changes will call APIJSON directly without AI.`,
+          content: connected,
         });
-        response.assistantMessage = plan.openCreate
-          ? `Connected "${plan.title}". Fill the create form (required fields marked *) and click Create.`
-          : `Connected "${plan.title}" and bound UI. Condition changes call APIJSON directly (source: ${source}).`;
+        response.assistantMessage =
+          chatMode === "modify"
+            ? connected
+            : plan.openCreate
+              ? `Connected "${plan.title}". Fill the create form (required fields marked *) and click Create.`
+              : `Connected "${plan.title}" and bound UI. Condition changes call APIJSON directly (source: ${source}).`;
         response.bind = bind;
       } else if (plan.openCreate) {
         session.messages.push({

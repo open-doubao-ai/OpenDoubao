@@ -438,10 +438,42 @@ export function isSmartImageField(
   return resolveSmartImageField(path, value, comments, show).kind !== "none";
 }
 
-/**
- * Pick the best thumbnail URL from a row for grid cards.
- * Scans column list + all cell keys; scores via {@link scoreImageFieldPath}.
- */
+/** All displayable image URLs on a row (cover + pictureList + …), best field first. */
+export function collectRowImageUrls(
+  cells: Record<string, unknown>,
+  primaryTable: string | null,
+  columns: string[],
+  comments?: ImageFieldComments,
+  showByPath?: Record<string, ImageShowMode | undefined> | null,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const paths = [...new Set([...columns, ...Object.keys(cells)])];
+  const ranked = paths
+    .map((path) => {
+      const value = cells[path];
+      const show = showByPath?.[path] ?? "auto";
+      return {
+        score: scoreImageFieldPath(path, primaryTable, value, comments),
+        urls:
+          show === "text" || show === "file"
+            ? []
+            : resolveSmartImageField(path, value, comments, show).urls,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+  for (const item of ranked) {
+    for (const url of item.urls) {
+      const key = url.trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+/** Best thumbnail URL from a row (grid cards). */
 export function pickBestImageUrl(
   cells: Record<string, unknown>,
   primaryTable: string | null,

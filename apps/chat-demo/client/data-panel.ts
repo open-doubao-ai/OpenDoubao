@@ -190,6 +190,10 @@ export function initDataPanel(root: HTMLElement) {
     };
   }
 
+  function readResponse(): string {
+    return (respEl.textContent || "").trim();
+  }
+
   function parseHeaders(text: string): Record<string, string> {
     const out: Record<string, string> = {};
     for (const line of text.split("\n")) {
@@ -545,6 +549,7 @@ export function initDataPanel(root: HTMLElement) {
     loadApiAuto,
     showBuiltin,
     readRequest,
+    readResponse,
     async agentDebug(req: {
       method?: string;
       url?: string;

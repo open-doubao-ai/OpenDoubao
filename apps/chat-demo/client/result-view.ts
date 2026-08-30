@@ -4,6 +4,7 @@ import { loadSettings, logoutIfApijsonAuthFailed } from "./account.js";
 import { APIJSON_BROWSER_BASE } from "./aj-base.js";
 import { withApijsonAuth } from "./aj-auth.js";
 import { t } from "./i18n/index.js";
+import { openImageLightbox } from "./image-lightbox.js";
 import {
   buildPoints,
   CHART_KIND_OPTIONS,
@@ -116,6 +117,55 @@ import {
   type RelateSyncPayload,
 } from "./detail-crud.js";
 import { pageTitleForTable } from "./saved-pages.js";
+import {
+  clearCart,
+  inferLayoutSpec,
+  isCartOrOrder,
+  isCatalogListPage,
+  isLayoutKind,
+  legacyKindFromSpec,
+  pickRowPresentation,
+  specFromLegacy,
+  specsEqual,
+  isUserLayoutPage,
+  contactLayoutFor,
+  type ActionBinding,
+  type ActionSlot,
+  type LayoutApp,
+  type LayoutKind,
+  type LayoutPage,
+  type LayoutSpec,
+} from "./page-layout.js";
+import type { ActionRunContext, ActionSlotResult } from "./layout-actions.js";
+import { fetchAuthorFeed, inferPersonTable } from "./layout-actions.js";
+import {
+  inferAuthorIdField,
+  inferDateOrderField,
+  inferItemTableForApp,
+  inferPeerIdField,
+} from "./layout-category.js";
+import { visitorId } from "./layout-social.js";
+import {
+  addRowToCart,
+  flashLayoutNote,
+  renderLayoutDetailHero,
+  renderLayoutList,
+  shouldHideDetailForm,
+  shouldReplaceList,
+} from "./layout-views.js";
+import {
+  mountAppSearchChrome,
+  shouldShowAppSearch,
+} from "./layout-explore.js";
+import { openAppFilterSheet } from "./layout-filter.js";
+import {
+  bindMobileListScroll,
+  resolveCatalogStyle,
+  shouldPageCatalog,
+  syncInlinePagerClass,
+  unbindMobileListScroll,
+  type CatalogStyle,
+} from "./layout-list-chrome.js";
 import { stripApiJsonRole, type SchemaComments } from "./schema-types.js";
 import {
   isAuthVerifyField,
@@ -128,6 +178,7 @@ import {
 } from "./verify-code.js";
 import {
   ALL_FILTER_OPS,
+  DEFAULT_PAGE_COUNT,
   FILTER_OP_LABELS,
   defaultFilterOp,
   emptyCondition,
@@ -135,6 +186,7 @@ import {
   filtersForPath,
   newConditionId,
   normalizeFilterOp,
+  normalizePageCount,
   sortDirOf,
   type ColumnFilter,
   type ColumnSort,
@@ -148,6 +200,7 @@ export type { ColumnMeta, ColumnShow, FieldType } from "./field-meta.js";
 
 export type ViewMode = "list" | "detail";
 export type DisplayKind = "combined" | "table" | "grid" | ChartKind;
+export type { CatalogStyle } from "./layout-list-chrome.js";
 
 function columnShowOf(
   path: string,
@@ -166,6 +219,48 @@ function showMapFromMetas(
 
 /** Registered by list render; toolbar Add calls this. */
 let listCreateAction: (() => void) | null = null;
+let pendingOpenScan: (() => void) | null = null;
+
+function appendResultSearchChrome(
+  host: HTMLElement,
+  spec: LayoutSpec | undefined,
+  surface: "list" | "detail",
+  handlers: {
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    onOpenAppScan?: () => void;
+    onOpenFilter?: (anchor: HTMLElement) => void;
+    filterActive?: boolean;
+    catalogStyle?: CatalogStyle;
+    onToggleCatalog?: (next: CatalogStyle) => void;
+    pager?: {
+      page: number;
+      count: number;
+      onPage: (page: number) => void;
+      onCount: (count: number) => void;
+    };
+  },
+) {
+  if (!shouldShowAppSearch(spec?.page, surface)) return;
+  if (!handlers.onAppSearch && !handlers.onOpenAppSearch) return;
+  const search = handlers.onAppSearch ?? handlers.onOpenAppSearch!;
+  const open = handlers.onOpenAppSearch ?? handlers.onAppSearch!;
+  host.appendChild(
+    mountAppSearchChrome({
+      app: spec?.app ?? "data",
+      page: spec?.page ?? (surface === "detail" ? "detail" : "list"),
+      surface,
+      onSearch: search,
+      onOpenSearch: open,
+      onOpenScan: handlers.onOpenAppScan ?? pendingOpenScan ?? undefined,
+      onOpenFilter: handlers.onOpenFilter,
+      filterActive: handlers.filterActive,
+      catalogStyle: handlers.catalogStyle,
+      onToggleCatalog: handlers.onToggleCatalog,
+      pager: handlers.pager,
+    }),
+  );
+}
 
 /** Table list: false = smart (images/gender…), true = raw text. Survives re-renders. */
 let tableValueRawMode = false;
@@ -192,7 +287,7 @@ export function mountCreateView(
     /** Restore multi-table slots (e.g. register = User + Privacy) */
     initialSlots?: DetailTableSlot[] | null;
     pageTitle?: string;
-    onSubmit: (payload: WritePayload) => void | Promise<void>;
+    onSubmit: WriteHandler;
     onBack?: () => void;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
@@ -229,7 +324,7 @@ export function mountCreateView(
   });
 }
 
-function makeBackIconButton(onClick: () => void): HTMLButtonElement {
+export function makeBackIconButton(onClick: () => void): HTMLButtonElement {
   const back = document.createElement("button");
   back.type = "button";
   back.className = "detail-back-icon";
@@ -334,6 +429,103 @@ function mountDetailRecordIdControl(
   return input;
 }
 
+/** List + detail share `#filters`; this spec fills the right side on form pages. */
+export type DetailChromeSpec = {
+  kind: "detail" | "create";
+  recordId?: string | number | null;
+  showId?: boolean;
+  showRaw?: boolean;
+  rawMode?: boolean;
+  showSave?: boolean;
+  showDelete?: boolean;
+  showCancel?: boolean;
+  saveDisabled?: boolean;
+  onBack?: () => void;
+  onSwitchId?: (id: string | number) => void;
+  onToggleRaw?: () => void;
+  onSave?: () => void;
+  onDelete?: () => void;
+  onCancel?: () => void;
+};
+
+let detailChromeSpec: DetailChromeSpec | null = null;
+
+export function setDetailChrome(spec: DetailChromeSpec | null) {
+  detailChromeSpec = spec;
+  paintDetailChrome();
+}
+
+export function updateDetailChromeRaw(rawMode: boolean) {
+  if (detailChromeSpec) detailChromeSpec.rawMode = rawMode;
+  const btn = document.getElementById("btn-detail-raw");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.textContent = rawMode ? t("result.smart") : t("result.raw");
+  btn.classList.toggle("is-raw", rawMode);
+}
+
+export function flashDetailChromeSave(msg: string, ms = 1400) {
+  const btn = document.getElementById("btn-detail-save");
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.textContent = msg;
+  window.setTimeout(() => {
+    if (btn.isConnected) btn.textContent = t("common.save");
+  }, ms);
+}
+
+/** Paint Back / #id / Raw / Save into `#detail-chrome` (workspace top-right). */
+export function paintDetailChrome() {
+  const host =
+    document.getElementById("detail-chrome") ??
+    document.getElementById("detail-chrome-fallback");
+  if (!host) return;
+  host.replaceChildren();
+  const spec = detailChromeSpec;
+  if (!spec) return;
+  if (spec.showId && spec.recordId != null && String(spec.recordId) !== "") {
+    mountDetailRecordIdControl(host, {
+      id: spec.recordId,
+      onSwitch: spec.onSwitchId,
+    });
+  }
+  if (spec.showRaw) {
+    const raw = document.createElement("button");
+    raw.type = "button";
+    raw.id = "btn-detail-raw";
+    raw.className = "detail-raw-toggle" + (spec.rawMode ? " is-raw" : "");
+    raw.textContent = spec.rawMode ? t("result.smart") : t("result.raw");
+    raw.title = t("result.smartToggle");
+    raw.onclick = () => spec.onToggleRaw?.();
+    host.appendChild(raw);
+  }
+  if (spec.showSave) {
+    const save = document.createElement("button");
+    save.type = "button";
+    save.id = "btn-detail-save";
+    save.className = "primary";
+    save.textContent = t("common.save");
+    save.disabled = spec.saveDisabled === true;
+    save.onclick = () => spec.onSave?.();
+    host.appendChild(save);
+  }
+  if (spec.showDelete) {
+    const del = document.createElement("button");
+    del.type = "button";
+    del.id = "btn-detail-delete";
+    del.className = "danger";
+    del.textContent = t("common.delete");
+    del.onclick = () => spec.onDelete?.();
+    host.appendChild(del);
+  }
+  if (spec.showCancel) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.id = "btn-detail-cancel";
+    cancel.textContent = t("common.cancel");
+    cancel.onclick = () => spec.onCancel?.();
+    host.appendChild(cancel);
+  }
+}
+
 export type FlatRow = {
   key: string;
   cells: Record<string, unknown>;
@@ -397,6 +589,20 @@ function extractListArray(
     if (isListKey(k) && Array.isArray(v)) return { key: k, arr: v };
   }
   return null;
+}
+
+export function listItemCount(response: unknown): number {
+  if (!isPlainObject(response)) return 0;
+  return extractListArray(response)?.arr.length ?? 0;
+}
+
+export function mergeListResponses(prev: unknown, next: unknown): unknown {
+  if (!isPlainObject(prev) || !isPlainObject(next)) return next;
+  const a = extractListArray(prev);
+  const b = extractListArray(next);
+  if (!a || !b) return next;
+  const key = a.key === b.key ? a.key : b.key;
+  return { ...next, [key]: [...a.arr, ...b.arr] };
 }
 
 /**
@@ -480,7 +686,7 @@ function isFlatEntityItem(item: Record<string, unknown>): boolean {
  * Never treat the array index fallback as a DB id.
  */
 function resolveRowRecordId(
-  row: FlatRow,
+  row: { cells: Record<string, unknown>; raw?: unknown },
   table: string | null | undefined,
 ): string | number | null {
   if (table) {
@@ -909,8 +1115,8 @@ export function renderResultView(
       ids: Array<string | number>;
       field?: string;
     }) => void;
-    onSaveDetail?: (payload: WritePayload) => void | Promise<void>;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onSaveDetail?: WriteHandler;
+    onWrite?: WriteHandler;
     primaryTable?: string | null;
     bodyTemplate?: Record<string, unknown> | null;
     apijsonBaseUrl?: string;
@@ -936,16 +1142,51 @@ export function renderResultView(
     detailSlots?: DetailTableSlot[] | null;
     onPageTitleChange?: (title: string) => void;
     onDetailSlotsChange?: (slots: DetailTableSlot[]) => void;
+    /** Business layout (data / social / video / cart …). */
+    layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
+    /** User picked a layout — do not auto-replace. */
+    layoutKindManual?: boolean;
+    onLayoutKindResolved?: (kind: LayoutKind) => void;
+    onLayoutSpecResolved?: (spec: LayoutSpec) => void;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    layoutPrompt?: string;
+    onSelectAppPage?: (page: LayoutPage) => void;
+    onSelectLayoutApp?: (app: LayoutApp) => void;
+    onOpenAppScan?: () => void;
+    onOpenCategory?: (id: string | number) => void;
+    onComments?: (comments: SchemaComments) => void;
+    onReplaceFilters?: (filters: ColumnFilter[]) => void;
+    catalogStyle?: CatalogStyle | null;
+    onCatalogStyleChange?: (style: CatalogStyle) => void;
+    onListPageChange?: (page: number) => void;
+    onListCountChange?: (count: number) => void;
+    onListRefresh?: () => void | Promise<void>;
+    onListLoadMore?: () => void | Promise<void>;
+    listHasMore?: boolean;
+    listLoadingMore?: boolean;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
   },
 ): ResultViewState {
+  if (opts.onOpenAppScan) pendingOpenScan = opts.onOpenAppScan;
   const preferred = opts.viewMode;
   const parsed = parseResponse(opts.response);
-  const mode: ViewMode =
-    preferred === "detail"
-      ? "detail"
-      : parsed.mode === "list"
-        ? "list"
-        : "detail";
+  const incomingExplore = isCatalogListPage(opts.layoutSpec?.page);
+  let mode: ViewMode =
+    incomingExplore
+      ? "list"
+      : preferred === "detail"
+        ? "detail"
+        : parsed.mode === "list"
+          ? "list"
+          : "detail";
   const comments = opts.comments ?? null;
   const sorts = opts.sorts ?? [];
   const filters = opts.filters ?? [];
@@ -956,9 +1197,12 @@ export function renderResultView(
     "",
   );
 
+  unbindMobileListScroll(container);
+  syncInlinePagerClass(false);
   container.innerHTML = "";
   container.classList.remove("hidden");
   listCreateAction = null;
+  if (mode === "list") setDetailChrome(null);
 
   const state: ResultViewState = {
     viewMode: mode,
@@ -993,6 +1237,148 @@ export function renderResultView(
   const ambiguous = ambiguousColumnNames(parsed.columns);
   const visibleCols = order.filter((p) => metas[p]?.visible !== false);
 
+  const pageKind = mode === "detail" ? "detail" : "list";
+  const inferredSpec = inferLayoutSpec({
+    table: primaryTable,
+    columns: parsed.columns,
+    comments,
+    pageKind,
+    prompt: opts.layoutPrompt,
+  });
+  const keepIncomingSpec = Boolean(
+    opts.layoutSpec &&
+      (opts.layoutKindManual || isCatalogListPage(opts.layoutSpec.page)),
+  );
+  const layoutSpec: LayoutSpec = keepIncomingSpec
+    ? opts.layoutSpec!
+    : opts.layoutPrompt
+      ? inferredSpec
+      : opts.layoutSpec
+        ? opts.layoutSpec
+        : inferredSpec;
+  if (isCatalogListPage(layoutSpec.page)) {
+    mode = "list";
+    state.viewMode = "list";
+    setDetailChrome(null);
+  }
+  const layoutKind: LayoutKind = legacyKindFromSpec(layoutSpec);
+  const openLayoutFilter = opts.onReplaceFilters
+    ? (anchor: HTMLElement) => {
+        openAppFilterSheet({
+          anchor,
+          columns: parsed.columns,
+          comments,
+          metas,
+          rows: parsed.rows,
+          filters,
+          onApply: opts.onReplaceFilters!,
+        });
+      }
+    : undefined;
+  const filterActive = filters.some((f) => filterHasValue(f));
+  const catalogStyle = resolveCatalogStyle(
+    opts.catalogStyle,
+    layoutSpec,
+    layoutKind,
+    displayKind,
+  );
+  const listPager =
+    mode === "list" &&
+    shouldPageCatalog(layoutSpec.page) &&
+    opts.onListPageChange &&
+    opts.onListCountChange
+      ? {
+          page: opts.page ?? 0,
+          count: normalizePageCount(opts.count ?? DEFAULT_PAGE_COUNT),
+          onPage: opts.onListPageChange,
+          onCount: opts.onListCountChange,
+        }
+      : undefined;
+  const listSearchExtras = {
+    catalogStyle,
+    onToggleCatalog: opts.onCatalogStyleChange,
+    pager: listPager,
+  };
+  const finishListSurface = () => {
+    const hasPager = Boolean(container.querySelector(".app-search-pager"));
+    syncInlinePagerClass(hasPager);
+    if (mode !== "list" || !shouldPageCatalog(layoutSpec.page)) return;
+    bindMobileListScroll(container, {
+      onRefresh: opts.onListRefresh,
+      onLoadMore: opts.onListLoadMore,
+      hasMore: opts.listHasMore !== false,
+      loading: opts.listLoadingMore,
+    });
+  };
+  if (!opts.layoutKindManual) {
+    if (!opts.layoutSpec || !specsEqual(layoutSpec, opts.layoutSpec)) {
+      opts.onLayoutSpecResolved?.(layoutSpec);
+    }
+    if (layoutKind !== opts.layoutKind) {
+      opts.onLayoutKindResolved?.(layoutKind);
+    }
+  }
+
+  const layoutDetailHandlers = (
+    row: { key: string; cells: Record<string, unknown> },
+    table: string | null,
+  ) => ({
+    onActionSlot: opts.onActionSlot,
+    actionBindings: opts.actionBindings,
+    onSearch: opts.onAppSearch,
+    onOpenSearch: opts.onOpenAppSearch,
+    onAddToCart: () => {
+      const pres = pickRowPresentation(row.cells, {
+        primaryTable: table,
+        columns: parsed.columns,
+        comments,
+        recordId: resolveRowRecordId(row, table),
+      });
+      addRowToCart(table, row, pres);
+      flashLayoutNote(t("layout.addedToCart"));
+    },
+    onBuyNow: () => {
+      const pres = pickRowPresentation(row.cells, {
+        primaryTable: table,
+        columns: parsed.columns,
+        comments,
+        recordId: resolveRowRecordId(row, table),
+      });
+      addRowToCart(table, row, pres);
+      opts.onRequestLayoutKind?.("order");
+    },
+    onCheckout: (info: {
+      name: string;
+      phone: string;
+      address: string;
+      remark: string;
+      lines: { title: string; qty: number; price: number }[];
+      total: number;
+    }) => {
+      const orderTable =
+        table && /order/i.test(table) ? table : "Order";
+      if (write) {
+        void write({
+          method: "post",
+          table: orderTable,
+          body: {
+            [orderTable]: {
+              name: info.name,
+              phone: info.phone,
+              address: info.address,
+              remark: info.remark,
+              total: info.total,
+              items: JSON.stringify(info.lines),
+            },
+            tag: orderTable,
+          },
+        });
+      }
+      clearCart();
+      flashLayoutNote(t("layout.orderPlaced"));
+    },
+  });
+
   if (mode === "detail" && parsed.rows[0]) {
     const detailTable =
       primaryTable || pickPrimaryTable(parsed.rows[0]) || null;
@@ -1023,6 +1409,10 @@ export function renderResultView(
         mode: write ? "edit" : "view",
         pageTitle: opts.pageTitle,
         initialSlots: detailNavSlots,
+        layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -1030,6 +1420,9 @@ export function renderResultView(
         onPageTitleChange: opts.onPageTitleChange,
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
       });
       return state;
     }
@@ -1044,6 +1437,10 @@ export function renderResultView(
       apijsonBase,
       pageTitle: opts.pageTitle,
       initialSlots: detailNavSlots,
+      layoutKind,
+      layoutSpec,
+      actionBindings: opts.actionBindings,
+      onActionSlot: opts.onActionSlot,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
@@ -1060,11 +1457,69 @@ export function renderResultView(
             if (payload) void write(payload);
           }
         : undefined,
+      onLayoutAddToCart: layoutDetailHandlers(detailRow, detailTable).onAddToCart,
+      onLayoutBuyNow: layoutDetailHandlers(detailRow, detailTable).onBuyNow,
+      onLayoutCheckout: layoutDetailHandlers(detailRow, detailTable).onCheckout,
+      onRequestLayoutKind: opts.onRequestLayoutKind,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
+      onOpenAppScan: opts.onOpenAppScan,
+      onOpenFilter: openLayoutFilter,
+      filterActive,
     });
     return state;
   }
 
-  if (!parsed.rows.length) {
+  const openListRow = (key: string, mode: "view" | "edit" = write ? "edit" : "view") => {
+    const row = parsed.rows.find((r) => r.key === key);
+    if (!row) return;
+    const table = primaryTable || pickPrimaryTable(row);
+    const id = resolveRowRecordId(row, table);
+    if (id == null) return;
+    let navSlots: DetailTableSlot[] | undefined;
+    if (table) {
+      const detailId =
+        typeof id === "string" || typeof id === "number" ? id : String(id);
+      const fromParent = opts.onOpenDetail?.({ table, id: detailId });
+      navSlots = resolveNavDetailSlots(
+        table,
+        mode === "edit" ? "put" : "get",
+        fromParent,
+      );
+    }
+    const detailPageTitle = table
+      ? pageTitleForTable(table, "detail", id)
+      : opts.pageTitle;
+    if (apijsonBase && table && String(id) !== "") {
+      void openFkDetail(container, {
+        table,
+        id,
+        comments,
+        columnMetas: metas,
+        apijsonBase,
+        mode,
+        pageTitle: detailPageTitle,
+        initialSlots: navSlots,
+        layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
+        onBack: opts.onBackToList,
+        onWrite: write,
+        onRelateSync: opts.onRelateSync,
+        onColumnMetasChange: opts.onColumnMetasChange,
+        onPageTitleChange: opts.onPageTitleChange,
+        onDetailSlotsChange: opts.onDetailSlotsChange,
+        onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
+        fkExpand: opts.fkExpand,
+      });
+    }
+  };
+
+  if (!parsed.rows.length && !isCartOrOrder(layoutKind)) {
     if (primaryTable && write) {
       listCreateAction = () => {
         const fromParent = opts.onOpenDetail?.({
@@ -1099,16 +1554,175 @@ export function renderResultView(
     }
     if (opts.response == null) {
       mountWorkspaceGuide(container);
-    } else {
+      return state;
+    }
+    if (!shouldReplaceList(layoutKind, layoutSpec)) {
+      appendResultSearchChrome(container, layoutSpec, "list", {
+        ...opts,
+        onOpenFilter: openLayoutFilter,
+        filterActive,
+        ...listSearchExtras,
+      });
       const empty = document.createElement("div");
       empty.className = "result-empty";
       empty.textContent = t("result.noMatching");
       container.appendChild(empty);
+      finishListSurface();
+      return state;
     }
+  }
+
+  if (shouldReplaceList(layoutKind, layoutSpec)) {
+    if (primaryTable && write) {
+      listCreateAction = () => {
+        const fromParent = opts.onOpenDetail?.({
+          table: primaryTable,
+          create: true,
+        });
+        openCreateForm(container, {
+          table: primaryTable,
+          columns: parsed.columns,
+          comments,
+          columnMetas: metas,
+          fkExpand: opts.fkExpand ?? null,
+          apijsonBase,
+          initialValues: opts.createInitialValues ?? undefined,
+          initialSlots: resolveNavDetailSlots(primaryTable, "post", fromParent),
+          pageTitle: pageTitleForTable(primaryTable, "create"),
+          onRelateSync: opts.onRelateSync,
+          onColumnMetasChange: opts.onColumnMetasChange,
+          onPageTitleChange: opts.onPageTitleChange,
+          onDetailSlotsChange: opts.onDetailSlotsChange,
+          onBack: () => {
+            opts.onBackToList?.();
+            renderResultView(container, opts);
+          },
+          onSubmit: write,
+        });
+      };
+    }
+    renderLayoutList(container, {
+      kind: layoutKind,
+      spec: layoutSpec,
+      rows: parsed.rows,
+      columns: parsed.columns,
+      primaryTable,
+      comments,
+      columnMetas: metas,
+      apijsonBase,
+      catalogStyle,
+      recordId: (row) => resolveRowRecordId(row, primaryTable),
+      handlers: {
+        onOpenRow: (key) => openListRow(key),
+        onAddToCart: (row) => {
+          layoutDetailHandlers(row, primaryTable).onAddToCart();
+        },
+        onBuyNow: (row) => {
+          layoutDetailHandlers(row, primaryTable).onBuyNow();
+        },
+        onCheckout: (info) => {
+          layoutDetailHandlers(parsed.rows[0] ?? { key: "", cells: {} }, primaryTable).onCheckout(info);
+        },
+        onOpenCheckout: () => opts.onRequestLayoutKind?.("order"),
+        onSearch: opts.onAppSearch,
+        onOpenSearch: opts.onOpenAppSearch,
+        onOpenScan: opts.onOpenAppScan,
+        onOpenFilter: openLayoutFilter,
+        filterActive,
+        catalogStyle,
+        onToggleCatalog: opts.onCatalogStyleChange,
+        pager: listPager,
+        onSelectPage: opts.onSelectAppPage,
+        onSelectApp: opts.onSelectLayoutApp,
+        onOpenProfile: () => {
+          const table = inferPersonTable(comments) || primaryTable;
+          const id = visitorId();
+          if (!table || id == null) {
+            flashLayoutNote(t("layout.me.needLogin"));
+            return;
+          }
+          opts.onSelectAppPage?.("profile");
+          const fromParent = opts.onOpenDetail?.({ table, id });
+          const navSlots = Array.isArray(fromParent) ? fromParent : undefined;
+          void openFkDetail(container, {
+            table,
+            id,
+            comments,
+            columnMetas: metas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase,
+            mode: write ? "edit" : "view",
+            initialSlots: navSlots,
+            onBack: opts.onBackToList,
+            onWrite: write,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: "data",
+            layoutSpec: { app: layoutSpec.app, page: "profile" },
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
+        onOpenCategory: opts.onOpenCategory,
+        onReplaceFilters: opts.onReplaceFilters,
+        filters,
+        onComments: opts.onComments,
+        onWrite: write,
+        onOpenAuthor: (userId) => {
+          const personTable = inferPersonTable(comments);
+          if (!apijsonBase || !personTable) {
+            flashLayoutNote(t("layout.noAuthor"));
+            return;
+          }
+          const contact = contactLayoutFor({ layoutKind, layoutSpec });
+          void openFkDetail(container, {
+            table: personTable,
+            id: userId,
+            comments,
+            columnMetas: metas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase,
+            mode: "view",
+            pageTitle: t("layout.page.profile"),
+            onBack: opts.onBackToList,
+            onWrite: write,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: contact.layoutKind,
+            layoutSpec: contact.layoutSpec,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
+      },
+    });
+    const themedDetailHost = document.createElement("div");
+    themedDetailHost.id = "result-detail-host";
+    themedDetailHost.className = "hidden";
+    container.appendChild(themedDetailHost);
+    finishListSurface();
     return state;
   }
 
   // Table | Grid | Charts (configured combo) | specific type (that type only)
+  appendResultSearchChrome(container, layoutSpec, "list", {
+    ...opts,
+    onOpenFilter: openLayoutFilter,
+    filterActive,
+    ...listSearchExtras,
+  });
   const viewTabs = document.createElement("div");
   viewTabs.className = "display-tabs";
   for (const [kind, label] of [
@@ -2171,6 +2785,10 @@ export function renderResultView(
         mode,
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
+        layoutKind,
+        layoutSpec,
+        actionBindings: opts.actionBindings,
+        onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
         onWrite: write,
         onRelateSync: opts.onRelateSync,
@@ -2178,6 +2796,9 @@ export function renderResultView(
         onPageTitleChange: opts.onPageTitleChange,
         onDetailSlotsChange: opts.onDetailSlotsChange,
         onOpenFkList: opts.onOpenFkList,
+        onRequestLayoutKind: opts.onRequestLayoutKind,
+        onAppSearch: opts.onAppSearch,
+        onOpenAppSearch: opts.onOpenAppSearch,
         fkExpand: opts.fkExpand,
       });
       return;
@@ -2436,17 +3057,61 @@ export function renderResultView(
       }
     }
 
-    if (!painted && fkIdListTable && fkIdListIds.length) {
-      appendFkIdListLinks(td, {
-        table: fkIdListTable,
-        field: metas[col]?.onField?.trim() || "id",
-        ids: fkIdListIds,
-        titleParts,
-        onOpenDetail: ({ table, id, field }) => {
+      if (! painted && fkIdListTable && fkIdListIds.length) {
+        appendFkIdListLinks(td, {
+          table: fkIdListTable,
+          field: metas[col]?.onField?.trim() || "id",
+          ids: fkIdListIds,
+          titleParts,
+          onOpenDetail: ({ table, id, field }) => {
+            void openFkDetail(container, {
+              table,
+              id,
+              field,
+              comments,
+              columnMetas: metas,
+              apijsonBase,
+              mode: write ? "edit" : "view",
+              onBack: opts.onBackToList,
+              onWrite: write,
+              onRelateSync: opts.onRelateSync,
+              onColumnMetasChange: opts.onColumnMetasChange,
+              onPageTitleChange: opts.onPageTitleChange,
+              onDetailSlotsChange: opts.onDetailSlotsChange,
+              onOpenFkList: opts.onOpenFkList,
+              onAppSearch: opts.onAppSearch,
+              onOpenAppSearch: opts.onOpenAppSearch,
+              fkExpand: opts.fkExpand,
+            });
+          },
+          onOpenList: opts.onOpenFkList,
+        });
+      } else if (fk) {
+        const a = document.createElement("button");
+        a.type = "button";
+        a.className = "fk-link";
+        // Prefer real joined field (User.name…); never invent "User#id"
+        const shown = fk.label || text;
+        a.textContent = truncate(shown, 48);
+        const mapField = (FK_DISPLAY_FIELDS[fk.table] ?? ["name"])[0];
+        const isJoinedCol = col.startsWith(`${fk.table}.`);
+        a.title = [
+          ...titleParts,
+          isJoinedCol
+            ? `${col} → ${fk.table}#${fk.id}`
+            : fk.label
+              ? `${col}=${text} → ${fk.table}.${mapField}=${fk.label}`
+              : `${col}=${text} (not linked to ${fk.table}.${mapField}; check JOIN)`,
+          "Click to view details",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        a.onclick = (e) => {
+          e.stopPropagation();
           void openFkDetail(container, {
-            table,
-            id,
-            field,
+            table: fk.table,
+            id: fk.id,
+            field: fk.field,
             comments,
             columnMetas: metas,
             apijsonBase,
@@ -2458,358 +3123,18 @@ export function renderResultView(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
             fkExpand: opts.fkExpand,
           });
-        },
-        onOpenList: opts.onOpenFkList,
-      });
-      painted = true;
-    } else if (!painted && fk) {
-      const a = document.createElement("button");
-      a.type = "button";
-      a.className = "fk-link";
-      const shown = fk.label || text;
-      a.textContent = truncate(shown, 48);
-      const mapField = (FK_DISPLAY_FIELDS[fk.table] ?? ["name"])[0];
-      const isJoinedCol = col.startsWith(`${fk.table}.`);
-      a.title = [
-        ...titleParts,
-        isJoinedCol
-          ? `${col} → ${fk.table}#${fk.id}`
-          : fk.label
-            ? `${col}=${text} → ${fk.table}.${mapField}=${fk.label}`
-            : `${col}=${text} (not linked to ${fk.table}.${mapField}; check JOIN)`,
-        "Ctrl/⌘-click to view details",
-      ]
-        .filter(Boolean)
-        .join("\n");
-      a.onclick = (e) => {
-        e.stopPropagation();
-        void openFkDetail(container, {
-          table: fk.table,
-          id: fk.id,
-          field: fk.field,
-          comments,
-          columnMetas: metas,
-          apijsonBase,
-          mode: write ? "edit" : "view",
-          onBack: opts.onBackToList,
-          onWrite: write,
-          onRelateSync: opts.onRelateSync,
-          onColumnMetasChange: opts.onColumnMetasChange,
-          onPageTitleChange: opts.onPageTitleChange,
-          onDetailSlotsChange: opts.onDetailSlotsChange,
-          onOpenFkList: opts.onOpenFkList,
-          fkExpand: opts.fkExpand,
-        });
-      };
-      td.appendChild(a);
-      painted = true;
-    } else if (!painted) {
-      td.textContent = truncate(text, 48);
-      td.title = [...titleParts, `Value: ${text}`]
-        .filter(Boolean)
-        .join("\n");
-    }
-
-    const editable = isGridEditableCol(col);
-    td.classList.toggle(
-      "is-focused",
-      gridFocused?.rowKey === row.key && gridFocused?.col === col,
-    );
-    const dirtyMap = gridDirty.get(row.key);
-    td.classList.toggle(
-      "is-dirty",
-      !!(dirtyMap && Object.prototype.hasOwnProperty.call(dirtyMap, col)),
-    );
-    td.classList.toggle("is-readonly", !editable);
-    if (!editable) {
-      const extra = t("result.cellReadonly");
-      td.title = td.title ? `${td.title}\n${extra}` : extra;
-    }
-  };
-
-  const startGridEdit = (
-    td: HTMLTableCellElement,
-    row: FlatRow,
-    col: string,
-  ) => {
-    if (!isGridEditableCol(col)) return;
-    if (gridEditing?.rowKey === row.key && gridEditing?.col === col) return;
-    commitGridEdit();
-    gridFocused = { rowKey: row.key, col };
-    gridEditing = { rowKey: row.key, col };
-    const value = effectiveCell(row, col);
-    td.replaceChildren();
-    td.classList.add("is-editing", "is-focused");
-    td.classList.toggle(
-      "is-dirty",
-      !!(
-        gridDirty.get(row.key) &&
-        Object.prototype.hasOwnProperty.call(gridDirty.get(row.key)!, col)
-      ),
-    );
-    td.classList.remove("is-readonly");
-    const jsonish = looksLikeJsonField(col, value);
-    const gender = !tableValueRawMode && isGenderField(col);
-    let input: GridEditInput;
-    if (gender) {
-      const sel = document.createElement("select");
-      sel.className = "cell-edit-input";
-      for (const opt of GENDER_OPTIONS) {
-        const o = document.createElement("option");
-        o.value = opt.value;
-        o.textContent = opt.label;
-        sel.appendChild(o);
+        };
+        td.appendChild(a);
+      } else {
+        td.textContent = truncate(text, 48);
+        td.title = [...titleParts, `Value: ${text}`]
+          .filter(Boolean)
+          .join("\n");
       }
-      const cur = String(value ?? "").trim();
-      if (cur && !GENDER_OPTIONS.some((o) => o.value === cur)) {
-        const o = document.createElement("option");
-        o.value = cur;
-        o.textContent = cur;
-        sel.appendChild(o);
-      }
-      sel.value = cur;
-      input = sel;
-    } else if (jsonish) {
-      const ta = document.createElement("textarea");
-      ta.className = "cell-edit-input";
-      ta.rows = 3;
-      ta.value = cellPrettyJson(value) || cellText(value);
-      input = ta;
-    } else {
-      const inp = document.createElement("input");
-      inp.type = "text";
-      inp.className = "cell-edit-input";
-      inp.value = cellText(value);
-      input = inp;
-    }
-    input.addEventListener("keydown", (e) => {
-      const ke = e as KeyboardEvent;
-      if (ke.key === "Escape") {
-        ke.preventDefault();
-        ke.stopPropagation();
-        cancelGridEdit();
-        return;
-      }
-      if (ke.key === "Tab") {
-        ke.preventDefault();
-        commitGridEdit();
-        moveGridFocus(row, col, ke.shiftKey ? -1 : 1, 0);
-        return;
-      }
-      const enterCommits =
-        ke.key === "Enter" &&
-        !(input instanceof HTMLTextAreaElement && !ke.ctrlKey && !ke.metaKey);
-      if (enterCommits) {
-        ke.preventDefault();
-        commitGridEdit();
-        refreshGridTd(row.key, col);
-      }
-    });
-    input.addEventListener("blur", () => {
-      window.setTimeout(() => {
-        if (
-          gridEditing?.rowKey === row.key &&
-          gridEditing?.col === col
-        ) {
-          commitGridEdit();
-        }
-      }, 0);
-    });
-    td.appendChild(input);
-    gridInput = input;
-    input.focus();
-    if (
-      input instanceof HTMLInputElement ||
-      input instanceof HTMLTextAreaElement
-    ) {
-      input.select();
-    }
-  };
-
-  const moveGridFocus = (
-    row: FlatRow,
-    col: string,
-    dCol: number,
-    dRow: number,
-  ) => {
-    const cols = visibleCols;
-    const rows = parsed.rows;
-    const ci = cols.indexOf(col);
-    const ri = rows.findIndex((r) => r.key === row.key);
-    if (ci < 0 || ri < 0) return;
-    if (dCol !== 0 && dRow === 0) {
-      let nci = ci + dCol;
-      let nri = ri;
-      while (nri >= 0 && nri < rows.length) {
-        if (nci < 0) {
-          nri -= 1;
-          nci = cols.length - 1;
-        } else if (nci >= cols.length) {
-          nri += 1;
-          nci = 0;
-        } else {
-          const nrow = rows[nri]!;
-          const ncol = cols[nci]!;
-          if (!isGridEditableCol(ncol) && isGridEditableCol(col)) {
-            nci += dCol > 0 ? 1 : -1;
-            continue;
-          }
-          const oldTd = findGridTd(row.key, col);
-          gridFocused = { rowKey: nrow.key, col: ncol };
-          if (oldTd) fillGridCell?.(oldTd, row, col);
-          refreshGridTd(nrow.key, ncol);
-          return;
-        }
-      }
-      return;
-    }
-    const nci = ci + dCol;
-    const nri = ri + dRow;
-    if (nci < 0 || nci >= cols.length || nri < 0 || nri >= rows.length) return;
-    const nrow = rows[nri]!;
-    const ncol = cols[nci]!;
-    const oldTd = findGridTd(row.key, col);
-    gridFocused = { rowKey: nrow.key, col: ncol };
-    if (oldTd) fillGridCell?.(oldTd, row, col);
-    refreshGridTd(nrow.key, ncol);
-  };
-
-  const showRowMenu = (x: number, y: number, row: FlatRow) => {
-    suppressCellClick = true;
-    window.setTimeout(() => {
-      suppressCellClick = false;
-    }, 400);
-    const items: Array<{
-      label: string;
-      danger?: boolean;
-      onClick: () => void;
-    }> = [
-      {
-        label: t("result.openRecord"),
-        onClick: () => openRowDetail(row.key, write ? "edit" : "view"),
-      },
-    ];
-    if (write && primaryTable) {
-      items.push({
-        label: t("result.deleteRow"),
-        danger: true,
-        onClick: () => {
-          if (!confirm(t("result.confirmDeleteRow", { id: row.key }))) return;
-          const id = resolveRowRecordId(row, primaryTable);
-          if (id == null) return;
-          const payload = buildDeleteBody(primaryTable, [id]);
-          if (payload) void write(payload);
-        },
-      });
-    }
-    openTableRowMenu(x, y, items);
-  };
-
-  const onCellClick = (
-    e: MouseEvent,
-    td: HTMLTableCellElement,
-    row: FlatRow,
-    col: string,
-  ) => {
-    if (suppressCellClick) {
-      suppressCellClick = false;
-      return;
-    }
-    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
-    if (
-      gridFocused?.rowKey === row.key &&
-      gridFocused?.col === col &&
-      !gridEditing
-    ) {
-      startGridEdit(td, row, col);
-      return;
-    }
-    commitGridEdit();
-    const prev = gridFocused;
-    gridFocused = { rowKey: row.key, col };
-    if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
-      refreshGridTd(prev.rowKey, prev.col);
-    }
-    fillGridCell?.(td, row, col);
-    listWrap.focus({ preventScroll: true });
-  };
-
-  for (const row of parsed.rows) {
-    const tr = document.createElement("tr");
-    tr.dataset.key = row.key;
-
-    const tdCheck = document.createElement("td");
-    tdCheck.className = "col-check";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.className = "row-check";
-    cb.onclick = (e) => e.stopPropagation();
-    cb.onchange = () => {
-      if (cb.checked) selected.add(row.key);
-      else selected.delete(row.key);
-      syncBatchUi();
-    };
-    tdCheck.appendChild(cb);
-    tr.appendChild(tdCheck);
-    tr.addEventListener("contextmenu", (e) => {
-      if ((e.target as HTMLElement).closest("td[data-col]")) return;
-      e.preventDefault();
-      showRowMenu(e.clientX, e.clientY, row);
-    });
-
-    for (const col of visibleCols) {
-      const td = document.createElement("td");
-      td.dataset.rowKey = row.key;
-      td.dataset.col = col;
-      const tw = columnWidthPx(metas[col]);
-      td.style.width = `${tw}px`;
-      td.style.minWidth = `${tw}px`;
-      td.style.maxWidth = `${tw}px`;
-      fillGridCell?.(td, row, col);
-      td.addEventListener(
-        "click",
-        (e) => {
-          if (suppressCellClick) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            suppressCellClick = false;
-            return;
-          }
-          const t = e.target as HTMLElement;
-          if (t.closest("input, textarea, select")) return;
-          const inner = t.closest("a, button, img, .table-img-more");
-          if (inner && (e.metaKey || e.ctrlKey)) return;
-          if (inner) {
-            e.preventDefault();
-            e.stopImmediatePropagation();
-          }
-          onCellClick(e, td, row, col);
-        },
-        true,
-      );
-      td.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        commitGridEdit();
-        const prev = gridFocused;
-        gridFocused = { rowKey: row.key, col };
-        if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
-          refreshGridTd(prev.rowKey, prev.col);
-        }
-        fillGridCell?.(td, row, col);
-        showRowMenu(e.clientX, e.clientY, row);
-      });
-      attachCellLongPress(td, (x, y) => {
-        commitGridEdit();
-        const prev = gridFocused;
-        gridFocused = { rowKey: row.key, col };
-        if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
-          refreshGridTd(prev.rowKey, prev.col);
-        }
-        fillGridCell?.(td, row, col);
-        showRowMenu(x, y, row);
-      });
       tr.appendChild(td);
     }
     const tdAct = document.createElement("td");
@@ -2908,6 +3233,7 @@ export function renderResultView(
   detailHost.className = "hidden";
   container.appendChild(detailHost);
 
+  finishListSurface();
   return state;
 }
 
@@ -3670,153 +3996,6 @@ function pickGridCaption(
   return "";
 }
 
-function openImageLightbox(
-  getUrls: () => string[],
-  startIndex: number,
-): void {
-  document.getElementById("detail-image-lightbox")?.remove();
-  let urls = getUrls().filter(Boolean);
-  if (!urls.length) return;
-  let idx = Math.max(0, Math.min(startIndex, urls.length - 1));
-
-  // Mount on <body> as a true viewport overlay (not in-page flow / bottom bar)
-  const modal = document.createElement("div");
-  modal.id = "detail-image-lightbox";
-  modal.className = "detail-lightbox";
-  modal.setAttribute("role", "dialog");
-  modal.setAttribute("aria-modal", "true");
-  // Inline critical geometry so overlay cannot collapse into page layout
-  Object.assign(modal.style, {
-    position: "fixed",
-    top: "0",
-    left: "0",
-    right: "0",
-    bottom: "0",
-    width: "100vw",
-    height: "100vh",
-    zIndex: "2147483646",
-    margin: "0",
-    display: "flex",
-    flexDirection: "column",
-    background: "rgba(0, 0, 0, 0.88)",
-    boxSizing: "border-box",
-  });
-
-  const body = document.createElement("div");
-  body.className = "detail-lightbox-body";
-
-  const stage = document.createElement("div");
-  stage.className = "detail-lightbox-stage";
-  const img = document.createElement("img");
-  img.className = "detail-lightbox-img";
-  img.referrerPolicy = "no-referrer";
-  stage.appendChild(img);
-
-  const prev = document.createElement("button");
-  prev.type = "button";
-  prev.className = "detail-lightbox-nav";
-  prev.textContent = "<";
-  prev.title = t("common.previous");
-  prev.setAttribute("aria-label", "Previous");
-  const next = document.createElement("button");
-  next.type = "button";
-  next.className = "detail-lightbox-nav detail-lightbox-nav-next";
-  next.textContent = ">";
-  next.title = t("common.next");
-  next.setAttribute("aria-label", "Next");
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "detail-lightbox-close";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close");
-
-  const caption = document.createElement("div");
-  caption.className = "detail-lightbox-caption";
-
-  const strip = document.createElement("div");
-  strip.className = "detail-lightbox-strip";
-
-  const prevOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
-
-  const teardown = () => {
-    document.body.style.overflow = prevOverflow;
-    document.removeEventListener("keydown", onKey);
-    modal.remove();
-  };
-
-  const paint = () => {
-    urls = getUrls().filter(Boolean);
-    if (!urls.length) {
-      teardown();
-      return;
-    }
-    if (idx >= urls.length) idx = urls.length - 1;
-    if (idx < 0) idx = 0;
-    img.src = urls[idx] || "";
-    caption.textContent = `${idx + 1} / ${urls.length}`;
-    prev.style.visibility = urls.length > 1 ? "visible" : "hidden";
-    next.style.visibility = urls.length > 1 ? "visible" : "hidden";
-    strip.innerHTML = "";
-    urls.forEach((u, i) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className =
-        "detail-lightbox-strip-item" + (i === idx ? " is-active" : "");
-      const t = document.createElement("img");
-      t.src = u;
-      t.alt = "";
-      t.referrerPolicy = "no-referrer";
-      t.loading = "lazy";
-      b.appendChild(t);
-      b.onclick = (e) => {
-        e.stopPropagation();
-        idx = i;
-        paint();
-      };
-      strip.appendChild(b);
-    });
-    const active = strip.querySelector(".is-active");
-    active?.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-  };
-
-  prev.onclick = (e) => {
-    e.stopPropagation();
-    idx = (idx - 1 + urls.length) % urls.length;
-    paint();
-  };
-  next.onclick = (e) => {
-    e.stopPropagation();
-    idx = (idx + 1) % urls.length;
-    paint();
-  };
-  close.onclick = (e) => {
-    e.stopPropagation();
-    teardown();
-  };
-  modal.onclick = (e) => {
-    if (e.target === modal || e.target === body) teardown();
-  };
-  stage.onclick = (e) => e.stopPropagation();
-  strip.onclick = (e) => e.stopPropagation();
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") teardown();
-    if (e.key === "ArrowLeft") prev.click();
-    if (e.key === "ArrowRight") next.click();
-  }
-  document.addEventListener("keydown", onKey);
-
-  body.append(stage, caption, strip);
-  modal.append(close, prev, next, body);
-  document.body.appendChild(modal);
-  paint();
-}
-
 /** Pick images → POST /upload → absolute http URLs (host + path). */
 function pickAndUploadImages(
   apijsonBase: string,
@@ -4508,7 +4687,17 @@ export type WritePayload = {
   table: string;
   /** Request.structure fragments (UPDATE field@) for multi-table Apply */
   structure?: Record<string, unknown>;
+  /** Like / comment / follow stay on the detail page after success. */
+  stayOnPage?: boolean;
+  /** Keep body.tag (Video / Comment / User) instead of rewriting from the page title. */
+  keepTag?: boolean;
+  /** Do not merge a saved Data-API write template (social ops are exact). */
+  skipTemplate?: boolean;
 };
+
+export type WriteHandler = (
+  payload: WritePayload,
+) => void | Promise<boolean | void>;
 
 export type { CrudOp, DetailTableSlot, RelateSyncPayload } from "./detail-crud.js";
 
@@ -4589,6 +4778,25 @@ export function createFieldDefaults(table: string): Record<string, unknown> {
       return { content: "" };
     case "User":
       return { name: "", sex: 0 };
+    case "Employee":
+      return { name: "", dept: "", sex: 0, status: "active" };
+    case "Activity":
+      return { title: "", status: "online" };
+    case "Message":
+      return { content: "" };
+    case "News":
+    case "Notice":
+    case "Blog":
+    case "Article":
+    case "Video":
+    case "Music":
+      return { title: "" };
+    case "Product":
+      return { name: "", price: 0, stock: 0, status: "on" };
+    case "Cart":
+      return { title: "", qty: 1 };
+    case "ShopOrder":
+      return { consignee: "", phone: "", address: "", status: "pending" };
     default:
       return {};
   }
@@ -4597,7 +4805,7 @@ export function createFieldDefaults(table: string): Record<string, unknown> {
 /** Columns omitted from create forms (server injects / Request REFUSE). */
 function createOmitColumns(table: string): Set<string> {
   const omit = new Set(["id", "date"]);
-  if (table === "Moment" || table === "Comment") omit.add("userId");
+  omit.add("userId");
   const rules = createRulesFromRequest(table);
   for (const f of rules?.refuse ?? []) omit.add(f);
   return omit;
@@ -4616,9 +4824,27 @@ export function createRequiredColumns(table: string): string[] {
     case "Moment":
       return ["content"];
     case "Comment":
-      return ["content", "momentId"];
+      return ["content"];
     case "User":
       return ["name"];
+    case "Employee":
+      return ["name"];
+    case "Activity":
+    case "News":
+    case "Notice":
+    case "Blog":
+    case "Article":
+    case "Video":
+    case "Music":
+      return ["title"];
+    case "Message":
+      return ["content", "toUserId"];
+    case "Product":
+      return ["name"];
+    case "Cart":
+      return ["title", "productId"];
+    case "ShopOrder":
+      return ["consignee", "phone", "address"];
     default:
       return [];
   }
@@ -4793,7 +5019,7 @@ export function buildPutFromGridEdits(
 }
 
 const LIST_HIDE_SEL =
-  "#result-table-wrap, #result-grid-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
+  "#result-table-wrap, #result-grid-wrap, #result-layout-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
 
 function buildCombineExprBar(opts: {
   value: string;
@@ -4868,37 +5094,9 @@ function buildTableStatusBar(opts: {
   onRemoveQueryTable?: (table: string) => void;
   onSetPrimaryTable?: (table: string) => void;
   onBatchDelete?: () => void;
-  onUndo?: () => void;
-  onSaveGrid?: () => void;
 }): HTMLElement {
   const bar = document.createElement("div");
   bar.className = "table-status";
-
-  if (opts.onUndo || opts.onSaveGrid) {
-    const tools = document.createElement("div");
-    tools.className = "table-grid-tools";
-    if (opts.onUndo) {
-      const undoBtn = document.createElement("button");
-      undoBtn.type = "button";
-      undoBtn.className = "table-grid-undo";
-      undoBtn.textContent = t("common.undo");
-      undoBtn.title = t("result.undoEdits");
-      undoBtn.disabled = true;
-      undoBtn.onclick = () => opts.onUndo?.();
-      tools.appendChild(undoBtn);
-    }
-    if (opts.onSaveGrid) {
-      const saveBtn = document.createElement("button");
-      saveBtn.type = "button";
-      saveBtn.className = "primary table-grid-save";
-      saveBtn.textContent = t("common.save");
-      saveBtn.title = t("result.saveEdits");
-      saveBtn.disabled = true;
-      saveBtn.onclick = () => opts.onSaveGrid?.();
-      tools.appendChild(saveBtn);
-    }
-    bar.appendChild(tools);
-  }
 
   const page = document.createElement("span");
   page.className = "status-page";
@@ -6614,7 +6812,7 @@ function openCreateForm(
     initialSlots?: DetailTableSlot[];
     pageTitle?: string;
     onBack: () => void;
-    onSubmit: (payload: WritePayload) => void | Promise<void>;
+    onSubmit: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -6636,9 +6834,14 @@ function openCreateForm(
 
   const card = document.createElement("div");
   card.className = "detail-form";
-  const header = document.createElement("div");
-  header.className = "detail-form-header";
+  if (!document.getElementById("detail-chrome")) {
+    const header = document.createElement("div");
+    header.id = "detail-chrome-fallback";
+    header.className = "detail-form-header";
+    card.appendChild(header);
+  }
   const goBack = () => {
+    setDetailChrome(null);
     detailHost!.classList.add("hidden");
     detailHost!.innerHTML = "";
     for (const el of Array.from(container.querySelectorAll(LIST_HIDE_SEL))) {
@@ -6646,16 +6849,6 @@ function openCreateForm(
     }
     opts.onBack();
   };
-  header.appendChild(makeBackIconButton(goBack));
-  const defaultTitle = opts.pageTitle?.trim() || `Create ${opts.table}`;
-  const titleInput = mountDetailPageTitleInput(header, {
-    value: defaultTitle,
-    placeholder: `Create ${opts.table}`,
-    onCommit: (title) => {
-      opts.onPageTitleChange?.(title);
-    },
-  });
-  card.appendChild(header);
 
   const slots: DetailTableSlot[] = resolveNavDetailSlots(
     opts.table,
@@ -6683,25 +6876,24 @@ function openCreateForm(
   slotsHost.className = "detail-slots-host";
   card.appendChild(slotsHost);
 
-  const actions = document.createElement("div");
-  actions.className = "detail-form-actions";
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "button";
-  saveBtn.className = "primary";
-  saveBtn.textContent = t("common.save");
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.textContent = t("common.cancel");
-  cancel.onclick = goBack;
-  actions.append(saveBtn, cancel);
-  card.appendChild(actions);
   detailHost.appendChild(card);
 
+  let runCreateSave: (() => void) | null = null;
+  const syncCreateChrome = () => {
+    setDetailChrome({
+      kind: "create",
+      showSave: true,
+      showCancel: true,
+      saveDisabled: !runCreateSave,
+      onBack: goBack,
+      onCancel: goBack,
+      onSave: () => runCreateSave?.(),
+    });
+  };
+  syncCreateChrome();
+
   const flashSave = (msg: string, ms = 1400) => {
-    saveBtn.textContent = msg;
-    setTimeout(() => {
-      saveBtn.textContent = t("common.save");
-    }, ms);
+    flashDetailChromeSave(msg, ms);
   };
 
   const paintCreateSlotFields = (
@@ -6934,18 +7126,6 @@ function openCreateForm(
     liveComments = comments;
     slotsHost.innerHTML = "";
     collectors = [];
-    // Keep editable page title; only hint when still the default Create X
-    if (
-      !titleInput.value.trim() ||
-      /^Create\s/i.test(titleInput.value) ||
-      /^Add\s/i.test(titleInput.value)
-    ) {
-      const hint =
-        slots.length > 1
-          ? `Create ${slots.map((s) => s.table).join(" + ")}`
-          : `Create ${slots[0]?.table ?? opts.table}`;
-      if (!opts.pageTitle?.trim()) titleInput.value = hint;
-    }
     emitSlots();
 
     for (let i = 0; i < slots.length; i++) {
@@ -7065,7 +7245,7 @@ function openCreateForm(
     addRow.appendChild(hint);
     slotsHost.appendChild(addRow);
 
-    saveBtn.onclick = () => {
+    runCreateSave = () => {
       void (async () => {
         // Persist slots / field visibility / DDL before write
         opts.onColumnMetasChange?.(columnMetas ?? {});
@@ -7191,6 +7371,7 @@ function openCreateForm(
         void opts.onSubmit(payload);
       })();
     };
+    syncCreateChrome();
   };
 
   const boot = async () => {
@@ -7246,7 +7427,7 @@ async function openFkDetail(
     pageTitle?: string;
     initialSlots?: DetailTableSlot[] | null;
     onBack?: () => void;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onWrite?: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -7256,6 +7437,17 @@ async function openFkDetail(
       ids: Array<string | number>;
       field?: string;
     }) => void;
+    layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
   },
 ) {
   for (const el of Array.from(container.querySelectorAll(LIST_HIDE_SEL))) {
@@ -7307,6 +7499,12 @@ async function openFkDetail(
     }
     row = expandDetailRowFields(row, opts.table, opts.comments);
     detailHost.innerHTML = "";
+    const pres = pickRowPresentation(row.cells, {
+      primaryTable: opts.table,
+      columns: Object.keys(row.cells),
+      comments: opts.comments,
+      recordId: opts.id,
+    });
     renderDetailForm(detailHost, row, {
       comments: opts.comments,
       columnMetas: opts.columnMetas ?? null,
@@ -7315,11 +7513,47 @@ async function openFkDetail(
       apijsonBase: opts.apijsonBase,
       pageTitle: opts.pageTitle,
       initialSlots: opts.initialSlots,
+      layoutKind: opts.layoutKind,
+      layoutSpec: opts.layoutSpec,
+      actionBindings: opts.actionBindings,
+      onActionSlot: opts.onActionSlot,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
       onDetailSlotsChange: opts.onDetailSlotsChange,
       onOpenFkList: opts.onOpenFkList,
+      onLayoutAddToCart: () => {
+        addRowToCart(opts.table, row, pres);
+        flashLayoutNote(t("layout.addedToCart"));
+      },
+      onLayoutBuyNow: () => {
+        addRowToCart(opts.table, row, pres);
+        opts.onRequestLayoutKind?.("order");
+      },
+      onLayoutCheckout: (info) => {
+        const orderTable = /order/i.test(opts.table) ? opts.table : "Order";
+        if (opts.onWrite) {
+          void opts.onWrite({
+            method: "post",
+            table: orderTable,
+            body: {
+              [orderTable]: {
+                name: info.name,
+                phone: info.phone,
+                address: info.address,
+                remark: info.remark,
+                total: info.total,
+                items: JSON.stringify(info.lines),
+              },
+              tag: orderTable,
+            },
+          });
+        }
+        clearCart();
+        flashLayoutNote(t("layout.orderPlaced"));
+      },
       onBack: () => {
         detailHost.classList.add("hidden");
         detailHost.innerHTML = "";
@@ -7351,7 +7585,7 @@ function showDetail(
     mode?: "view" | "edit";
     columnMetas?: Record<string, ColumnMeta> | null;
     onBack?: () => void;
-    onSave?: (payload: WritePayload) => void | Promise<void>;
+    onSave?: WriteHandler;
     onDelete?: () => void;
     apijsonBase?: string;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
@@ -7402,9 +7636,9 @@ function renderDetailForm(
     pageTitle?: string;
     initialSlots?: DetailTableSlot[] | null;
     onBack: (() => void) | null;
-    onSave?: (payload: WritePayload) => void | Promise<void>;
+    onSave?: WriteHandler;
     onDelete?: () => void;
-    onWrite?: (payload: WritePayload) => void | Promise<void>;
+    onWrite?: WriteHandler;
     onRelateSync?: (payload: RelateSyncPayload) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
     onPageTitleChange?: (title: string) => void;
@@ -7413,6 +7647,30 @@ function renderDetailForm(
       table: string;
       ids: Array<string | number>;
       field?: string;
+    }) => void;
+    layoutKind?: LayoutKind;
+    layoutSpec?: LayoutSpec;
+    onRequestLayoutKind?: (kind: LayoutKind) => void;
+    actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
+    onActionSlot?: (
+      slot: ActionSlot,
+      ctx: ActionRunContext,
+      opts?: { bindIfMissing?: boolean },
+    ) => void | Promise<boolean | ActionSlotResult | void>;
+    onAppSearch?: (q: string) => void;
+    onOpenAppSearch?: (q: string) => void;
+    onOpenAppScan?: () => void;
+    onOpenFilter?: (anchor: HTMLElement) => void;
+    filterActive?: boolean;
+    onLayoutAddToCart?: () => void;
+    onLayoutBuyNow?: () => void;
+    onLayoutCheckout?: (info: {
+      name: string;
+      phone: string;
+      address: string;
+      remark: string;
+      lines: { title: string; qty: number; price: number }[];
+      total: number;
     }) => void;
   },
 ) {
@@ -7427,62 +7685,311 @@ function renderDetailForm(
   /** Avoid overlapping schema fetches when switching tables quickly. */
   let schemaLoadGen = 0;
 
-  const header = document.createElement("div");
-  header.className = "detail-form-header";
-  if (opts.onBack) {
-    header.appendChild(makeBackIconButton(opts.onBack));
-  }
-  const fallbackTitle = primary
-    ? `${primary} ${editableMode ? "Edit" : "View"}`
-    : `${editableMode ? "Edit" : "View"}`;
-  const titleValue =
-    stripTitleRecordId(opts.pageTitle?.trim() || "") || fallbackTitle;
-  mountDetailPageTitleInput(header, {
-    value: titleValue,
-    placeholder: fallbackTitle,
-    onCommit: (title) => opts.onPageTitleChange?.(title),
-  });
   const recordId =
     (primary ? row.cells[`${primary}.id`] : undefined) ?? row.key;
   const switchHost =
     container.id === "result-detail-host"
       ? container.parentElement ?? container
       : container;
-  mountDetailRecordIdControl(header, {
-    id: recordId as string | number,
-    onSwitch:
-      primary && opts.apijsonBase
-        ? (id) => {
+  const switchRecordId =
+    primary && opts.apijsonBase
+      ? (id: string | number) => {
+          void openFkDetail(switchHost, {
+            table: primary,
+            id,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase!,
+            mode: editableMode ? "edit" : "view",
+            pageTitle: opts.pageTitle,
+            initialSlots: opts.initialSlots,
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: opts.layoutKind,
+            layoutSpec: opts.layoutSpec,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        }
+      : undefined;
+
+  let rawMode = false;
+  let paintFieldsFn: (() => void) | null = null;
+  let runDetailSave: (() => void) | null = null;
+  let runDetailDelete: (() => void) | null = null;
+  const hideForm = shouldHideDetailForm(opts.layoutKind, opts.layoutSpec);
+  if (!document.getElementById("detail-chrome")) {
+    const header = document.createElement("div");
+    header.id = "detail-chrome-fallback";
+    header.className = "detail-form-header";
+    card.appendChild(header);
+  }
+  const goBack = () => {
+    setDetailChrome(null);
+    opts.onBack?.();
+  };
+  const syncDetailChrome = (formHidden = hideForm) => {
+    setDetailChrome({
+      kind: "detail",
+      recordId: recordId as string | number,
+      showId: !formHidden,
+      showRaw: !formHidden,
+      rawMode,
+      showSave: !formHidden && !!(writeFn && primary && editableMode),
+      showDelete: !formHidden && !!opts.onDelete,
+      onBack: opts.onBack ? goBack : undefined,
+      onSwitchId: switchRecordId,
+      onToggleRaw: () => {
+        rawMode = !rawMode;
+        updateDetailChromeRaw(rawMode);
+        paintFieldsFn?.();
+      },
+      onSave: () => runDetailSave?.(),
+      onDelete: () => runDetailDelete?.(),
+    });
+  };
+  syncDetailChrome();
+
+  appendResultSearchChrome(card, opts.layoutSpec, "detail", {
+    onAppSearch: opts.onAppSearch,
+    onOpenAppSearch: opts.onOpenAppSearch,
+    onOpenAppScan: opts.onOpenAppScan,
+    onOpenFilter: opts.onOpenFilter,
+    filterActive: opts.filterActive,
+  });
+
+  const detailLayout = opts.layoutKind;
+  const showHero =
+    (detailLayout && detailLayout !== "data") ||
+    isUserLayoutPage(opts.layoutSpec?.page) ||
+    opts.layoutSpec?.page === "profile";
+  if (showHero && detailLayout) {
+    renderLayoutDetailHero(card, {
+      kind: detailLayout,
+      spec: opts.layoutSpec,
+      row,
+      columns,
+      primaryTable: primary,
+      comments,
+      columnMetas,
+      apijsonBase: opts.apijsonBase || "",
+      recordId: recordId as string | number,
+      handlers: {
+        onAddToCart: opts.onLayoutAddToCart,
+        onBuyNow: opts.onLayoutBuyNow,
+        onCheckout: opts.onLayoutCheckout,
+        onOpenCheckout: opts.onLayoutBuyNow,
+        onWrite: writeFn,
+        onOpenFkList: opts.onOpenFkList,
+        onOpenChat: (userId) => {
+          void (async () => {
+            const base = opts.apijsonBase;
+            const msgTable = inferItemTableForApp("chat", comments);
+            if (!base || !msgTable) {
+              if (opts.onBack) opts.onBack();
+              else flashLayoutNote(t("layout.users.noChat"));
+              return;
+            }
+            const fields = [
+              inferAuthorIdField(msgTable, comments),
+              inferPeerIdField(msgTable, comments),
+            ].filter((f): f is string => !!f);
+            const dateField = inferDateOrderField(msgTable, comments);
+            let threadId: string | number | null = null;
+            for (const field of fields) {
+              const rows = await fetchAuthorFeed({
+                base,
+                table: msgTable,
+                authorField: field,
+                authorId: userId,
+                dateField,
+                count: 1,
+              });
+              if (rows[0]) {
+                threadId = rows[0].id;
+                break;
+              }
+            }
+            if (threadId == null) {
+              if (fields[0]) {
+                opts.onOpenFkList?.({
+                  table: msgTable,
+                  ids: [userId],
+                  field: fields[0],
+                });
+                return;
+              }
+              if (opts.onBack) opts.onBack();
+              else flashLayoutNote(t("layout.users.noChat"));
+              return;
+            }
+            const personTable = inferPersonTable(comments);
             void openFkDetail(switchHost, {
-              table: primary,
-              id,
+              table: msgTable,
+              id: threadId,
               comments,
               columnMetas,
               fkExpand: opts.fkExpand ?? null,
-              apijsonBase: opts.apijsonBase!,
-              mode: editableMode ? "edit" : "view",
-              pageTitle: opts.pageTitle,
-              initialSlots: opts.initialSlots,
-              onBack: opts.onBack || undefined,
+              apijsonBase: base,
+              mode: "view",
+              pageTitle: pageTitleForTable(msgTable, "detail", threadId),
+              onBack: () => {
+                if (!personTable) {
+                  opts.onBack?.();
+                  return;
+                }
+                const contact = contactLayoutFor({
+                  layoutKind: "chat",
+                  layoutSpec: { app: "chat", page: "profile" },
+                });
+                void openFkDetail(switchHost, {
+                  table: personTable,
+                  id: userId,
+                  comments,
+                  columnMetas,
+                  fkExpand: opts.fkExpand ?? null,
+                  apijsonBase: base,
+                  mode: "view",
+                  pageTitle: t("layout.page.profile"),
+                  onBack: opts.onBack || undefined,
+                  onWrite: writeFn,
+                  onRelateSync: opts.onRelateSync,
+                  onColumnMetasChange: opts.onColumnMetasChange,
+                  onPageTitleChange: opts.onPageTitleChange,
+                  onDetailSlotsChange: opts.onDetailSlotsChange,
+                  onOpenFkList: opts.onOpenFkList,
+                  layoutKind: contact.layoutKind,
+                  layoutSpec: contact.layoutSpec,
+                  onRequestLayoutKind: opts.onRequestLayoutKind,
+                  actionBindings: opts.actionBindings,
+                  onActionSlot: opts.onActionSlot,
+                  onAppSearch: opts.onAppSearch,
+                  onOpenAppSearch: opts.onOpenAppSearch,
+                });
+              },
               onWrite: writeFn,
               onRelateSync: opts.onRelateSync,
               onColumnMetasChange: opts.onColumnMetasChange,
               onPageTitleChange: opts.onPageTitleChange,
               onDetailSlotsChange: opts.onDetailSlotsChange,
               onOpenFkList: opts.onOpenFkList,
+              layoutKind: "chat",
+              layoutSpec: { app: "chat", page: "detail" },
+              onRequestLayoutKind: opts.onRequestLayoutKind,
+              actionBindings: opts.actionBindings,
+              onActionSlot: opts.onActionSlot,
+              onAppSearch: opts.onAppSearch,
+              onOpenAppSearch: opts.onOpenAppSearch,
             });
+          })();
+        },
+        onActionSlot: opts.onActionSlot,
+        actionBindings: opts.actionBindings,
+        onSearch: opts.onAppSearch,
+        onOpenSearch: opts.onOpenAppSearch,
+        onOpenAuthor: (userId) => {
+          const personTable = inferPersonTable(comments);
+          if (!opts.apijsonBase || !personTable) {
+            flashLayoutNote(t("layout.noAuthor"));
+            return;
           }
-        : undefined,
-  });
+          const contact = contactLayoutFor({
+            layoutKind: opts.layoutKind,
+            layoutSpec: opts.layoutSpec,
+          });
+          void openFkDetail(switchHost, {
+            table: personTable,
+            id: userId,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase,
+            mode: "view",
+            pageTitle: t("layout.page.profile"),
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: contact.layoutKind,
+            layoutSpec: contact.layoutSpec,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
+        onOpenRelated: (id, table) => {
+          const target = table || primary;
+          if (!target || !opts.apijsonBase) return;
+          const spec = table
+            ? inferLayoutSpec({
+                table,
+                comments,
+                pageKind: "detail",
+              })
+            : opts.layoutSpec;
+          void openFkDetail(switchHost, {
+            table: target,
+            id,
+            comments,
+            columnMetas,
+            fkExpand: opts.fkExpand ?? null,
+            apijsonBase: opts.apijsonBase,
+            mode: table ? "view" : editableMode ? "edit" : "view",
+            pageTitle: table
+              ? pageTitleForTable(table, "detail", id)
+              : opts.pageTitle,
+            initialSlots: table ? undefined : opts.initialSlots,
+            onBack: opts.onBack || undefined,
+            onWrite: writeFn,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            layoutKind: spec?.app ?? opts.layoutKind,
+            layoutSpec: spec ?? opts.layoutSpec,
+            onRequestLayoutKind: opts.onRequestLayoutKind,
+            actionBindings: opts.actionBindings,
+            onActionSlot: opts.onActionSlot,
+            onAppSearch: opts.onAppSearch,
+            onOpenAppSearch: opts.onOpenAppSearch,
+          });
+        },
+      },
+    });
+  }
 
-  let rawMode = false;
-  const modeToggle = document.createElement("button");
-  modeToggle.type = "button";
-  modeToggle.className = "detail-raw-toggle";
-  modeToggle.textContent = t("result.raw");
-  modeToggle.title = t("result.smartToggle");
-  header.appendChild(modeToggle);
-  card.appendChild(header);
+  if (shouldHideDetailForm(detailLayout, opts.layoutSpec)) {
+    container.appendChild(card);
+    return;
+  }
+
+  if (showHero && detailLayout) {
+    card.classList.add("is-layout-app", "layout-form-collapsed");
+    const editToggle = document.createElement("button");
+    editToggle.type = "button";
+    editToggle.className = "layout-edit-toggle";
+    editToggle.textContent = t("layout.editFields");
+    editToggle.onclick = () => {
+      const collapsed = card.classList.toggle("layout-form-collapsed");
+      editToggle.textContent = collapsed
+        ? t("layout.editFields")
+        : t("layout.hideFields");
+    };
+    card.appendChild(editToggle);
+  }
 
   const fieldsHost = document.createElement("div");
   fieldsHost.className = "detail-fields-host";
@@ -7581,6 +8088,10 @@ function renderDetailForm(
       onPageTitleChange: opts.onPageTitleChange,
       onDetailSlotsChange: opts.onDetailSlotsChange,
       onOpenFkList: opts.onOpenFkList,
+      layoutKind: opts.layoutKind,
+      layoutSpec: opts.layoutSpec,
+      onAppSearch: opts.onAppSearch,
+      onOpenAppSearch: opts.onOpenAppSearch,
       fkExpand: opts.fkExpand,
     });
   };
@@ -7987,27 +8498,16 @@ function renderDetailForm(
     }
   };
 
-  modeToggle.onclick = () => {
-    rawMode = !rawMode;
-    modeToggle.textContent = rawMode ? t("result.smart") : t("result.raw");
-    modeToggle.classList.toggle("is-raw", rawMode);
-    paintFields();
-  };
+  paintFieldsFn = paintFields;
   ensureSchemasThenPaint();
 
-  const actions = document.createElement("div");
-  actions.className = "detail-form-actions";
-  if (writeFn && primary && editableMode) {
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "primary";
-    saveBtn.textContent = t("common.save");
-    const flushPageLayout = () => {
-      opts.onColumnMetasChange?.(columnMetas ?? {});
-      opts.onDetailSlotsChange?.(slots.map((s) => ({ ...s })));
-    };
+  const flushPageLayout = () => {
+    opts.onColumnMetasChange?.(columnMetas ?? {});
+    opts.onDetailSlotsChange?.(slots.map((s) => ({ ...s })));
+  };
 
-    saveBtn.onclick = () => {
+  if (writeFn && primary && editableMode) {
+    runDetailSave = () => {
       void (async () => {
         if (!confirm(`Save changes to #${row.key}?`)) return;
         // Always persist page layout/config (slots, field show/hide, DDL)
@@ -8017,20 +8517,14 @@ function renderDetailForm(
           verifyTypeForWrite("put"),
         );
         if (verifyErr) {
-          saveBtn.textContent = verifyErr.slice(0, 48);
-          setTimeout(() => {
-            saveBtn.textContent = t("common.save");
-          }, 2200);
+          flashDetailChromeSave(verifyErr.slice(0, 48), 2200);
           return;
         }
         const edited: Record<string, string> = {};
         for (const [path, el] of inputs) edited[path] = el.value;
         for (const [path, id] of fkValues) {
           if (id == null) {
-            saveBtn.textContent = `Select foreign key`;
-            setTimeout(() => {
-              saveBtn.textContent = t("common.save");
-            }, 1400);
+            flashDetailChromeSave("Select foreign key", 1400);
             return;
           }
           edited[path] = String(id);
@@ -8061,11 +8555,10 @@ function renderDetailForm(
               }
             }
           } catch (e) {
-            saveBtn.textContent =
-              e instanceof Error ? e.message.slice(0, 40) : "Upload failed";
-            setTimeout(() => {
-              saveBtn.textContent = t("common.save");
-            }, 2000);
+            flashDetailChromeSave(
+              e instanceof Error ? e.message.slice(0, 40) : "Upload failed",
+              2000,
+            );
             return;
           }
         }
@@ -8138,10 +8631,7 @@ function renderDetailForm(
         });
         if (!payload) {
           // Layout already flushed — no record field changes
-          saveBtn.textContent = t("common.saved");
-          setTimeout(() => {
-            saveBtn.textContent = t("common.save");
-          }, 1200);
+          flashDetailChromeSave(t("common.saved"), 1200);
           return;
         }
         attachAuthVerifyToWritePayload(
@@ -8151,14 +8641,9 @@ function renderDetailForm(
         void writeFn(payload);
       })();
     };
-    actions.appendChild(saveBtn);
   }
   if (opts.onDelete) {
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "danger";
-    delBtn.textContent = t("common.delete");
-    delBtn.onclick = () => {
+    runDetailDelete = () => {
       void (async () => {
         if (
           !confirm(
@@ -8172,18 +8657,19 @@ function renderDetailForm(
           verifyTypeForWrite("delete"),
         );
         if (verifyErr) {
-          delBtn.textContent = verifyErr.slice(0, 40);
-          setTimeout(() => {
-            delBtn.textContent = t("common.delete");
-          }, 2200);
+          const delBtn = document.getElementById("btn-detail-delete");
+          if (delBtn instanceof HTMLButtonElement) {
+            delBtn.textContent = verifyErr.slice(0, 40);
+            window.setTimeout(() => {
+              if (delBtn.isConnected) delBtn.textContent = t("common.delete");
+            }, 2200);
+          }
           return;
         }
         opts.onDelete?.();
       })();
     };
-    actions.appendChild(delBtn);
   }
-  if (actions.childNodes.length) card.appendChild(actions);
 
   container.appendChild(card);
 }
