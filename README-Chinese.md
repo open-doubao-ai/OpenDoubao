@@ -1,6 +1,6 @@
 中文 | [English](./README.md)
 
-# A2API
+# OpenDoubao
 
 用 A2UI 聊天即兴生成 UI 来安全、快速、稳定调用 HTTP API 增删改查表格、表单、图表等数据。<br />
 **AI 生成一次 UI，API 每次都安全、快速、稳定执行。**
@@ -51,7 +51,7 @@ npm run dev
 
 | 路径 | 作用 |
 |------|------|
-| `packages/protocol` | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
+| `packages/protocol` | OpenDoubao 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
 | `packages/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
 | `apps/chat-demo` | 编排器 + 聊天 UI（Bootstrap）+ 绑定筛选（稳态） |
 | `apps/admin` | 配置申请审批：批准后写入 Access / Request / Document / Chain |

@@ -1,5 +1,5 @@
 English | [中文](./README-Chinese.md)
-# A2API
+# OpenDoubao
 
 Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. <br />
 **AI generate UI once, API repeat everytime safely, quickly and stably.**
@@ -49,7 +49,7 @@ Optional: set `OPENAI_API_KEY` in `.env` to refine bootstrap with an LLM. Withou
 
 | Path | Role |
 |------|------|
-| `packages/protocol` | A2API 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
+| `packages/protocol` | OpenDoubao 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
 | `packages/runtime` | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
 | `apps/chat-demo` | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
 | `apps/admin` | Config application approvals → write Access / Request / Document / Chain |
