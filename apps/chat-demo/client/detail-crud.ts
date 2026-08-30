@@ -6,7 +6,7 @@
  * Relate Table / Field / local field are shared with columnMetas (Table DDL).
  */
 
-import { TABLE_FK_EDGES, type FkJoinSpec } from "./fk-expand.js";
+import { fkEdgesFor, type FkJoinSpec } from "./fk-expand.js";
 import type { ColumnMeta } from "./field-meta.js";
 import { stripApiJsonRole } from "./schema-types.js";
 import { prioritizeVerifyInStructure } from "./verify-code.js";
@@ -117,7 +117,7 @@ export function resolveRelateLocalField(
       }
     }
   }
-  const edge = (TABLE_FK_EDGES[table] ?? []).find((e) => e.target === relateTable);
+  const edge = fkEdgesFor(table).find((e) => e.target === relateTable);
   if (edge) return edge.column;
   const guess =
     relateTable.charAt(0).toLowerCase() + relateTable.slice(1) + "Id";
@@ -159,13 +159,13 @@ export function defaultRelateForTable(
     }
   }
   if (primaryTable && primaryTable !== table) {
-    const fromPrimary = (TABLE_FK_EDGES[primaryTable] ?? []).find(
+    const fromPrimary = fkEdgesFor(primaryTable).find(
       (e) => e.target === table,
     );
     if (fromPrimary) {
       // JOIN style: secondary.id ↔ primary.fkCol  → id@ /Primary/fkCol
       // For write UPDATE we usually want secondary.fk → primary.id
-      const edgeBack = (TABLE_FK_EDGES[table] ?? []).find(
+      const edgeBack = fkEdgesFor(table).find(
         (e) => e.target === primaryTable,
       );
       if (edgeBack) {
@@ -183,7 +183,7 @@ export function defaultRelateForTable(
         relateOp: "eq",
       };
     }
-    const edge = (TABLE_FK_EDGES[table] ?? []).find(
+    const edge = fkEdgesFor(table).find(
       (e) => e.target === primaryTable,
     );
     if (edge) {

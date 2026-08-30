@@ -13,12 +13,17 @@ Identity / role / structure rules for generated requests:
   table (method + tag + version) — honor structure MUST/REFUSE/TYPE/VERIFY.
 - POST Moment/Comment: omit userId — session injects the visitor.
 - Prefer list queries; open a row in the UI for detail / edit / delete.
-- Do not JOIN User by default when the session already scopes the visitor.
+- When the primary table has FK columns (userId, momentId, …), JOIN the
+  related tables and request key text/image fields even if OWNER already
+  scopes the visitor: User → id,name,tag,head,pictureList;
+  Moment → id,content,pictureList; Comment → id,content.
+  Use "id@": "/Primary/fkCol" and [].join (e.g. "@/User") — not /[]/….
 
 Common APIJSON patterns:
 GET list (omit @column on the primary table so all fields return —
   e.g. User tag/head/pictureList/contactIdList, Moment pictureList):
-{ "[]": { "count": 20, "page": 0, "Moment": { "@order": "date-" } } }
+{ "[]": { "count": 20, "page": 0, "join": "@/User", "Moment": { "@order": "date-" }, "User": { "id@": "/Moment/userId", "@column": "id,name,tag,head,pictureList" } } }
+{ "[]": { "count": 20, "page": 0, "join": "@/User,@/Moment", "Comment": { "@order": "date-" }, "User": { "id@": "/Comment/userId", "@column": "id,name,tag,head,pictureList" }, "Moment": { "id@": "/Comment/momentId", "@column": "id,content,pictureList" } } }
 { "[]": { "count": 20, "page": 0, "User": { "@order": "date-" } } }
 
 POST:

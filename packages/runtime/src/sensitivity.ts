@@ -49,11 +49,37 @@ export function isAutoExecutableWrite(
   return isWriteMethod(method) && !isSensitiveOperation(method, sensitiveMethods);
 }
 
+/**
+ * APIJSON outermost auth codes:
+ * - 401: unauthorized (some builds)
+ * - 407: session expired / 未登录或登录过期 (APIJSON Demo)
+ */
+export function isUnauthorizedCode(code: unknown): boolean {
+  return (
+    code === 401 ||
+    code === "401" ||
+    code === 407 ||
+    code === "407"
+  );
+}
+
 /** Session/login errors — prompt re-login; do not submit Apply. */
 export function isLoginSessionIssue(message: string): boolean {
-  return /未登录|登录过期|请登录|not logged|please\s*log\s*in|session\s*expired|login\s*expired|401/i.test(
+  return /未登录|登录过期|请登录|not logged|please\s*log\s*in|session\s*expired|login\s*expired|\b401\b|\b407\b/i.test(
     message,
   );
+}
+
+/** HTTP status, JSON `code`, or msg — used by BFF retry / client logout. */
+export function isApiJsonAuthFailure(opts: {
+  status?: number;
+  code?: unknown;
+  msg?: string;
+}): boolean {
+  if (opts.status === 401 || opts.status === 407) return true;
+  if (isUnauthorizedCode(opts.code)) return true;
+  if (opts.msg && isLoginSessionIssue(opts.msg)) return true;
+  return false;
 }
 
 /**

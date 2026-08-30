@@ -108,7 +108,7 @@ export async function loginApijsonSession(
   return { ok: true, session, body: result.body };
 }
 
-/** Re-login when jar empty or after upstream 401. */
+/** Re-login when jar empty or after upstream 401/407. */
 export async function ensureApijsonNodeCookie(
   baseUrl: string,
   session: ApijsonNodeSession,

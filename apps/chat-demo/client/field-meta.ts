@@ -90,6 +90,8 @@ export type ColumnMeta = {
   returnAgg?: ColumnReturnAgg;
   /** When returnAgg=custom: expression body, e.g. sum(commentCount) */
   returnExpr?: string;
+  /** List column width in px (user-resized). */
+  width?: number;
 };
 
 /** Safe subset for custom `@column` expressions. */

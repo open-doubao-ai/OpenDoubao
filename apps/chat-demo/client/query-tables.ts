@@ -173,7 +173,7 @@ export function addQueryTable(
 
   const primaryTable = primary || inferPrimaryFromBody(next);
   if (!primaryTable || primaryTable === table) {
-    // Adding as (or becoming) primary
+    // Adding as (or becoming) primary — caller applyFkExpand adds FK JOINs
     list[table] = isPlainObject(list[table]) ? list[table]! : {};
     setListJoin(list, table);
     return { body: next, fkExpandPatch };

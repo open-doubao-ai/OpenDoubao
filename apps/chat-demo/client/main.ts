@@ -33,8 +33,11 @@ import {
 import { applyTableJoins, type JoinOp } from "./join-query.js";
 import {
   applyFkExpand,
+  defaultFkColumns,
   defaultFkExpandState,
   fkEdgesFor,
+  mergeFkExpandDefaults,
+  setFkExpandComments,
   syncFkExpandFromBody,
   type FkJoinSpec,
 } from "./fk-expand.js";
@@ -418,7 +421,30 @@ function renderRows(response: unknown) {
     },
     onColumnOrderChange: (order) => {
       state.columnOrder = order;
+      persistCurrentPageVersion();
       renderRows(state.lastResponse);
+    },
+    onColumnWidthChange: (path, width) => {
+      const prev = state.columnMetas[path];
+      if (!prev) {
+        state.columnMetas = {
+          ...state.columnMetas,
+          [path]: {
+            path,
+            type: "text",
+            visible: true,
+            filterable: true,
+            sortable: true,
+            width,
+          },
+        };
+      } else {
+        state.columnMetas = {
+          ...state.columnMetas,
+          [path]: { ...prev, width },
+        };
+      }
+      persistCurrentPageVersion();
     },
     onColumnMetasChange: (metas) => {
       state.columnMetas = metas;
@@ -548,7 +574,7 @@ function renderRows(response: unknown) {
           }
         }
         if ((!onTable || !onField) && primary) {
-          const edge = fkEdgesFor(primary).find(
+          const edge = fkEdgesFor(primary, state.comments).find(
             (e) => e.target === payload.table,
           );
           if (edge) {
@@ -581,6 +607,7 @@ function renderRows(response: unknown) {
         body,
         primary,
         state.fkExpand,
+        state.comments,
       );
       // applyFkExpand rewrites JOIN @column with bare names — restore Return tokens
       if (payload.table !== primary && columnTokens.length) {
@@ -628,22 +655,35 @@ function renderRows(response: unknown) {
     },
     onRemoveQueryTable: (table) => {
       if (!state.bindMeta) return;
-      const { body, newPrimary } = removeQueryTable(
+      const { body, newPrimary, removedPrimary } = removeQueryTable(
         state.bindMeta.bodyTemplate,
         table,
       );
       state.bindMeta.bodyTemplate = body;
-      delete state.fkExpand[table];
+      if (removedPrimary) {
+        delete state.fkExpand[table];
+      } else {
+        const prevExpand = state.fkExpand[table];
+        state.fkExpand[table] = {
+          enabled: false,
+          columns: prevExpand?.columns?.length
+            ? prevExpand.columns
+            : defaultFkColumns(table),
+          onTable: prevExpand?.onTable,
+          onField: prevExpand?.onField,
+        };
+      }
       delete state.tableJoins[table];
       if (newPrimary) {
         state.fkExpand = {
-          ...defaultFkExpandState(newPrimary),
+          ...defaultFkExpandState(newPrimary, state.comments),
           ...state.fkExpand,
         };
         state.bindMeta.bodyTemplate = applyFkExpand(
           state.bindMeta.bodyTemplate,
           newPrimary,
           state.fkExpand,
+          state.comments,
         );
       }
       state.columnOrder = [];
@@ -791,11 +831,12 @@ async function openFkTableFiltered(info: {
         },
       },
     };
-    state.fkExpand = defaultFkExpandState(table);
+    state.fkExpand = defaultFkExpandState(table, state.comments);
     state.bindMeta.bodyTemplate = applyFkExpand(
       state.bindMeta.bodyTemplate,
       table,
       state.fkExpand,
+      state.comments,
     );
     state.columnSorts = [];
     state.columnOrder = [];
@@ -2882,12 +2923,16 @@ async function bound(
     state.filterCombineExpr,
     filterFieldTypes,
   );
-  if (!Object.keys(state.fkExpand).length && primary) {
-    state.fkExpand = defaultFkExpandState(primary);
+  if (primary) {
+    state.fkExpand = mergeFkExpandDefaults(
+      primary,
+      state.fkExpand,
+      state.comments,
+    );
   }
   // Don't strip JOIN tables that are already in the bound template
   state.fkExpand = syncFkExpandFromBody(shell, primary, state.fkExpand);
-  body = applyFkExpand(body, primary, state.fkExpand);
+  body = applyFkExpand(body, primary, state.fkExpand, state.comments);
   body = applyTableJoins(body, primary, state.tableJoins);
   const method = listMethod;
   body = await withRequestRole(body, method, apijsonBaseUrl);
@@ -3028,7 +3073,7 @@ async function sendChat(message: string) {
         ? { ...data.plan.writeForm.defaults }
         : null;
     if (data.schemaComments) {
-      state.comments = mergeComments(state.comments, data.schemaComments);
+      applySchemaComments(data.schemaComments);
     }
     addMessage("assistant", data.assistantMessage);
 
@@ -3102,6 +3147,7 @@ async function sendChat(message: string) {
       data.kind === "get_comment" ||
       data.plan?.viewMode === "detail";
 
+    let refreshedListBind = false;
     if (data.bind?.bodyTemplate && data.bind.url && !forceDetail) {
       persistCurrentPageVersion();
       state.hasBind = true;
@@ -3124,12 +3170,13 @@ async function sendChat(message: string) {
         bodyTemplate: data.bind.bodyTemplate,
       };
       const primary = inferPrimaryTable([], data.bind.bodyTemplate);
-      state.fkExpand = defaultFkExpandState(primary);
+      state.fkExpand = defaultFkExpandState(primary, state.comments);
       // Persist expanded FK tables into template so columns appear consistently
       state.bindMeta.bodyTemplate = applyFkExpand(
         data.bind.bodyTemplate,
         primary,
         state.fkExpand,
+        state.comments,
       );
       const pageFilters = data.plan.filters || [];
       renderFilters(pageFilters);
@@ -3158,9 +3205,11 @@ async function sendChat(message: string) {
       syncDataPanel({
         method: "POST",
         url: state.bindMeta.url,
-        json: data.bind.bodyTemplate,
+        json: state.bindMeta.bodyTemplate,
         response: data.lastResult,
       });
+      refreshedListBind = true;
+      void bound("refresh");
     } else if (data.pending.status === "awaiting_approval") {
       state.hasBind = false;
       renderFilters([]);
@@ -3225,12 +3274,14 @@ async function sendChat(message: string) {
       state.hasBind = false;
     }
 
-    if (data.lastResult) {
-      renderRows(data.lastResult);
-      dataPanel.fill({ response: data.lastResult });
-    } else if (data.dataModel?.rows) {
-      renderRows(data.dataModel.rows);
-      dataPanel.fill({ response: data.dataModel.rows });
+    if (!refreshedListBind) {
+      if (data.lastResult) {
+        renderRows(data.lastResult);
+        dataPanel.fill({ response: data.lastResult });
+      } else if (data.dataModel?.rows) {
+        renderRows(data.dataModel.rows);
+        dataPanel.fill({ response: data.dataModel.rows });
+      }
     }
   } catch (e) {
     addMessage("assistant", e instanceof Error ? e.message : String(e));
@@ -3263,16 +3314,21 @@ function mergeComments(
   };
 }
 
+function applySchemaComments(from: SchemaComments): void {
+  state.comments = mergeComments(state.comments, from);
+  setFkExpandComments(state.comments);
+  (
+    window as unknown as { __a2apiComments?: SchemaComments }
+  ).__a2apiComments = state.comments;
+}
+
 (
   window as unknown as {
     __a2apiSetComments?: (c: SchemaComments) => void;
     __a2apiComments?: SchemaComments;
   }
 ).__a2apiSetComments = (c) => {
-  state.comments = mergeComments(state.comments, c);
-  (
-    window as unknown as { __a2apiComments?: SchemaComments }
-  ).__a2apiComments = state.comments;
+  applySchemaComments(c);
 };
 
 // Prefetch Demo schema comments for tooltips before first query
@@ -3280,10 +3336,20 @@ api<SchemaComments>(
   "/api/schema-comments?tables=User,Moment,Comment,Privacy,apijson_privacy",
 )
   .then((c) => {
-    state.comments = mergeComments(state.comments, c);
-    (
-      window as unknown as { __a2apiComments?: SchemaComments }
-    ).__a2apiComments = state.comments;
+    applySchemaComments(c);
+    if (state.hasBind && state.viewMode === "list") {
+      const primary = inferPrimaryTable(
+        [],
+        state.bindMeta?.bodyTemplate ?? null,
+      );
+      if (primary) {
+        state.fkExpand = mergeFkExpandDefaults(
+          primary,
+          state.fkExpand,
+          state.comments,
+        );
+      }
+    }
     if (state.lastResponse != null) renderRows(state.lastResponse);
   })
   .catch(() => {

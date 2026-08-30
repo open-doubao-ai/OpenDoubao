@@ -875,6 +875,8 @@ export function renderResultView(
     onCombineExprChange?: (expr: string) => void;
     onColumnOrderChange?: (order: string[]) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
+    /** Persist resized width without remounting the table. */
+    onColumnWidthChange?: (path: string, width: number) => void;
     onDisplayKindChange?: (kind: DisplayKind) => void;
     onChartConfigChange?: (
       dimensions: ChartDimension[],
@@ -1925,6 +1927,161 @@ export function renderResultView(
       ? listTablesInBody(opts.bodyTemplate)
       : tablesInView;
   const joinTables = queryTables.filter((t) => t !== (primaryTable || ""));
+
+  type GridEditInput =
+    | HTMLInputElement
+    | HTMLTextAreaElement
+    | HTMLSelectElement;
+  const gridDirty = new Map<string, Record<string, unknown>>();
+  const gridUndo: Array<{
+    rowKey: string;
+    col: string;
+    prev: unknown;
+    next: unknown;
+  }> = [];
+  let gridFocused: { rowKey: string; col: string } | null = null;
+  let gridEditing: { rowKey: string; col: string } | null = null;
+  let gridInput: GridEditInput | null = null;
+  let suppressCellClick = false;
+  let gridTbody: HTMLTableSectionElement | null = null;
+  let fillGridCell:
+    | ((td: HTMLTableCellElement, row: FlatRow, col: string) => void)
+    | null = null;
+
+  const isGridEditableCol = (col: string) =>
+    isListGridEditable(col, primaryTable, !!write);
+
+  const effectiveCell = (row: FlatRow, col: string): unknown => {
+    const d = gridDirty.get(row.key);
+    if (d && Object.prototype.hasOwnProperty.call(d, col)) return d[col];
+    return row.cells[col];
+  };
+
+  const findGridTd = (
+    rowKey: string,
+    col: string,
+  ): HTMLTableCellElement | null => {
+    if (!gridTbody) return null;
+    for (const el of Array.from(gridTbody.querySelectorAll("td[data-col]"))) {
+      const td = el as HTMLTableCellElement;
+      if (td.dataset.rowKey === rowKey && td.dataset.col === col) return td;
+    }
+    return null;
+  };
+
+  const applyGridDirty = (
+    rowKey: string,
+    col: string,
+    next: unknown,
+    original: unknown,
+  ) => {
+    let map = gridDirty.get(rowKey);
+    if (!map) {
+      map = {};
+      gridDirty.set(rowKey, map);
+    }
+    if (valuesEqual(next, original)) {
+      delete map[col];
+      if (!Object.keys(map).length) gridDirty.delete(rowKey);
+    } else {
+      map[col] = next;
+    }
+  };
+
+  const syncGridEditButtons = () => {
+    const undoBtn = listWrap.querySelector(
+      ".table-grid-undo",
+    ) as HTMLButtonElement | null;
+    const saveBtn = listWrap.querySelector(
+      ".table-grid-save",
+    ) as HTMLButtonElement | null;
+    if (undoBtn) undoBtn.disabled = gridUndo.length === 0;
+    if (saveBtn) saveBtn.disabled = gridDirty.size === 0;
+  };
+
+  const refreshGridTd = (rowKey: string, col: string) => {
+    if (
+      gridEditing &&
+      gridEditing.rowKey === rowKey &&
+      gridEditing.col === col
+    ) {
+      return;
+    }
+    const row = parsed.rows.find((r) => r.key === rowKey);
+    const td = findGridTd(rowKey, col);
+    if (row && td) fillGridCell?.(td, row, col);
+  };
+
+  const commitGridEdit = (): boolean => {
+    if (!gridEditing || !gridInput) return false;
+    const { rowKey, col } = gridEditing;
+    const rawText = gridInput.value;
+    const row = parsed.rows.find((r) => r.key === rowKey);
+    gridEditing = null;
+    gridInput = null;
+    if (!row) return false;
+    const original = row.cells[col];
+    const prev = effectiveCell(row, col);
+    const next = coerceField(original, rawText, col);
+    if (!valuesEqual(prev, next)) {
+      gridUndo.push({ rowKey, col, prev, next });
+      applyGridDirty(rowKey, col, next, original);
+    }
+    refreshGridTd(rowKey, col);
+    syncGridEditButtons();
+    return true;
+  };
+
+  const cancelGridEdit = () => {
+    if (!gridEditing) return;
+    const { rowKey, col } = gridEditing;
+    gridEditing = null;
+    gridInput = null;
+    refreshGridTd(rowKey, col);
+  };
+
+  const undoGridEdit = () => {
+    cancelGridEdit();
+    const last = gridUndo.pop();
+    if (!last) {
+      syncGridEditButtons();
+      return;
+    }
+    const row = parsed.rows.find((r) => r.key === last.rowKey);
+    if (!row) {
+      syncGridEditButtons();
+      return;
+    }
+    applyGridDirty(last.rowKey, last.col, last.prev, row.cells[last.col]);
+    gridFocused = { rowKey: last.rowKey, col: last.col };
+    refreshGridTd(last.rowKey, last.col);
+    syncGridEditButtons();
+  };
+
+  const saveGridEdits = () => {
+    commitGridEdit();
+    if (!write || !primaryTable || !gridDirty.size) return;
+    const updates: Array<{
+      id: string | number;
+      fields: Record<string, unknown>;
+    }> = [];
+    for (const [rowKey, fields] of gridDirty) {
+      const row = parsed.rows.find((r) => r.key === rowKey);
+      if (!row) continue;
+      const id = resolveRowRecordId(row, primaryTable);
+      if (id == null) continue;
+      const entity: Record<string, unknown> = {};
+      for (const [path, val] of Object.entries(fields)) {
+        const field = fieldNameOfPath(path);
+        if (!field || isDetailReadonlyCol(field)) continue;
+        entity[field] = val;
+      }
+      if (Object.keys(entity).length) updates.push({ id, fields: entity });
+    }
+    const payload = buildPutFromGridEdits(primaryTable, updates);
+    if (payload) void write(payload);
+  };
+
   const statusBar = buildTableStatusBar({
     pageCount: parsed.rows.length,
     selectedCount: 0,
@@ -1955,6 +2112,8 @@ export function renderResultView(
             if (payload) void write(payload);
           }
         : undefined,
+    onUndo: displayKind === "table" ? undoGridEdit : undefined,
+    onSaveGrid: displayKind === "table" ? saveGridEdits : undefined,
   });
   listWrap.appendChild(statusBar);
 
@@ -2114,7 +2273,8 @@ export function renderResultView(
   } else {
 
   const table = document.createElement("table");
-  table.className = "data-table";
+  table.className = "data-table data-table-cols";
+  mountTableColGroup(table, visibleCols, metas);
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   headRow.id = "result-head-row";
@@ -2177,15 +2337,17 @@ export function renderResultView(
     );
   };
   thSettings.appendChild(settingsBtn);
-  const thAction = document.createElement("th");
-  thAction.textContent = t("common.actions");
   headRow.appendChild(thSettings);
-  headRow.appendChild(thAction);
   thead.appendChild(headRow);
   table.appendChild(thead);
 
   enableColumnDrag(headRow, visibleCols, order, (nextOrder) => {
     opts.onColumnOrderChange?.(nextOrder);
+  });
+  enableColumnResize(table, headRow, visibleCols, metas, (path, width) => {
+    const cur = metas[path];
+    if (cur) metas[path] = { ...cur, width };
+    opts.onColumnWidthChange?.(path, width);
   });
 
   const syncBatchUi = () => {
@@ -2201,15 +2363,382 @@ export function renderResultView(
   };
 
   const tbody = document.createElement("tbody");
+  gridTbody = tbody;
+
+  fillGridCell = (td, row, col) => {
+    td.replaceChildren();
+    td.classList.remove(
+      "table-cell-images",
+      "table-cell-file",
+      "table-smart-text",
+      "fk-idlist-cell",
+      "is-editing",
+    );
+    const rawVal = effectiveCell(row, col);
+    const text = formatCell(rawVal, metas[col]?.type ?? "text");
+    const tip = commentFor(col, comments);
+    const typeTip = metas[col] ? fieldTypeLabel(metas[col]!.type) : "";
+    const titleParts = [tip, typeTip && `Type: ${typeTip}`].filter(Boolean);
+    const useSmart = !tableValueRawMode;
+    const fkIdListTable = useSmart
+      ? (() => {
+          const auto = resolveFkIdListTable(col, comments);
+          if (!auto) return null;
+          const override = metas[col]?.onTable?.trim();
+          return override || auto;
+        })()
+      : null;
+    const fkIdListIds = fkIdListTable ? parseIdList(rawVal) : [];
+    const fk = !fkIdListTable
+      ? cellFkJumpMeta(
+          col,
+          rawVal,
+          row.cells,
+          comments,
+          primaryTable,
+          metas[col],
+        )
+      : null;
+
+    let painted = false;
+    if (useSmart) {
+      const show = columnShowOf(col, metas);
+      if (show === "file") {
+        const fileUrl = collectFileUrl(rawVal);
+        if (fileUrl) {
+          appendTableFileCell(td, fileUrl, apijsonBase, [
+            ...titleParts,
+            `Value: ${text}`,
+          ]
+            .filter(Boolean)
+            .join("\n"));
+          painted = true;
+        }
+      }
+      if (!painted) {
+        const smartImg = resolveSmartImageField(col, rawVal, comments, show);
+        if (smartImg.kind !== "none" && smartImg.urls.length) {
+          appendTableImageCell(td, smartImg.urls, apijsonBase, [
+            ...titleParts,
+            `Value: ${text}`,
+            "Ctrl/⌘-click image to preview",
+          ]
+            .filter(Boolean)
+            .join("\n"));
+          painted = true;
+        }
+      }
+      if (!painted && isGenderField(col)) {
+        td.textContent = genderLabel(rawVal);
+        td.classList.add("table-smart-text");
+        td.title = [...titleParts, `raw: ${text}`].filter(Boolean).join("\n");
+        painted = true;
+      }
+    }
+
+    if (!painted && fkIdListTable && fkIdListIds.length) {
+      appendFkIdListLinks(td, {
+        table: fkIdListTable,
+        field: metas[col]?.onField?.trim() || "id",
+        ids: fkIdListIds,
+        titleParts,
+        onOpenDetail: ({ table, id, field }) => {
+          void openFkDetail(container, {
+            table,
+            id,
+            field,
+            comments,
+            columnMetas: metas,
+            apijsonBase,
+            mode: write ? "edit" : "view",
+            onBack: opts.onBackToList,
+            onWrite: write,
+            onRelateSync: opts.onRelateSync,
+            onColumnMetasChange: opts.onColumnMetasChange,
+            onPageTitleChange: opts.onPageTitleChange,
+            onDetailSlotsChange: opts.onDetailSlotsChange,
+            onOpenFkList: opts.onOpenFkList,
+            fkExpand: opts.fkExpand,
+          });
+        },
+        onOpenList: opts.onOpenFkList,
+      });
+      painted = true;
+    } else if (!painted && fk) {
+      const a = document.createElement("button");
+      a.type = "button";
+      a.className = "fk-link";
+      const shown = fk.label || text;
+      a.textContent = truncate(shown, 48);
+      const mapField = (FK_DISPLAY_FIELDS[fk.table] ?? ["name"])[0];
+      const isJoinedCol = col.startsWith(`${fk.table}.`);
+      a.title = [
+        ...titleParts,
+        isJoinedCol
+          ? `${col} → ${fk.table}#${fk.id}`
+          : fk.label
+            ? `${col}=${text} → ${fk.table}.${mapField}=${fk.label}`
+            : `${col}=${text} (not linked to ${fk.table}.${mapField}; check JOIN)`,
+        "Ctrl/⌘-click to view details",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      a.onclick = (e) => {
+        e.stopPropagation();
+        void openFkDetail(container, {
+          table: fk.table,
+          id: fk.id,
+          field: fk.field,
+          comments,
+          columnMetas: metas,
+          apijsonBase,
+          mode: write ? "edit" : "view",
+          onBack: opts.onBackToList,
+          onWrite: write,
+          onRelateSync: opts.onRelateSync,
+          onColumnMetasChange: opts.onColumnMetasChange,
+          onPageTitleChange: opts.onPageTitleChange,
+          onDetailSlotsChange: opts.onDetailSlotsChange,
+          onOpenFkList: opts.onOpenFkList,
+          fkExpand: opts.fkExpand,
+        });
+      };
+      td.appendChild(a);
+      painted = true;
+    } else if (!painted) {
+      td.textContent = truncate(text, 48);
+      td.title = [...titleParts, `Value: ${text}`]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    const editable = isGridEditableCol(col);
+    td.classList.toggle(
+      "is-focused",
+      gridFocused?.rowKey === row.key && gridFocused?.col === col,
+    );
+    const dirtyMap = gridDirty.get(row.key);
+    td.classList.toggle(
+      "is-dirty",
+      !!(dirtyMap && Object.prototype.hasOwnProperty.call(dirtyMap, col)),
+    );
+    td.classList.toggle("is-readonly", !editable);
+    if (!editable) {
+      const extra = t("result.cellReadonly");
+      td.title = td.title ? `${td.title}\n${extra}` : extra;
+    }
+  };
+
+  const startGridEdit = (
+    td: HTMLTableCellElement,
+    row: FlatRow,
+    col: string,
+  ) => {
+    if (!isGridEditableCol(col)) return;
+    if (gridEditing?.rowKey === row.key && gridEditing?.col === col) return;
+    commitGridEdit();
+    gridFocused = { rowKey: row.key, col };
+    gridEditing = { rowKey: row.key, col };
+    const value = effectiveCell(row, col);
+    td.replaceChildren();
+    td.classList.add("is-editing", "is-focused");
+    td.classList.toggle(
+      "is-dirty",
+      !!(
+        gridDirty.get(row.key) &&
+        Object.prototype.hasOwnProperty.call(gridDirty.get(row.key)!, col)
+      ),
+    );
+    td.classList.remove("is-readonly");
+    const jsonish = looksLikeJsonField(col, value);
+    const gender = !tableValueRawMode && isGenderField(col);
+    let input: GridEditInput;
+    if (gender) {
+      const sel = document.createElement("select");
+      sel.className = "cell-edit-input";
+      for (const opt of GENDER_OPTIONS) {
+        const o = document.createElement("option");
+        o.value = opt.value;
+        o.textContent = opt.label;
+        sel.appendChild(o);
+      }
+      const cur = String(value ?? "").trim();
+      if (cur && !GENDER_OPTIONS.some((o) => o.value === cur)) {
+        const o = document.createElement("option");
+        o.value = cur;
+        o.textContent = cur;
+        sel.appendChild(o);
+      }
+      sel.value = cur;
+      input = sel;
+    } else if (jsonish) {
+      const ta = document.createElement("textarea");
+      ta.className = "cell-edit-input";
+      ta.rows = 3;
+      ta.value = cellPrettyJson(value) || cellText(value);
+      input = ta;
+    } else {
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.className = "cell-edit-input";
+      inp.value = cellText(value);
+      input = inp;
+    }
+    input.addEventListener("keydown", (e) => {
+      const ke = e as KeyboardEvent;
+      if (ke.key === "Escape") {
+        ke.preventDefault();
+        ke.stopPropagation();
+        cancelGridEdit();
+        return;
+      }
+      if (ke.key === "Tab") {
+        ke.preventDefault();
+        commitGridEdit();
+        moveGridFocus(row, col, ke.shiftKey ? -1 : 1, 0);
+        return;
+      }
+      const enterCommits =
+        ke.key === "Enter" &&
+        !(input instanceof HTMLTextAreaElement && !ke.ctrlKey && !ke.metaKey);
+      if (enterCommits) {
+        ke.preventDefault();
+        commitGridEdit();
+        refreshGridTd(row.key, col);
+      }
+    });
+    input.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (
+          gridEditing?.rowKey === row.key &&
+          gridEditing?.col === col
+        ) {
+          commitGridEdit();
+        }
+      }, 0);
+    });
+    td.appendChild(input);
+    gridInput = input;
+    input.focus();
+    if (
+      input instanceof HTMLInputElement ||
+      input instanceof HTMLTextAreaElement
+    ) {
+      input.select();
+    }
+  };
+
+  const moveGridFocus = (
+    row: FlatRow,
+    col: string,
+    dCol: number,
+    dRow: number,
+  ) => {
+    const cols = visibleCols;
+    const rows = parsed.rows;
+    const ci = cols.indexOf(col);
+    const ri = rows.findIndex((r) => r.key === row.key);
+    if (ci < 0 || ri < 0) return;
+    if (dCol !== 0 && dRow === 0) {
+      let nci = ci + dCol;
+      let nri = ri;
+      while (nri >= 0 && nri < rows.length) {
+        if (nci < 0) {
+          nri -= 1;
+          nci = cols.length - 1;
+        } else if (nci >= cols.length) {
+          nri += 1;
+          nci = 0;
+        } else {
+          const nrow = rows[nri]!;
+          const ncol = cols[nci]!;
+          if (!isGridEditableCol(ncol) && isGridEditableCol(col)) {
+            nci += dCol > 0 ? 1 : -1;
+            continue;
+          }
+          const oldTd = findGridTd(row.key, col);
+          gridFocused = { rowKey: nrow.key, col: ncol };
+          if (oldTd) fillGridCell?.(oldTd, row, col);
+          refreshGridTd(nrow.key, ncol);
+          return;
+        }
+      }
+      return;
+    }
+    const nci = ci + dCol;
+    const nri = ri + dRow;
+    if (nci < 0 || nci >= cols.length || nri < 0 || nri >= rows.length) return;
+    const nrow = rows[nri]!;
+    const ncol = cols[nci]!;
+    const oldTd = findGridTd(row.key, col);
+    gridFocused = { rowKey: nrow.key, col: ncol };
+    if (oldTd) fillGridCell?.(oldTd, row, col);
+    refreshGridTd(nrow.key, ncol);
+  };
+
+  const showRowMenu = (x: number, y: number, row: FlatRow) => {
+    suppressCellClick = true;
+    window.setTimeout(() => {
+      suppressCellClick = false;
+    }, 400);
+    const items: Array<{
+      label: string;
+      danger?: boolean;
+      onClick: () => void;
+    }> = [
+      {
+        label: t("result.openRecord"),
+        onClick: () => openRowDetail(row.key, write ? "edit" : "view"),
+      },
+    ];
+    if (write && primaryTable) {
+      items.push({
+        label: t("result.deleteRow"),
+        danger: true,
+        onClick: () => {
+          if (!confirm(t("result.confirmDeleteRow", { id: row.key }))) return;
+          const id = resolveRowRecordId(row, primaryTable);
+          if (id == null) return;
+          const payload = buildDeleteBody(primaryTable, [id]);
+          if (payload) void write(payload);
+        },
+      });
+    }
+    openTableRowMenu(x, y, items);
+  };
+
+  const onCellClick = (
+    e: MouseEvent,
+    td: HTMLTableCellElement,
+    row: FlatRow,
+    col: string,
+  ) => {
+    if (suppressCellClick) {
+      suppressCellClick = false;
+      return;
+    }
+    if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+    if (
+      gridFocused?.rowKey === row.key &&
+      gridFocused?.col === col &&
+      !gridEditing
+    ) {
+      startGridEdit(td, row, col);
+      return;
+    }
+    commitGridEdit();
+    const prev = gridFocused;
+    gridFocused = { rowKey: row.key, col };
+    if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
+      refreshGridTd(prev.rowKey, prev.col);
+    }
+    fillGridCell?.(td, row, col);
+    listWrap.focus({ preventScroll: true });
+  };
+
   for (const row of parsed.rows) {
     const tr = document.createElement("tr");
     tr.dataset.key = row.key;
-    tr.className = "result-row-clickable";
-    tr.title = write
-      ? "Click row to edit details (full fields)"
-      : "Click row to view details (full fields)";
-    // If writes are allowed, open editable detail by default
-    tr.onclick = () => openRowDetail(row.key, write ? "edit" : "view");
 
     const tdCheck = document.createElement("td");
     tdCheck.className = "col-check";
@@ -2224,150 +2753,65 @@ export function renderResultView(
     };
     tdCheck.appendChild(cb);
     tr.appendChild(tdCheck);
+    tr.addEventListener("contextmenu", (e) => {
+      if ((e.target as HTMLElement).closest("td[data-col]")) return;
+      e.preventDefault();
+      showRowMenu(e.clientX, e.clientY, row);
+    });
 
     for (const col of visibleCols) {
       const td = document.createElement("td");
-      const rawVal = row.cells[col];
-      const text = formatCell(rawVal, metas[col]?.type ?? "text");
-      const tip = commentFor(col, comments);
-      const typeTip = metas[col] ? fieldTypeLabel(metas[col]!.type) : "";
-      const titleParts = [tip, typeTip && `Type: ${typeTip}`].filter(Boolean);
-      const useSmart = !tableValueRawMode;
-      const fkIdListTable = useSmart
-        ? (() => {
-            const auto = resolveFkIdListTable(col, comments);
-            if (!auto) return null;
-            const override = metas[col]?.onTable?.trim();
-            return override || auto;
-          })()
-        : null;
-      const fkIdListIds = fkIdListTable ? parseIdList(rawVal) : [];
-      const fk =
-        !fkIdListTable
-          ? cellFkJumpMeta(
-              col,
-              rawVal,
-              row.cells,
-              comments,
-              primaryTable,
-              metas[col],
-            )
-          : null;
-
-      if (useSmart) {
-        const show = columnShowOf(col, metas);
-        if (show === "file") {
-          const fileUrl = collectFileUrl(rawVal);
-          if (fileUrl) {
-            appendTableFileCell(td, fileUrl, apijsonBase, [
-              ...titleParts,
-              `Value: ${text}`,
-            ]
-              .filter(Boolean)
-              .join("\n"));
-            tr.appendChild(td);
-            continue;
+      td.dataset.rowKey = row.key;
+      td.dataset.col = col;
+      const tw = columnWidthPx(metas[col]);
+      td.style.width = `${tw}px`;
+      td.style.minWidth = `${tw}px`;
+      td.style.maxWidth = `${tw}px`;
+      fillGridCell?.(td, row, col);
+      td.addEventListener(
+        "click",
+        (e) => {
+          if (suppressCellClick) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            suppressCellClick = false;
+            return;
           }
+          const t = e.target as HTMLElement;
+          if (t.closest("input, textarea, select")) return;
+          const inner = t.closest("a, button, img, .table-img-more");
+          if (inner && (e.metaKey || e.ctrlKey)) return;
+          if (inner) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+          onCellClick(e, td, row, col);
+        },
+        true,
+      );
+      td.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        commitGridEdit();
+        const prev = gridFocused;
+        gridFocused = { rowKey: row.key, col };
+        if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
+          refreshGridTd(prev.rowKey, prev.col);
         }
-        const smartImg = resolveSmartImageField(col, rawVal, comments, show);
-        if (smartImg.kind !== "none" && smartImg.urls.length) {
-          appendTableImageCell(td, smartImg.urls, apijsonBase, [
-            ...titleParts,
-            `Value: ${text}`,
-            "Click image to preview",
-          ]
-            .filter(Boolean)
-            .join("\n"));
-          tr.appendChild(td);
-          continue;
+        fillGridCell?.(td, row, col);
+        showRowMenu(e.clientX, e.clientY, row);
+      });
+      attachCellLongPress(td, (x, y) => {
+        commitGridEdit();
+        const prev = gridFocused;
+        gridFocused = { rowKey: row.key, col };
+        if (prev && (prev.rowKey !== row.key || prev.col !== col)) {
+          refreshGridTd(prev.rowKey, prev.col);
         }
-        if (isGenderField(col)) {
-          const label = genderLabel(rawVal);
-          td.textContent = label;
-          td.classList.add("table-smart-text");
-          td.title = [...titleParts, `raw: ${text}`].filter(Boolean).join("\n");
-          tr.appendChild(td);
-          continue;
-        }
-      }
-
-      if (fkIdListTable && fkIdListIds.length) {
-        appendFkIdListLinks(td, {
-          table: fkIdListTable,
-          field: metas[col]?.onField?.trim() || "id",
-          ids: fkIdListIds,
-          titleParts,
-          onOpenDetail: ({ table, id, field }) => {
-            void openFkDetail(container, {
-              table,
-              id,
-              field,
-              comments,
-              columnMetas: metas,
-              apijsonBase,
-              mode: write ? "edit" : "view",
-              onBack: opts.onBackToList,
-              onWrite: write,
-              onRelateSync: opts.onRelateSync,
-              onColumnMetasChange: opts.onColumnMetasChange,
-              onPageTitleChange: opts.onPageTitleChange,
-              onDetailSlotsChange: opts.onDetailSlotsChange,
-              onOpenFkList: opts.onOpenFkList,
-              fkExpand: opts.fkExpand,
-            });
-          },
-          onOpenList: opts.onOpenFkList,
-        });
-      } else if (fk) {
-        const a = document.createElement("button");
-        a.type = "button";
-        a.className = "fk-link";
-        // Prefer real joined field (User.name…); never invent "User#id"
-        const shown = fk.label || text;
-        a.textContent = truncate(shown, 48);
-        const mapField = (FK_DISPLAY_FIELDS[fk.table] ?? ["name"])[0];
-        const isJoinedCol = col.startsWith(`${fk.table}.`);
-        a.title = [
-          ...titleParts,
-          isJoinedCol
-            ? `${col} → ${fk.table}#${fk.id}`
-            : fk.label
-              ? `${col}=${text} → ${fk.table}.${mapField}=${fk.label}`
-              : `${col}=${text} (not linked to ${fk.table}.${mapField}; check JOIN)`,
-          "Click to view details",
-        ]
-          .filter(Boolean)
-          .join("\n");
-        a.onclick = (e) => {
-          e.stopPropagation();
-          void openFkDetail(container, {
-            table: fk.table,
-            id: fk.id,
-            field: fk.field,
-            comments,
-            columnMetas: metas,
-            apijsonBase,
-            mode: write ? "edit" : "view",
-            onBack: opts.onBackToList,
-            onWrite: write,
-            onRelateSync: opts.onRelateSync,
-            onColumnMetasChange: opts.onColumnMetasChange,
-            onPageTitleChange: opts.onPageTitleChange,
-            onDetailSlotsChange: opts.onDetailSlotsChange,
-            onOpenFkList: opts.onOpenFkList,
-            fkExpand: opts.fkExpand,
-          });
-        };
-        td.appendChild(a);
-      } else {
-        td.textContent = truncate(text, 48);
-        td.title = [...titleParts, `Value: ${text}`]
-          .filter(Boolean)
-          .join("\n");
-      }
+        fillGridCell?.(td, row, col);
+        showRowMenu(x, y, row);
+      });
       tr.appendChild(td);
     }
-    tr.appendChild(document.createElement("td")); // settings spacer
     const tdAct = document.createElement("td");
     tdAct.className = "row-actions";
     tdAct.onclick = (e) => e.stopPropagation();
@@ -2387,17 +2831,62 @@ export function renderResultView(
     delBtn.onclick = (e) => {
       e.stopPropagation();
       if (!write || !primaryTable) return;
-      if (!confirm(`Delete #${row.key}? This cannot be undone.`)) return;
+      if (!confirm(t("result.confirmDeleteRow", { id: row.key }))) return;
       const id = resolveRowRecordId(row, primaryTable);
       if (id == null) return;
       const payload = buildDeleteBody(primaryTable, [id]);
       if (payload) void write(payload);
     };
-    tdAct.append(editBtn, sep(), delBtn);
+    tdAct.append(editBtn, rowActionSep(), delBtn);
     tr.appendChild(tdAct);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
+
+  listWrap.tabIndex = 0;
+  listWrap.addEventListener("keydown", (e) => {
+    const inField = (e.target as HTMLElement).closest(".cell-edit-input");
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      saveGridEdits();
+      return;
+    }
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.key.toLowerCase() === "z" &&
+      !inField
+    ) {
+      e.preventDefault();
+      undoGridEdit();
+      return;
+    }
+    if (gridEditing || inField) return;
+    if (!gridFocused) return;
+    const row = parsed.rows.find((r) => r.key === gridFocused!.rowKey);
+    if (!row) return;
+    const col = gridFocused.col;
+    if (e.key === "F2" || e.key === "Enter") {
+      e.preventDefault();
+      const td = findGridTd(row.key, col);
+      if (td) startGridEdit(td, row, col);
+      return;
+    }
+    if (e.key === "Escape") {
+      const td = findGridTd(row.key, col);
+      gridFocused = null;
+      if (td) fillGridCell?.(td, row, col);
+      return;
+    }
+    let dCol = 0;
+    let dRow = 0;
+    if (e.key === "ArrowLeft") dCol = -1;
+    else if (e.key === "ArrowRight") dCol = 1;
+    else if (e.key === "ArrowUp") dRow = -1;
+    else if (e.key === "ArrowDown") dRow = 1;
+    else return;
+    e.preventDefault();
+    moveGridFocus(row, col, dCol, dRow);
+  });
 
   checkAll.onchange = () => {
     const boxes = tbody.querySelectorAll<HTMLInputElement>("input.row-check");
@@ -2431,11 +2920,107 @@ function formatCell(v: unknown, type: FieldType): string {
   return raw;
 }
 
-function sep(): HTMLSpanElement {
-  const s = document.createElement("span");
-  s.className = "row-action-sep";
-  s.textContent = "|";
-  return s;
+function fieldNameOfPath(path: string): string {
+  const i = path.lastIndexOf(".");
+  return i >= 0 ? path.slice(i + 1) : path;
+}
+
+function isListGridEditable(
+  path: string,
+  table: string | null,
+  canWrite: boolean,
+): boolean {
+  if (!canWrite || !table || !path.startsWith(`${table}.`)) return false;
+  return !isDetailReadonlyCol(fieldNameOfPath(path));
+}
+
+function closeTableRowMenu(): void {
+  document.getElementById("table-row-menu")?.remove();
+}
+
+function openTableRowMenu(
+  x: number,
+  y: number,
+  items: Array<{ label: string; danger?: boolean; onClick: () => void }>,
+): void {
+  closeTableRowMenu();
+  const menu = document.createElement("div");
+  menu.id = "table-row-menu";
+  menu.className = "table-row-menu";
+  menu.setAttribute("role", "menu");
+  menu.style.left = `${Math.max(8, x)}px`;
+  menu.style.top = `${Math.max(8, y)}px`;
+  for (const item of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("role", "menuitem");
+    btn.textContent = item.label;
+    if (item.danger) btn.classList.add("is-danger");
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      closeTableRowMenu();
+      item.onClick();
+    };
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth - 8) {
+    menu.style.left = `${Math.max(8, x - rect.width)}px`;
+  }
+  if (rect.bottom > window.innerHeight - 8) {
+    menu.style.top = `${Math.max(8, y - rect.height)}px`;
+  }
+  const closer = (ev: Event) => {
+    if (!menu.contains(ev.target as Node)) {
+      closeTableRowMenu();
+      document.removeEventListener("mousedown", closer, true);
+      document.removeEventListener("keydown", onKey, true);
+    }
+  };
+  const onKey = (ev: KeyboardEvent) => {
+    if (ev.key === "Escape") {
+      closeTableRowMenu();
+      document.removeEventListener("mousedown", closer, true);
+      document.removeEventListener("keydown", onKey, true);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener("mousedown", closer, true);
+    document.addEventListener("keydown", onKey, true);
+  }, 0);
+}
+
+/** Touch / pen long-press (~500ms) → same menu as right-click. */
+function attachCellLongPress(
+  el: HTMLElement,
+  onLongPress: (clientX: number, clientY: number) => void,
+): void {
+  let timer: number | null = null;
+  let sx = 0;
+  let sy = 0;
+  const clear = () => {
+    if (timer != null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse") return;
+    sx = e.clientX;
+    sy = e.clientY;
+    clear();
+    timer = window.setTimeout(() => {
+      timer = null;
+      onLongPress(e.clientX, e.clientY);
+    }, 500);
+  });
+  el.addEventListener("pointermove", (e) => {
+    if (timer == null) return;
+    if (Math.hypot(e.clientX - sx, e.clientY - sy) > 12) clear();
+  });
+  el.addEventListener("pointerup", clear);
+  el.addEventListener("pointercancel", clear);
 }
 
 function buildColumnHeader(
@@ -2454,7 +3039,11 @@ function buildColumnHeader(
   const th = document.createElement("th");
   th.className = "col-head";
   th.dataset.path = col;
-  th.title = `${tooltip(col, opts.comments)}\nType: ${fieldTypeLabel(opts.meta.type)}\nLong-press to drag reorder`;
+  th.title = `${tooltip(col, opts.comments)}\nType: ${fieldTypeLabel(opts.meta.type)}\n${t("result.colHeadHint")}`;
+  const w = columnWidthPx(opts.meta);
+  th.style.width = `${w}px`;
+  th.style.minWidth = `${w}px`;
+  th.style.maxWidth = `${w}px`;
 
   const wrap = document.createElement("div");
   wrap.className = "col-head-inner";
@@ -2518,6 +3107,95 @@ function buildColumnHeader(
   return th;
 }
 
+function rowActionSep(): HTMLSpanElement {
+  const s = document.createElement("span");
+  s.className = "row-action-sep";
+  s.textContent = "|";
+  return s;
+}
+
+const COL_CHECK_W = 36;
+const COL_SETTINGS_W = 118;
+const COL_MIN_W = 56;
+const COL_DEFAULT_W = 160;
+
+function columnWidthPx(meta?: ColumnMeta | null): number {
+  const w = meta?.width;
+  if (typeof w === "number" && Number.isFinite(w)) {
+    return Math.max(COL_MIN_W, Math.round(w));
+  }
+  return COL_DEFAULT_W;
+}
+
+function syncTableColSum(table: HTMLTableElement): void {
+  let sum = 0;
+  for (const col of Array.from(table.querySelectorAll("col"))) {
+    const w = parseFloat((col as HTMLElement).style.width);
+    sum += Number.isFinite(w) ? w : 0;
+  }
+  table.style.width = `${sum}px`;
+}
+
+function applyTableColWidth(
+  table: HTMLTableElement,
+  path: string,
+  px: number,
+): void {
+  const w = Math.max(COL_MIN_W, Math.round(px));
+  const css = CSS.escape(path);
+  const col = table.querySelector(`col[data-path="${css}"]`) as HTMLElement | null;
+  if (col) col.style.width = `${w}px`;
+  const th = table.querySelector(`th[data-path="${css}"]`) as HTMLElement | null;
+  if (th) {
+    th.style.width = `${w}px`;
+    th.style.minWidth = `${w}px`;
+    th.style.maxWidth = `${w}px`;
+  }
+  for (const td of Array.from(
+    table.querySelectorAll(`td[data-col="${css}"]`),
+  )) {
+    const cell = td as HTMLElement;
+    cell.style.width = `${w}px`;
+    cell.style.minWidth = `${w}px`;
+    cell.style.maxWidth = `${w}px`;
+  }
+  syncTableColSum(table);
+}
+
+function mountTableColGroup(
+  table: HTMLTableElement,
+  visibleCols: string[],
+  metas: Record<string, ColumnMeta>,
+): void {
+  const group = document.createElement("colgroup");
+  const check = document.createElement("col");
+  check.style.width = `${COL_CHECK_W}px`;
+  group.appendChild(check);
+  for (const path of visibleCols) {
+    const col = document.createElement("col");
+    col.dataset.path = path;
+    col.style.width = `${columnWidthPx(metas[path])}px`;
+    group.appendChild(col);
+  }
+  const settings = document.createElement("col");
+  settings.style.width = `${COL_SETTINGS_W}px`;
+  group.appendChild(settings);
+  table.appendChild(group);
+  syncTableColSum(table);
+}
+
+function clearColDropTargets(headRow: HTMLTableRowElement): void {
+  for (const other of Array.from(
+    headRow.querySelectorAll<HTMLElement>("th.col-head"),
+  )) {
+    other.classList.remove("drop-target");
+  }
+}
+
+function removeColGhost(): void {
+  document.getElementById("col-head-ghost")?.remove();
+}
+
 /** Long-press (~350ms) then drag to reorder columns. */
 function enableColumnDrag(
   headRow: HTMLTableRowElement,
@@ -2527,63 +3205,157 @@ function enableColumnDrag(
 ) {
   let pressTimer: number | null = null;
   let draggingPath: string | null = null;
+  let startX = 0;
+  let startY = 0;
 
-  for (const th of Array.from(headRow.querySelectorAll<HTMLElement>("th.col-head"))) {
+  const endDrag = (th: HTMLElement) => {
+    if (pressTimer != null) {
+      window.clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    th.classList.remove("dragging");
+    clearColDropTargets(headRow);
+    removeColGhost();
+    draggingPath = null;
+  };
+
+  for (const th of Array.from(
+    headRow.querySelectorAll<HTMLElement>("th.col-head"),
+  )) {
     const path = th.dataset.path!;
     th.addEventListener("pointerdown", (e) => {
-      if ((e.target as HTMLElement).closest("button")) return;
+      if ((e.target as HTMLElement).closest("button, .col-resize-handle")) {
+        return;
+      }
+      startX = e.clientX;
+      startY = e.clientY;
       pressTimer = window.setTimeout(() => {
+        pressTimer = null;
         draggingPath = path;
         th.classList.add("dragging");
-        th.setPointerCapture(e.pointerId);
+        try {
+          th.setPointerCapture(e.pointerId);
+        } catch {
+          /* already released */
+        }
+        removeColGhost();
+        const ghost = th.cloneNode(true) as HTMLElement;
+        ghost.id = "col-head-ghost";
+        ghost.className = "col-head-ghost";
+        ghost.style.width = `${th.getBoundingClientRect().width}px`;
+        ghost.style.left = `${e.clientX + 12}px`;
+        ghost.style.top = `${e.clientY + 8}px`;
+        document.body.appendChild(ghost);
       }, 350);
     });
     th.addEventListener("pointerup", (e) => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
+      const fromPath = draggingPath;
+      if (pressTimer != null) {
+        window.clearTimeout(pressTimer);
         pressTimer = null;
       }
-      if (!draggingPath) return;
-      th.classList.remove("dragging");
+      if (!fromPath) return;
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const targetTh = el?.closest("th.col-head") as HTMLElement | null;
       const targetPath = targetTh?.dataset.path;
-      if (targetPath && targetPath !== draggingPath) {
+      endDrag(th);
+      if (targetPath && targetPath !== fromPath) {
         const vis = [...visibleCols];
-        const from = vis.indexOf(draggingPath);
+        const from = vis.indexOf(fromPath);
         const to = vis.indexOf(targetPath);
         if (from >= 0 && to >= 0) {
           vis.splice(from, 1);
-          vis.splice(to, 0, draggingPath);
-          // merge back into full order
-          const next = [...fullOrder];
-          const hidden = next.filter((p) => !vis.includes(p));
+          vis.splice(to, 0, fromPath);
+          const hidden = fullOrder.filter((p) => !vis.includes(p));
           onChange([...vis, ...hidden]);
         }
       }
-      draggingPath = null;
     });
     th.addEventListener("pointermove", (e) => {
-      if (!draggingPath) return;
-      // visual hint: highlight drop target
-      for (const other of Array.from(
-        headRow.querySelectorAll<HTMLElement>("th.col-head"),
-      )) {
-        other.classList.remove("drop-target");
+      if (pressTimer != null) {
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) > 8) {
+          window.clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+        return;
       }
+      if (!draggingPath) return;
+      const ghost = document.getElementById("col-head-ghost");
+      if (ghost) {
+        ghost.style.left = `${e.clientX + 12}px`;
+        ghost.style.top = `${e.clientY + 8}px`;
+      }
+      clearColDropTargets(headRow);
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const targetTh = el?.closest("th.col-head") as HTMLElement | null;
       if (targetTh && targetTh.dataset.path !== draggingPath) {
         targetTh.classList.add("drop-target");
       }
     });
-    th.addEventListener("pointercancel", () => {
-      if (pressTimer) clearTimeout(pressTimer);
-      pressTimer = null;
-      draggingPath = null;
-      th.classList.remove("dragging");
-    });
+    th.addEventListener("pointercancel", () => endDrag(th));
   }
+}
+
+/** Drag the vertical split line on either edge of a header to resize. */
+function enableColumnResize(
+  table: HTMLTableElement,
+  headRow: HTMLTableRowElement,
+  visibleCols: string[],
+  metas: Record<string, ColumnMeta>,
+  onWidthChange: (path: string, width: number) => void,
+): void {
+  const attachHandle = (
+    host: HTMLElement,
+    side: "left" | "right",
+    path: string,
+  ) => {
+    const handle = document.createElement("div");
+    handle.className = `col-resize-handle is-${side}`;
+    handle.title = t("result.colResizeHint");
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startW = columnWidthPx(metas[path]);
+      let current = startW;
+      handle.classList.add("is-active");
+      document.body.classList.add("is-col-resizing");
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      const move = (ev: PointerEvent) => {
+        current = Math.max(COL_MIN_W, Math.round(startW + (ev.clientX - startX)));
+        applyTableColWidth(table, path, current);
+      };
+      const stop = () => {
+        handle.classList.remove("is-active");
+        document.body.classList.remove("is-col-resizing");
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", stop);
+        handle.removeEventListener("pointercancel", stop);
+        if (current !== startW) onWidthChange(path, current);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", stop);
+      handle.addEventListener("pointercancel", stop);
+    });
+    host.appendChild(handle);
+  };
+
+  const heads = Array.from(
+    headRow.querySelectorAll<HTMLElement>("th.col-head"),
+  );
+  heads.forEach((th, i) => {
+    const path = visibleCols[i];
+    if (!path) return;
+    if (i > 0) attachHandle(th, "left", visibleCols[i - 1]!);
+    attachHandle(th, "right", path);
+  });
+  const settings = headRow.querySelector<HTMLElement>("th.col-settings-head");
+  const last = visibleCols[visibleCols.length - 1];
+  if (settings && last) attachHandle(settings, "left", last);
 }
 
 function isRangeFieldType(type: FieldType): boolean {
@@ -3988,6 +4760,38 @@ export function buildPutFromDetail(
   };
 }
 
+/** PUT one or many list-grid row edits (same table). */
+export function buildPutFromGridEdits(
+  table: string,
+  updates: Array<{ id: string | number; fields: Record<string, unknown> }>,
+): WritePayload | null {
+  if (!updates.length) return null;
+  if (updates.length === 1) {
+    const u = updates[0]!;
+    return {
+      method: "put",
+      table,
+      body: stripApiJsonRole({
+        [table]: { id: u.id, ...u.fields },
+        tag: table,
+      }),
+    };
+  }
+  const body: Record<string, unknown> = {};
+  const aliases: string[] = [];
+  updates.forEach((u, i) => {
+    const alias = i === 0 ? table : `${table}:${i}`;
+    aliases.push(alias);
+    body[alias] = { id: u.id, ...u.fields };
+  });
+  body["@put"] = aliases.join(",");
+  return {
+    method: "crud",
+    table,
+    body: stripApiJsonRole(body),
+  };
+}
+
 const LIST_HIDE_SEL =
   "#result-table-wrap, #result-grid-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
 
@@ -4064,9 +4868,37 @@ function buildTableStatusBar(opts: {
   onRemoveQueryTable?: (table: string) => void;
   onSetPrimaryTable?: (table: string) => void;
   onBatchDelete?: () => void;
+  onUndo?: () => void;
+  onSaveGrid?: () => void;
 }): HTMLElement {
   const bar = document.createElement("div");
   bar.className = "table-status";
+
+  if (opts.onUndo || opts.onSaveGrid) {
+    const tools = document.createElement("div");
+    tools.className = "table-grid-tools";
+    if (opts.onUndo) {
+      const undoBtn = document.createElement("button");
+      undoBtn.type = "button";
+      undoBtn.className = "table-grid-undo";
+      undoBtn.textContent = t("common.undo");
+      undoBtn.title = t("result.undoEdits");
+      undoBtn.disabled = true;
+      undoBtn.onclick = () => opts.onUndo?.();
+      tools.appendChild(undoBtn);
+    }
+    if (opts.onSaveGrid) {
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "primary table-grid-save";
+      saveBtn.textContent = t("common.save");
+      saveBtn.title = t("result.saveEdits");
+      saveBtn.disabled = true;
+      saveBtn.onclick = () => opts.onSaveGrid?.();
+      tools.appendChild(saveBtn);
+    }
+    bar.appendChild(tools);
+  }
 
   const page = document.createElement("span");
   page.className = "status-page";
@@ -4882,7 +5714,9 @@ function defaultOnForField(
   const path = `${table}.${col}`;
 
   if (table !== primaryTable && col === "id") {
-    const edge = fkEdgesFor(primaryTable).find((e) => e.target === table);
+    const edge = fkEdgesFor(primaryTable, comments).find(
+      (e) => e.target === table,
+    );
     if (edge) {
       return {
         onTable: primaryTable,

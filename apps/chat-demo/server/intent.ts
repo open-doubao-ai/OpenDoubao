@@ -373,12 +373,15 @@ export function planFromIntent(message: string): BootstrapPlan {
       "[]": {
         count: 20,
         page: 0,
-        join: "@/Moment",
+        join: "@/User,@/Moment",
         Comment: { "@order": "date-" },
-        // No User JOIN — OWNER already scopes to the current visitor
+        User: {
+          "id@": "/Comment/userId",
+          "@column": "id,name,tag,head,pictureList",
+        },
         Moment: {
           "id@": "/Comment/momentId",
-          "@column": "content",
+          "@column": "id,content,pictureList",
         },
       },
     };
@@ -424,7 +427,7 @@ export function planFromIntent(message: string): BootstrapPlan {
     };
   }
 
-  // Default: moment list (no User JOIN — OWNER already scopes to visitor)
+  // Default: moment list — JOIN User for author name / avatar
   const requestId = rid("list_moments");
   const PAGE_COUNTS = [5, 10, 15, 20, 50, 100];
   const countMatch =
@@ -437,7 +440,12 @@ export function planFromIntent(message: string): BootstrapPlan {
     "[]": {
       count,
       page: 0,
+      join: "@/User",
       Moment: { "@order": "date-" },
+      User: {
+        "id@": "/Moment/userId",
+        "@column": "id,name,tag,head,pictureList",
+      },
     },
   };
   const wantsRecentMoments =

@@ -10,6 +10,7 @@ import {
 } from "./aj-base.js";
 import { clearApijsonBffSession, withApijsonAuth } from "./aj-auth.js";
 import { getUiLocale, setUiLocale, t, type UiLocale } from "./i18n/index.js";
+import { isLoginSessionIssue } from "./permission-check.js";
 import { stripApiJsonRole, withLoginDefaults } from "./schema-types.js";
 
 type SessionUi = {
@@ -25,13 +26,15 @@ export function registerSessionUi(ui: SessionUi): void {
 }
 
 /**
- * Clear local account + prompt Login when APIJSON outermost `code` is 401.
- * No-op UI if already logged out. Returns true when code === 401.
+ * Clear local account + prompt Login when APIJSON session expired
+ * (`code` 401/407 or 未登录/登录过期). No-op UI if already logged out.
  */
 export function logoutIfApijsonAuthFailed(json: {
   code?: unknown;
+  msg?: unknown;
 } | null | undefined): boolean {
-  if (!json || json.code !== 401) return false;
+  const msg = typeof json?.msg === "string" ? json.msg : "";
+  if (!json || !isLoginSessionIssue(json.code, msg)) return false;
 
   const hadAccount = Boolean(loadAccount());
   if (hadAccount) {

@@ -2,9 +2,17 @@
  * Auto-expand FK tables into list `[]` with key columns (configurable).
  * Uses APIJSON association: `"id@": "/Primary/fkCol"` plus `[]`.join
  * (e.g. `"join": "@/User"`). NOT `/[]/Primary/fkCol` — that path fails in 8.x.
+ *
+ * Any primary with scalar FKs (`userId`, `momentId`, …) JOINs the related
+ * table and asks for key text/image fields (User.name/head, Moment.content).
  */
 
+import {
+  resolveFkIdListTable,
+  resolveHighConfidenceFkTable,
+} from "./fk-nav.js";
 import { setListJoin } from "./join-query.js";
+import type { SchemaComments } from "./schema-types.js";
 
 export type FkEdge = {
   /** FK column on primary table, e.g. userId */
@@ -38,9 +46,55 @@ export const TABLE_FK_EDGES: Record<string, FkEdge[]> = {
  */
 export const DEFAULT_FK_COLUMNS: Record<string, string[]> = {
   User: ["name", "tag", "head", "pictureList"],
-  Moment: ["content"],
+  Moment: ["content", "pictureList"],
   Comment: ["content"],
 };
+
+/** Latest schema comments — used when callers omit an explicit comments arg. */
+let cachedComments: SchemaComments | null = null;
+
+export function setFkExpandComments(comments: SchemaComments | null): void {
+  cachedComments = comments;
+}
+
+function commentsOrCached(
+  comments?: SchemaComments | null,
+): SchemaComments | null {
+  return comments ?? cachedComments;
+}
+
+function inferFkEdgesFromSchema(
+  primary: string,
+  comments?: SchemaComments | null,
+): FkEdge[] {
+  if (!comments?.columns) return [];
+  const prefix = `${primary}.`;
+  const edges: FkEdge[] = [];
+  const seenTargets = new Set<string>();
+  for (const path of Object.keys(comments.columns)) {
+    if (!path.startsWith(prefix)) continue;
+    const col = path.slice(prefix.length);
+    if (!col || col.includes(".")) continue;
+    if (resolveFkIdListTable(path, comments)) continue;
+    const target = resolveHighConfidenceFkTable(path, comments);
+    if (!target || target === primary) continue;
+    if (seenTargets.has(target)) continue;
+    seenTargets.add(target);
+    edges.push({ column: col, target });
+  }
+  return edges;
+}
+
+function mergeFkEdges(base: FkEdge[], extra: FkEdge[]): FkEdge[] {
+  const seen = new Set(base.map((e) => e.target));
+  const out = [...base];
+  for (const e of extra) {
+    if (seen.has(e.target)) continue;
+    seen.add(e.target);
+    out.push(e);
+  }
+  return out;
+}
 
 /** Extra columns offered in the multi-select UI (beyond the default text field). */
 export const FK_OPTIONAL_COLUMNS: Record<string, string[]> = {
@@ -73,25 +127,47 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v != null && typeof v === "object" && !Array.isArray(v);
 }
 
-export function fkEdgesFor(primary: string | null | undefined): FkEdge[] {
+export function fkEdgesFor(
+  primary: string | null | undefined,
+  comments?: SchemaComments | null,
+): FkEdge[] {
   if (!primary) return [];
-  return TABLE_FK_EDGES[primary] ?? [];
+  return mergeFkEdges(
+    TABLE_FK_EDGES[primary] ?? [],
+    inferFkEdgesFromSchema(primary, commentsOrCached(comments)),
+  );
 }
 
 export function defaultFkExpandState(
   primary: string | null | undefined,
+  comments?: SchemaComments | null,
 ): Record<string, FkJoinSpec> {
   const out: Record<string, FkJoinSpec> = {};
-  for (const e of fkEdgesFor(primary)) {
+  for (const e of fkEdgesFor(primary, comments)) {
     if (out[e.target]) continue;
-    // OWNER queries are already scoped to the visitor — do not JOIN User by default.
-    // Other FK tables (e.g. Comment→Moment) stay on so list context remains useful.
     out[e.target] = {
-      enabled: e.target !== "User",
+      enabled: true,
       columns: defaultFkColumns(e.target),
     };
   }
   return out;
+}
+
+/**
+ * Fill in newly inferred FK JOINs without overriding a table the user
+ * already configured (including explicit `enabled: false` after Remove).
+ */
+export function mergeFkExpandDefaults(
+  primary: string | null | undefined,
+  expand: Record<string, FkJoinSpec>,
+  comments?: SchemaComments | null,
+): Record<string, FkJoinSpec> {
+  const defaults = defaultFkExpandState(primary, comments);
+  const next = { ...expand };
+  for (const [k, spec] of Object.entries(defaults)) {
+    if (!(k in next)) next[k] = spec;
+  }
+  return next;
 }
 
 /**
@@ -163,12 +239,13 @@ export function applyFkExpand(
   body: Record<string, unknown>,
   primaryTable: string | null,
   expand: Record<string, FkJoinSpec>,
+  comments?: SchemaComments | null,
 ): Record<string, unknown> {
   const next = structuredClone(body);
   const list = next["[]"];
   if (!isPlainObject(list) || !primaryTable) return next;
 
-  const edges = fkEdgesFor(primaryTable);
+  const edges = fkEdgesFor(primaryTable, comments);
   if (!edges.length) return next;
 
   // Group edges by target (first wins for id@ path if multiple — rare)

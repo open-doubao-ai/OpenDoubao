@@ -8,6 +8,7 @@ import {
   ApiJsonClient,
   BoundExecutor,
   HitlController,
+  isApiJsonAuthFailure,
   isPermissionGateIssue,
   partitionPermissionIssues,
   type PendingRequest,
@@ -335,6 +336,55 @@ export class Orchestrator {
     touchApijsonCookie(creds.login, result.session.cookie);
     await this.ensureMetaCaches();
     return { ok: true };
+  }
+
+  /** Force a fresh Java login when JSESSIONID is stale (APIJSON code 407). */
+  private async reloginApijson(
+    session: SessionState,
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
+    const creds = session.apijsonAuth;
+    if (!creds?.login || !creds.password) {
+      return { ok: false, error: "Please Login (top-right) first." };
+    }
+    session.apijsonCookie = undefined;
+    this.client.cookie = "";
+    const result = await loginApijsonSession(
+      this.client.baseUrl,
+      creds.login,
+      creds.password,
+      getApijsonSessionByLogin(creds.login)?.id,
+    );
+    if (!result.ok) {
+      return { ok: false, error: result.error || "APIJSON login failed" };
+    }
+    const fromLogin = pickVisitorId(result.body);
+    if (fromLogin != null) session.visitorUserId = fromLogin;
+    session.apijsonCookie = result.session.cookie;
+    this.client.cookie = result.session.cookie;
+    touchApijsonCookie(creds.login, result.session.cookie);
+    await this.ensureMetaCaches();
+    return { ok: true };
+  }
+
+  private resultLooksLikeAuthFailure(result: {
+    status: number;
+    body: unknown;
+    error?: string;
+  }): boolean {
+    const root =
+      result.body != null &&
+      typeof result.body === "object" &&
+      !Array.isArray(result.body)
+        ? (result.body as { code?: unknown; msg?: unknown })
+        : null;
+    return isApiJsonAuthFailure({
+      status: result.status,
+      code: root?.code,
+      msg:
+        (typeof root?.msg === "string" ? root.msg : "") ||
+        result.error ||
+        "",
+    });
   }
 
   /** Prefetch Access + Request tables for role / structure checks. */
@@ -989,7 +1039,13 @@ export class Orchestrator {
         query?.combineExpr,
       );
       const startedAt = Date.now();
-      const result = await this.client.execute(bind.method, body, bind.url);
+      let result = await this.client.execute(bind.method, body, bind.url);
+      if (this.resultLooksLikeAuthFailure(result)) {
+        const again = await this.reloginApijson(session);
+        if (again.ok) {
+          result = await this.client.execute(bind.method, body, bind.url);
+        }
+      }
       this.logExecute({
         session,
         source: "bound",

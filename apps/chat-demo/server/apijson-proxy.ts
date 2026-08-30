@@ -4,6 +4,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { isApiJsonAuthFailure } from "@a2api/runtime";
 import {
   A2API_AJ_COOKIE,
   clearApijsonSession,
@@ -130,12 +131,15 @@ function clientResponse(
 }
 
 function looksLikeAuthFailure(bodyText: string, status: number): boolean {
-  if (status === 401) return true;
   try {
-    const j = JSON.parse(bodyText) as { code?: unknown };
-    return j.code === 401;
+    const j = JSON.parse(bodyText) as { code?: unknown; msg?: unknown };
+    return isApiJsonAuthFailure({
+      status,
+      code: j.code,
+      msg: typeof j.msg === "string" ? j.msg : "",
+    });
   } catch {
-    return false;
+    return isApiJsonAuthFailure({ status, msg: bodyText });
   }
 }
 
