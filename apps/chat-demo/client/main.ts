@@ -4804,6 +4804,14 @@ function mergeComments(
   };
 }
 
+function applySchemaComments(from: SchemaComments): void {
+  state.comments = mergeComments(state.comments, from);
+  setFkExpandComments(state.comments);
+  (
+      window as unknown as { __a2apiComments?: SchemaComments }
+  ).__a2apiComments = state.comments;
+}
+
 (
   window as unknown as {
     __a2apiSetComments?: (c: SchemaComments) => void;
