@@ -436,7 +436,7 @@ Use ONLY the project's schema below. Do not assume Demo table or field names
 Return JSON:
 { "method": "get|post|put|delete", "url": ".../get|post|put|delete", "bodyTemplate": {}, "paramMap": [{"from":"/record/id","to":"/Table/id"}], "bindingId": "optional" }
 JSON Pointer sources: /record/id, /record/<column>, /visitor/id, /author/id, /input/content.
-Do not hardcode sample ids. Writes: omit userId (session injects). Include tag on writes.
+Do not hardcode sample ids. Writes: omit userId (session injects). Write tag defaults to the table name; use Table:alias / moment_list only if that table Request is taken and unfit.
 Only APIJSON, never SQL.`,
             },
             {

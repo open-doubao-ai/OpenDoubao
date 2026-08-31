@@ -41,6 +41,11 @@ Identity / role / structure rules for generated requests:
 - GET/HEAD (open): client may set "@role" to Access minimum for the tables.
 - Non-open methods (gets/post/put/delete, or GET with tag): must match Request
   table (method + tag + version) — honor structure MUST/REFUSE/TYPE/VERIFY.
+- Outermost "tag" defaults to the table name (Moment, Comment). Do not copy
+  page ids (moment_list, moment_detail) into tag.
+- Mint a new tag (Moment:minen, Comment:circle, moment_list) only when Request
+  for that table+method already exists and its MUST/REFUSE/UPDATE does not fit.
+- GET/HEAD lists omit tag (open). Tagged GET only to match an existing Request.
 - POST writes: omit userId — session injects the visitor.
 - Prefer list queries; open a row in the UI for detail / edit / delete.
 - Do not JOIN User by default when the session already scopes the visitor.

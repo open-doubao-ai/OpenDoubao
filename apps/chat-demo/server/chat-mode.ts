@@ -1,6 +1,6 @@
 /**
- * Chat is not "always generate a page".
- * generate = new bind/page · modify = change current page · explain = text only.
+ * Chat modes (Cursor-like):
+ * generate = new bind/page · modify = patch the open page in place · explain = text only.
  */
 import { SCHEMA_DICT } from "./schema-dict.js";
 import {
@@ -38,6 +38,33 @@ export type PageChatContext = {
   targetPage?: string | null;
   /** UI radio: auto classifies; generate / modify / explain force that path. */
   preferredMode?: "auto" | "generate" | "modify" | "explain" | null;
+  displayKind?: string | null;
+  catalogStyle?: "grid" | "list" | null;
+  columnOrder?: string[];
+  columnMetas?: Record<
+    string,
+    { visible?: boolean; displayName?: string; show?: string }
+  >;
+};
+
+/** In-place UI tweaks (layout / columns) — never a new surfaceId. */
+export type PageUiPatch = {
+  displayKind?: string;
+  catalogStyle?: "grid" | "list" | null;
+  title?: string;
+  layoutApp?: string;
+  layoutPage?: string;
+  hideColumns?: string[];
+  showColumns?: string[];
+  columnOrder?: string[];
+};
+
+export type ModifyPageResult = {
+  body?: Record<string, unknown>;
+  title?: string;
+  message: string;
+  source: "rules" | "llm";
+  ui?: PageUiPatch;
 };
 
 const APP_ITEM_TABLE: Record<string, string> = {
@@ -115,6 +142,11 @@ export function hasCurrentPage(ctx?: PageChatContext | null): boolean {
   );
 }
 
+export function messageLooksLikePageRequest(message: string): boolean {
+  const zh = message.trim();
+  return looksLikePageRequest(zh, zh.toLowerCase());
+}
+
 function looksLikePageRequest(zh: string, text: string): boolean {
   return (
     /\b(list|show|open|create|view|generate)\b/.test(text) ||
@@ -139,15 +171,50 @@ function looksLikeDifferentPage(
   return false;
 }
 
+function wantsNewPage(zh: string): boolean {
+  return /生成(一个|一张|一份)?(新)?(页面|页)|新建(一个)?(页面|页)|另(开|做|生成|建)|再(做|生成|开|建)(一个|一页|一张)?|open a new|create a new page|generate a (new )?page/i.test(
+    zh,
+  );
+}
+
+function wantsAsk(zh: string): boolean {
+  return /解释|说明|介绍|什么意思|为什么|怎么用|怎么做|如何|方案|建议|对比|哪种|还是|好不好|值不值得|有没有更好|帮我看看|讨论|规划|这页|这个页|当前页|\bexplain\b|\bwhy\b|\bhow (does|do|can|to|should)\b|what (if|about|is|does)|tell me|should we|recommend|discuss|\bplan\b/.test(
+    zh,
+  );
+}
+
+function wantsEdit(zh: string): boolean {
+  if (
+    /改一下|改成|改改|换成|换为|加上|加个|去掉|隐藏|只要|筛选|过滤|排序|按.{0,16}排|改布局|调整(一下|这页|布局)|微调|优化|放大|缩小|列宽|add (a )?filter|sort by|hide |show only|change (the )?(sort|filter|layout|order|bind|view)|switch to (grid|list|table|chart)|make (it|this) (a )?(grid|list|table|card)|use (a )?(grid|list|table|chart)|turn (this|it) into/i.test(
+      zh,
+    )
+  ) {
+    return true;
+  }
+  const view = /布局|卡片|网格|宫格|表格|图表|柱状|折线|饼图|list view|grid|chart/.test(
+    zh,
+  );
+  return view && /改|换|用|切|成|调|显示/.test(zh);
+}
+
+function wantsGenerate(zh: string, text: string): boolean {
+  return (
+    /生成.{0,16}页|打开.{0,16}页|查看|列出|列表|详情|排行|首页|分类页|新建|\bgenerate\b|\bcreate (a )?(page|list|form)\b|\blist\b|\bshow\b|\bopen\b/.test(
+      zh,
+    ) || looksLikePageRequest(zh, text)
+  );
+}
+
 export function classifyChatMode(
   message: string,
   ctx?: PageChatContext | null,
 ): ChatMode {
   if (ctx?.generatePage) return "generate";
   const forced = ctx?.preferredMode;
-  if (forced === "generate" || forced === "modify" || forced === "explain") {
-    return forced;
-  }
+  if (forced === "explain") return "explain";
+  if (forced === "modify") return "modify";
+  if (forced === "generate") return "generate";
+
   const zh = message.trim();
   const text = zh.toLowerCase();
 
@@ -157,25 +224,20 @@ export function classifyChatMode(
   const hasId = /(?:id\s*[=:：]?\s*|#|号)\s*\d+/i.test(zh);
   if ((wantsDelete || wantsUpdateComment) && hasId) return "write";
 
-  const explain =
-    /解释|说明一下|介绍一下|什么意思|为什么|怎么用|这[个页]页|当前页|帮我看看这|\bexplain\b|what\s+(is|does)|why\s+|how\s+(does|do|can|to)\b|tell me about/.test(
-      zh,
-    );
-  const modify =
-    /改一下|改成|换成|加上|去掉|隐藏|显示|只要|筛选|过滤|排序|按.{1,16}排|布局换成|改布局|调整(一下|这页)|add (a )?filter|sort by|hide |show only|change (the )?(sort|filter|layout|order|bind)/i.test(
-      zh,
-    );
-  const generate =
-    /生成.{0,16}页|打开.{0,16}页|查看|列出|列表|详情|排行|首页|分类页|新建|\bgenerate\b|\bcreate (a )?(page|list|form)\b|\blist\b|\bshow\b|\bopen\b/.test(
-      zh,
-    );
+  const onPage = hasCurrentPage(ctx);
+  const different = looksLikeDifferentPage(zh, ctx);
+  const ask = wantsAsk(zh);
+  const edit = wantsEdit(zh);
+  const explicitNew = wantsNewPage(zh);
 
-  if (explain && !looksLikeDifferentPage(zh, ctx)) return "explain";
-  if (modify && hasCurrentPage(ctx) && !looksLikeDifferentPage(zh, ctx)) {
-    return "modify";
+  if (ask && !edit && !explicitNew) return "explain";
+
+  if (onPage && !explicitNew && !different) {
+    if (edit || wantsGenerate(zh, text)) return "modify";
+    return "explain";
   }
-  if (generate || looksLikeDifferentPage(zh, ctx)) return "generate";
-  if (hasCurrentPage(ctx)) return modify ? "modify" : "explain";
+  if (explicitNew || different || wantsGenerate(zh, text)) return "generate";
+  if (onPage) return edit ? "modify" : "explain";
   if (looksLikePageRequest(zh, text)) return "generate";
   return "explain";
 }
@@ -196,7 +258,7 @@ export function chatModeForPlan(plan: BootstrapPlan): ChatMode {
   return "generate";
 }
 
-function tableForLayoutNav(app: string, page: string): string {
+function tableForLayoutNav(app: string, page: string): string | null {
   if (page === "orders" || page === "orderDetail" || page === "order") {
     return "ShopOrder";
   }
@@ -206,7 +268,7 @@ function tableForLayoutNav(app: string, page: string): string {
   if (page === "cart") return "Cart";
   const fromSkill = peekSkills().find((s) => s.name === app);
   if (fromSkill?.tableName) return fromSkill.tableName;
-  return APP_ITEM_TABLE[app] || "Moment";
+  return APP_ITEM_TABLE[app] || null;
 }
 
 function orderForLayoutPage(page: string, table: string): string {
@@ -357,7 +419,9 @@ export function planFromLayoutNav(
   if (!rawApp || !page) return null;
   const skill = peekSkills().find((s) => s.name === rawApp);
   const app = skill ? layoutAppForSkill(skill) : rawApp;
-  const table = tableForLayoutNav(rawApp, page);
+  const table =
+    (ctx.table || "").trim() || tableForLayoutNav(rawApp, page) || "";
+  if (!table) return null;
   const surfaceId = surfaceIdForLayout(app, page);
   const title = `${app} ${page}`;
 
@@ -434,33 +498,197 @@ export function planFromModifiedBind(
   return plan;
 }
 
+function listTableKey(body: Record<string, unknown>): string | null {
+  const list = body["[]"];
+  if (!list || typeof list !== "object" || Array.isArray(list)) return null;
+  const bucket = list as Record<string, unknown>;
+  return (
+    Object.keys(bucket).find(
+      (k) => k !== "count" && k !== "page" && k !== "join",
+    ) || null
+  );
+}
+
 function ruleModifyBody(
   message: string,
   body: Record<string, unknown>,
 ): Record<string, unknown> | null {
   const text = message.trim();
-  const list = body["[]"];
-  if (!list || typeof list !== "object" || Array.isArray(list)) return null;
-  const bucket = list as Record<string, unknown>;
-  const tableKey = Object.keys(bucket).find(
-    (k) => k !== "count" && k !== "page" && k !== "join",
-  );
+  const tableKey = listTableKey(body);
   if (!tableKey) return null;
-  const tableObj = bucket[tableKey];
+  const list = body["[]"] as Record<string, unknown>;
+  const tableObj = list[tableKey];
   if (!tableObj || typeof tableObj !== "object" || Array.isArray(tableObj)) {
     return null;
   }
-  const fieldMatch =
-    text.match(/按\s*([A-Za-z_][\w]*)/) ||
-    text.match(/sort\s+by\s+([A-Za-z_][\w]*)/i);
-  if (!fieldMatch) return null;
-  const field = fieldMatch[1];
-  const desc = /倒序|降序|从高|desc|-/.test(text) || !/升序|从低|asc|\+/.test(text);
   const next = structuredClone(body) as Record<string, unknown>;
   const nextList = next["[]"] as Record<string, unknown>;
   const nextTable = nextList[tableKey] as Record<string, unknown>;
-  nextTable["@order"] = `${field}${desc ? "-" : "+"}`;
-  return next;
+  let changed = false;
+
+  const fieldMatch =
+    text.match(/按\s*([A-Za-z_][\w]*)/) ||
+    text.match(/sort\s+by\s+([A-Za-z_][\w]*)/i);
+  if (fieldMatch) {
+    const field = fieldMatch[1];
+    const desc =
+      /倒序|降序|从高|desc|-/.test(text) || !/升序|从低|asc|\+/.test(text);
+    nextTable["@order"] = `${field}${desc ? "-" : "+"}`;
+    changed = true;
+  }
+
+  const countMatch = text.match(
+    /(?:最新|最近|每页|显示)?\s*(\d+)\s*(?:条|行|个|items?|rows?)/i,
+  );
+  if (countMatch) {
+    const n = Number(countMatch[1]);
+    if (Number.isFinite(n) && n > 0 && n <= 100) {
+      nextList.count = n;
+      changed = true;
+    }
+  }
+
+  return changed ? next : null;
+}
+
+const DISPLAY_KIND_SET = new Set([
+  "combined",
+  "table",
+  "list",
+  "grid",
+  "bar",
+  "hbar",
+  "line",
+  "pie",
+  "doughnut",
+  "area",
+]);
+
+function mergePageUiPatch(
+  a?: PageUiPatch | null,
+  b?: PageUiPatch | null,
+): PageUiPatch | undefined {
+  if (!a && !b) return undefined;
+  const out: PageUiPatch = { ...(a || {}), ...(b || {}) };
+  const hide = [...(a?.hideColumns || []), ...(b?.hideColumns || [])];
+  const show = [...(a?.showColumns || []), ...(b?.showColumns || [])];
+  if (hide.length) out.hideColumns = [...new Set(hide)];
+  if (show.length) out.showColumns = [...new Set(show)];
+  if (b?.columnOrder?.length) out.columnOrder = b.columnOrder;
+  else if (a?.columnOrder?.length) out.columnOrder = a.columnOrder;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function columnHints(text: string, re: RegExp): string[] {
+  const out: string[] = [];
+  const g = new RegExp(
+    re.source,
+    re.flags.includes("g") ? re.flags : `${re.flags}g`,
+  );
+  let m: RegExpExecArray | null;
+  while ((m = g.exec(text))) {
+    const raw = (m[1] || "").trim();
+    if (raw) out.push(raw.replace(/[“”"'`]/g, ""));
+  }
+  return out;
+}
+
+/** Deterministic layout/column tweaks from chat text (no LLM). */
+export function pageUiPatchFromMessage(
+  message: string,
+  ctx?: PageChatContext | null,
+): PageUiPatch | null {
+  const text = message.trim();
+  const ui: PageUiPatch = {};
+  if (/联系人|通讯录|address\s*book|\bcontacts?\b/i.test(text)) {
+    ui.layoutApp = /社交|朋友圈/.test(text) ? "social" : "chat";
+    ui.layoutPage = "users";
+  } else if (
+    /卡片|网格|宫格|\bgrid\b|\bcards?\b/i.test(text) &&
+    /改|换|用|切|布局|显示|成/.test(text)
+  ) {
+    ui.displayKind = "grid";
+    ui.catalogStyle = "grid";
+  } else if (
+    /改成\s*表格|换成\s*表格|用\s*表格|表格布局|表格视图|\b(?:to|into)\s+(?:a\s+)?table\b/i.test(
+      text,
+    ) && !/表格改成|把表格|将表格/.test(text)
+  ) {
+    ui.displayKind = "table";
+    ui.catalogStyle = "list";
+    ui.layoutApp = "data";
+    ui.layoutPage = "table";
+  } else if (
+    /改成\s*列表|换成\s*列表|列表布局|列表视图|\b(?:to|into)\s+(?:a\s+)?list\b/i.test(
+      text,
+    ) && !/联系人/.test(text)
+  ) {
+    ui.displayKind = "list";
+    ui.catalogStyle = "list";
+  } else if (/环形|甜甜圈|\bdoughnut\b/i.test(text)) {
+    ui.displayKind = "doughnut";
+  } else if (/饼图|\bpie\b/i.test(text)) {
+    ui.displayKind = "pie";
+  } else if (/面积图|\barea\b/i.test(text)) {
+    ui.displayKind = "area";
+  } else if (/折线|\bline chart\b|\bline graph\b/i.test(text)) {
+    ui.displayKind = "line";
+  } else if (/条形|横向柱|\bhbar\b/i.test(text)) {
+    ui.displayKind = "hbar";
+  } else if (/柱状|柱形|\bbar chart\b|\bchart\b|图表/.test(text)) {
+    ui.displayKind = /组合|一起/.test(text) ? "combined" : "bar";
+  }
+
+  const hide = [
+    ...columnHints(
+      text,
+      /隐藏\s*([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)\s*列?/,
+    ),
+    ...columnHints(text, /hide\s+(?:the\s+)?([A-Za-z_][\w]*)/i),
+  ];
+  const show = [
+    ...columnHints(
+      text,
+      /(?:只显示|只要)\s*([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)\s*列?/,
+    ),
+    ...columnHints(text, /show\s+(?:only\s+)?(?:the\s+)?([A-Za-z_][\w]*)/i),
+  ];
+  if (hide.length) ui.hideColumns = hide;
+  if (show.length) ui.showColumns = show;
+  void ctx;
+  return Object.keys(ui).length ? ui : null;
+}
+
+function patchMessage(ui: PageUiPatch): string {
+  if (ui.layoutPage === "users") {
+    return "Updated this page to a contacts list layout. Same data, no new page.";
+  }
+  if (ui.displayKind === "grid") {
+    return "Updated this page to a card/grid layout.";
+  }
+  if (ui.displayKind === "table") {
+    return "Updated this page to a table layout.";
+  }
+  if (ui.displayKind === "list") {
+    return "Updated this page to a list layout.";
+  }
+  if (ui.hideColumns?.length) {
+    return `Hid column(s): ${ui.hideColumns.join(", ")}.`;
+  }
+  return "Updated the current page layout.";
+}
+
+function bindBodiesEqual(
+  a?: Record<string, unknown> | null,
+  b?: Record<string, unknown> | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
 }
 
 async function llmJson(
@@ -503,10 +731,14 @@ export async function explainCurrentPage(
   message: string,
   ctx: PageChatContext | undefined,
   llm?: LlmConfig | null,
+  history?: Array<{ role: string; content: string }>,
 ): Promise<string> {
   const parsed = await llmJson(
     llm,
-    `You explain or discuss the user's current data page. Do not generate a new page or APIJSON body.
+    `You are a coding assistant for the user's current data page (Ask mode — like Cursor Ask).
+Discuss the open page, compare layout/query options, and plan changes.
+Do not generate a new page, a new surfaceId, or an APIJSON body.
+If they want the change applied, explain the plan and tell them to switch to Edit (修改/编辑页面) or say “按这个改”.
 Return JSON: { "message": "..." } only.
 ${SCHEMA_DICT}${skillsPromptBlock(
       matchSkills(
@@ -516,6 +748,7 @@ ${SCHEMA_DICT}${skillsPromptBlock(
     )}`,
     JSON.stringify({
       user: message,
+      history: (history || []).slice(-8),
       page: ctx
         ? {
             id: ctx.pageId,
@@ -525,6 +758,10 @@ ${SCHEMA_DICT}${skillsPromptBlock(
             table: ctx.table,
             pageKind: ctx.pageKind,
             columns: ctx.columns,
+            displayKind: ctx.displayKind,
+            catalogStyle: ctx.catalogStyle,
+            columnOrder: ctx.columnOrder,
+            columnMetas: ctx.columnMetas,
             bind: ctx.bind,
           }
         : null,
@@ -541,65 +778,134 @@ function fallbackExplain(
   ctx?: PageChatContext,
 ): string {
   if (!hasCurrentPage(ctx)) {
-    return "No page is open. Ask to list a table (for example “List music”), or open a layout page so I can generate that one page.";
+    return "No page is open. Switch to Generate and ask to list a table (for example “List music”), or open a layout page. Ask mode only discusses — it does not create pages.";
   }
   const label = [ctx?.title, ctx?.app && ctx?.page ? `${ctx.app}/${ctx.page}` : ""]
     .filter(Boolean)
     .join(" · ");
   const table = ctx?.table ? ` Primary table: ${ctx.table}.` : "";
-  const bind = ctx?.bind?.bodyTemplate
-    ? ` Current GET bind: ${JSON.stringify(ctx.bind.bodyTemplate)}.`
-    : "";
+  const view = ctx?.displayKind ? ` View: ${ctx.displayKind}.` : "";
   void message;
-  return `${label || "Current page"}.${table}${bind} I can change this page’s query/layout if you say how, or generate a different page if you name it.`;
+  return `${label || "Current page"}.${table}${view} This is Ask mode — I can discuss layout, query, and tradeoffs. Switch to Edit to apply changes on this page, or Generate to open a different page.`;
 }
 
 export async function modifyPageBind(
   message: string,
   ctx: PageChatContext | undefined,
   llm?: LlmConfig | null,
-): Promise<{
-  body: Record<string, unknown>;
-  title?: string;
-  message: string;
-  source: "rules" | "llm";
-} | null> {
-  const current = ctx?.bind?.bodyTemplate;
-  if (!current || typeof current !== "object") return null;
+): Promise<ModifyPageResult | null> {
+  const current =
+    ctx?.bind?.bodyTemplate && typeof ctx.bind.bodyTemplate === "object"
+      ? ctx.bind.bodyTemplate
+      : null;
+  const uiRuled = pageUiPatchFromMessage(message, ctx);
+  const bodyRuled = current ? ruleModifyBody(message, current) : null;
+
+  if (uiRuled && !bodyRuled) {
+    return {
+      ui: uiRuled,
+      message: patchMessage(uiRuled),
+      source: "rules",
+    };
+  }
 
   const parsed = await llmJson(
     llm,
-    `You update the CURRENT page's APIJSON GET body. Do not create a new page or change surfaceId.
-Keep the same primary table unless the user asks to switch it.
+    `You edit the CURRENT open page in place (like Cursor editing the current file).
+Do not create a new page or change surfaceId.
+Keep the same primary table unless the user explicitly asks to replace the dataset.
+You may update the APIJSON GET body (sort/filter/count/columns) and/or UI:
+displayKind = table|list|grid|combined|bar|hbar|line|pie|doughnut|area
+catalogStyle = grid|list
+hideColumns/showColumns = field paths or names
 Never hardcode sample ids.
-Return JSON: { "body": {...}, "title": "optional", "message": "what changed" }
+If the user is only asking for advice, return { "message": "..." } with no body/ui.
+Return JSON: { "body": {...} optional, "ui": {...} optional, "title": "optional", "message": "what changed" }
 ${SCHEMA_DICT}${skillsPromptBlock(
       matchSkills(
         { prompt: message, table: ctx?.table, app: ctx?.app },
         peekSkills(),
       ),
     )}`,
-    JSON.stringify({ user: message, currentBind: current, page: ctx }),
+    JSON.stringify({
+      user: message,
+      currentBind: current,
+      page: ctx
+        ? {
+            id: ctx.pageId,
+            title: ctx.title,
+            app: ctx.app,
+            page: ctx.page,
+            table: ctx.table,
+            pageKind: ctx.pageKind,
+            displayKind: ctx.displayKind,
+            catalogStyle: ctx.catalogStyle,
+            columns: ctx.columns,
+            columnOrder: ctx.columnOrder,
+            columnMetas: ctx.columnMetas,
+          }
+        : null,
+    }),
   );
-  if (parsed && parsed.body && typeof parsed.body === "object" && !Array.isArray(parsed.body)) {
-    return {
-      body: parsed.body as Record<string, unknown>,
-      title: typeof parsed.title === "string" ? parsed.title : undefined,
-      message:
-        typeof parsed.message === "string" && parsed.message.trim()
-          ? parsed.message.trim()
-          : "Updated the current page bind.",
-      source: "llm",
-    };
+
+  const llmBody =
+    parsed &&
+    parsed.body &&
+    typeof parsed.body === "object" &&
+    !Array.isArray(parsed.body)
+      ? (parsed.body as Record<string, unknown>)
+      : undefined;
+  const llmUiRaw =
+    parsed && parsed.ui && typeof parsed.ui === "object" && !Array.isArray(parsed.ui)
+      ? (parsed.ui as PageUiPatch)
+      : undefined;
+  const llmUi = llmUiRaw
+    ? {
+        ...llmUiRaw,
+        displayKind:
+          llmUiRaw.displayKind && DISPLAY_KIND_SET.has(llmUiRaw.displayKind)
+            ? llmUiRaw.displayKind
+            : undefined,
+        catalogStyle:
+          llmUiRaw.catalogStyle === "grid" || llmUiRaw.catalogStyle === "list"
+            ? llmUiRaw.catalogStyle
+            : llmUiRaw.catalogStyle === null
+              ? null
+              : undefined,
+      }
+    : undefined;
+  const ui = mergePageUiPatch(uiRuled, llmUi);
+  const body = llmBody || bodyRuled || undefined;
+  const bodyChanged = Boolean(body && current && !bindBodiesEqual(current, body));
+  const title =
+    parsed && typeof parsed.title === "string" && parsed.title.trim()
+      ? parsed.title.trim()
+      : undefined;
+  const llmMsg =
+    parsed && typeof parsed.message === "string" ? parsed.message.trim() : "";
+
+  if (!bodyChanged && !ui && !title) {
+    if (llmMsg) return { message: llmMsg, source: "llm" };
+    if (uiRuled) {
+      return {
+        ui: uiRuled,
+        message: "Updated the current page layout.",
+        source: "rules",
+      };
+    }
+    return null;
   }
 
-  const ruled = ruleModifyBody(message, current);
-  if (ruled) {
-    return {
-      body: ruled,
-      message: "Updated the current page sort from your message.",
-      source: "rules",
-    };
-  }
-  return null;
+  const source: "rules" | "llm" = llmBody || llmUi || llmMsg ? "llm" : "rules";
+  return {
+    ...(bodyChanged && body ? { body } : {}),
+    ...(ui ? { ui } : {}),
+    ...(title ? { title } : {}),
+    message:
+      llmMsg ||
+      (ui && !bodyChanged
+        ? "Updated the current page layout."
+        : "Updated the current page."),
+    source,
+  };
 }

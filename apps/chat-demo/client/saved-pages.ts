@@ -15,6 +15,8 @@ import type {
 } from "./result-view.js";
 import {
   isCatalogListPage,
+  isDataListViewPage,
+  isExploreListPage,
   isLayoutApp,
   isLayoutPage,
   type ActionBinding,
@@ -61,16 +63,24 @@ export function parseLayoutSurfaceId(
 
 export function layoutPagesEquivalent(a: LayoutPage, b: LayoutPage): boolean {
   if (a === b) return true;
-  return (
-    (a === "home" || a === "list") && (b === "home" || b === "list")
-  );
+  if ((a === "home" || a === "list") && (b === "home" || b === "list")) {
+    return true;
+  }
+  if (isDataListViewPage(a) && isDataListViewPage(b)) return true;
+  const catalogView = (p: LayoutPage) =>
+    p === "home" || p === "feed" || p === "list" || isExploreListPage(p);
+  return catalogView(a) && catalogView(b);
 }
 
 function snapshotLooksLikeRecord(
   pageId: string,
   snap: SavedPageSnapshot,
 ): boolean {
-  if (snap.layoutPage === "detail" || snap.layoutPage === "player") return true;
+  if (
+    snap.layoutPage === "detail" ||
+    snap.layoutPage === "player" ||
+    snap.layoutPage === "form"
+  ) return true;
   if (snap.pageKind === "detail" || snap.pageKind === "create") return true;
   if (snap.viewMode === "detail") return true;
   return /_(detail|create)$/i.test(pageId);
@@ -186,26 +196,6 @@ export function slugPageTitle(title: string): string {
     .replace(/\s+/g, "_")
     .replace(/[^A-Za-z0-9_\u4e00-\u9fff-]/g, "")
     .slice(0, 48);
-}
-
-/**
- * Request.tag from page title: lowercase English, spaces → `_`, strip other chars.
- * Empty after strip → `fallback` (also normalized).
- */
-export function requestTagFromPageTitle(
-  title: string,
-  fallback = "",
-): string {
-  const normalize = (s: string) =>
-    s
-      .trim()
-      .toLowerCase()
-      .replace(/[\s\-]+/g, "_")
-      .replace(/[^a-z0-9_]/g, "")
-      .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "")
-      .slice(0, 64);
-  return normalize(title) || normalize(fallback);
 }
 
 export type PageFilterDef = {

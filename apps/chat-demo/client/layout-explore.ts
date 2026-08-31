@@ -8,6 +8,8 @@ import {
   formatCount,
   formatPrice,
   LAYOUT_PAGES_BY_APP,
+  isDataFormPage,
+  isDataListViewPage,
   mediaSrc,
   pickRowPresentation,
   type LayoutApp,
@@ -181,6 +183,7 @@ const LIST_SEARCH_PAGES = new Set<LayoutPage>([
 
 const DETAIL_SEARCH_PAGES = new Set<LayoutPage>([
   "detail",
+  "form",
   "player",
   "user",
   "orderDetail",
@@ -213,6 +216,8 @@ export function shouldShowAppSearch(
     return false;
   }
   if (!page) return true;
+  if (isDataListViewPage(page)) return surface === "list";
+  if (isDataFormPage(page)) return surface === "detail";
   return surface === "list"
     ? LIST_SEARCH_PAGES.has(page)
     : DETAIL_SEARCH_PAGES.has(page);

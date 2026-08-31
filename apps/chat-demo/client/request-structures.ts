@@ -1,6 +1,6 @@
 /**
  * Browser cache of Request structure rules (MUST / REFUSE / TYPE / VERIFY / INSERT).
- * Prefers admin catalog (`/api/available-requests` = Access ∩ Request + Document).
+ * Prefers admin catalog (`/api/available-requests` = Document first, then Request / Access / Function).
  */
 
 import { ensureAvailableRequests } from "./available-requests.js";
@@ -91,7 +91,7 @@ export async function ensureRequestStructures(baseUrl: string): Promise<void> {
   }
   const base = baseUrl.replace(/\/+$/, "");
   loading = (async () => {
-    // Prefer admin join (Access + Request + Document)
+    // Prefer admin join (Document first, then Request / Access / Function)
     const catalog = await ensureAvailableRequests();
     if (catalog.length) {
       rows = catalog

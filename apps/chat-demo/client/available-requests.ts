@@ -1,6 +1,8 @@
 /**
- * Available API catalog from admin (Access + Request + Document).
+ * Available API catalog from admin (Document first, then Request / Access / Function).
  */
+
+export type CatalogSource = "document" | "request" | "access" | "function";
 
 export type AvailableRequest = {
   operation: string;
@@ -11,6 +13,7 @@ export type AvailableRequest = {
   accessAlias?: string;
   accessName?: string;
   roles: string[];
+  source?: CatalogSource;
   document?: {
     id: string | number;
     name?: string;
@@ -19,6 +22,16 @@ export type AvailableRequest = {
     url?: string;
     request?: string;
     operation?: string;
+    group?: string;
+  };
+  function?: {
+    name: string;
+    arguments?: string;
+    demo?: string;
+    detail?: string;
+    type?: string;
+    methods?: string;
+    tag?: string;
   };
   open?: boolean;
 };
@@ -71,11 +84,25 @@ export async function reloadAvailableRequests(): Promise<AvailableRequest[]> {
   return ensureAvailableRequests();
 }
 
-/** Label for Data tab picker. */
+/** Label for Data tab picker. Document first in the catalog. */
 export function availableRequestLabel(r: AvailableRequest): string {
   const roles = r.roles?.length ? ` [${r.roles.join(",")}]` : "";
   const open = r.open ? " · open" : "";
-  return `${r.operation.toUpperCase()} ${r.tag} v${r.version}${open}${roles}`;
+  const src =
+    r.source === "document"
+      ? "DOC "
+      : r.source === "function"
+        ? "FN "
+        : r.source === "access"
+          ? "OPEN "
+          : r.source === "request"
+            ? "REQ "
+            : "";
+  if (r.source === "function") {
+    const args = r.function?.arguments ? `(${r.function.arguments})` : "";
+    return `${src}${r.tag}${args}${roles}`;
+  }
+  return `${src}${r.operation.toUpperCase()} ${r.tag} v${r.version}${open}${roles}`;
 }
 
 export type WriteGateDecision = "call" | "apply" | "try";
@@ -86,11 +113,13 @@ export type WriteGate = {
   decision: WriteGateDecision;
   roles: string[];
   document?: AvailableRequest["document"] | null;
+  function?: AvailableRequest["function"] | null;
+  source?: CatalogSource | null;
   reason?: string;
   error?: string;
 };
 
-/** Document + Access gate for put/delete (via admin). */
+/** Document → Request/Access/Function → Apply (via admin). */
 export async function fetchWriteGate(
   operation: string,
   tag: string,

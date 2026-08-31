@@ -90,6 +90,8 @@ export type ColumnMeta = {
   returnAgg?: ColumnReturnAgg;
   /** When returnAgg=custom: expression body, e.g. sum(commentCount) */
   returnExpr?: string;
+  /** User-resized column width in pixels (list table). */
+  width?: number;
 };
 
 /** Safe subset for custom `@column` expressions. */
@@ -422,6 +424,28 @@ export function headerLabel(
   const col = path.split(".").pop()!;
   const table = path.split(".")[0]!;
   return ambiguous.has(col) ? `${table}.${col}` : col;
+}
+
+const MIN_COL_PX = 56;
+const MAX_COL_PX = 640;
+
+/** Persisted width, or a content-based default for unsized columns. */
+export function columnPixelWidth(
+  path: string,
+  meta: ColumnMeta | undefined,
+  rows: Array<{ cells: Record<string, unknown> }>,
+): number {
+  const w = meta?.width;
+  if (typeof w === "number" && Number.isFinite(w)) {
+    return Math.max(MIN_COL_PX, Math.min(MAX_COL_PX, Math.round(w)));
+  }
+  const chars = sampleWidth(path, rows);
+  return Math.max(88, Math.min(280, chars * 8 + 52));
+}
+
+export function clampColumnPixelWidth(px: number): number {
+  if (!Number.isFinite(px)) return 140;
+  return Math.max(MIN_COL_PX, Math.min(MAX_COL_PX, Math.round(px)));
 }
 
 function sampleWidth(

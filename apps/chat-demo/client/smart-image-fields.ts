@@ -323,10 +323,26 @@ export function collectImageUrls(
   return [];
 }
 
+/**
+ * Lorem Picsum demo seeds (no file ext, often blocked in CN).
+ * Map to same-origin illustrated covers so every layout page can show an image.
+ */
+const PICSUM_ID_RE =
+  /^https?:\/\/(?:(?:www|fastly)\.)?picsum\.photos\/id\/(\d+)\/\d+\/\d+(?:\.[a-z0-9]+)?(?:[?#].*)?$/i;
+
+export function rewriteDemoImageUrl(url: string): string {
+  const s = url.trim();
+  const m = s.match(PICSUM_ID_RE);
+  if (m) return `/media/covers/${m[1]}.svg`;
+  return s;
+}
+
 /** Resolve relative /download paths against APIJSON base for <img src>. */
 export function resolveImageSrc(url: string, apijsonBase: string): string {
-  const s = url.trim();
+  const s = rewriteDemoImageUrl(url.trim());
   if (!s) return s;
+  // Vite public/ — captions, demo covers. Do not send through /apijson.
+  if (s.startsWith("/media/")) return s;
   if (
     /^https?:\/\//i.test(s) ||
     s.startsWith("data:") ||

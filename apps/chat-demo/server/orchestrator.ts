@@ -1,7 +1,12 @@
 import {
   A2API_VERSION,
   extractRequestTables,
+  resolveRequestTag,
+  shouldOmitOpenGetTag,
+  validateRequestStructure,
+  variantRequestTagCandidates,
   type BindRequestPayload,
+  type ApiJsonMethod,
   validateProposeRequest,
 } from "@a2api/protocol";
 import {
@@ -12,27 +17,59 @@ import {
   partitionPermissionIssues,
   type PendingRequest,
 } from "@a2api/runtime";
-import { bootstrapFromMessage, repairBody } from "./llm.js";
+import { overlayPlanWithDocument, type CatalogHit } from "./api-reuse.js";
+import { bootstrapFromMessage, repairBody, type SchemaHint } from "./llm.js";
 import type { LlmConfig } from "./llm-config.js";
 import {
   chatModeForPlan,
   classifyChatMode,
   explainCurrentPage,
   hasCurrentPage,
+  messageLooksLikePageRequest,
   modifyPageBind,
+  planFromLayoutMessage,
+  planFromLayoutNav,
   planFromModifiedBind,
   type ChatMode,
+  type ModifyPageResult,
   type PageChatContext,
+  type PageUiPatch,
 } from "./chat-mode.js";
 import { FileApprovalLedger } from "./approval-store.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  planFromIntent,
   toBindEnvelope,
   toProposeEnvelope,
   type BootstrapPlan,
 } from "./intent.js";
-import { commentsForPayload, type SchemaComments } from "./schema-comments.js";
+import {
+  commentsForPayload,
+  mergeComments,
+  type SchemaComments,
+} from "./schema-comments.js";
+import {
+  catalogToComments,
+  columnsFromComments,
+  formatSchemaDigest,
+  loadLiveColumns,
+  loadLiveTableCatalog,
+  localSchemaTables,
+  mergeLiveTables,
+} from "./schema-catalog.js";
+import {
+  applyFieldAlias,
+  candidatesToPayload,
+  extractFieldMentions,
+  extractQueryTokens,
+  looksLikeCancel,
+  parseSchemaPick,
+  pickKeywordField,
+  resolveFieldName,
+  resolveTableName,
+  type SchemaChoicePayload,
+} from "./schema-resolve.js";
 import { loadSkills } from "./skills.js";
 import {
   generateActionBind,
@@ -84,6 +121,17 @@ export interface SessionState {
     write?: Record<string, unknown>;
     schemaComments?: SchemaComments;
   };
+  pendingSchemaChoice?: SchemaChoicePayload & {
+    originalMessage: string;
+    pageContext?: PageChatContext;
+  };
+}
+
+function adminBaseUrl(): string {
+  return (
+    process.env.ADMIN_BASE_URL?.replace(/\/+$/, "") ||
+    `http://127.0.0.1:${process.env.ADMIN_PORT || 3001}`
+  );
 }
 
 function pickVisitorId(loginBody: unknown): string | number | null {
@@ -210,6 +258,7 @@ export class Orchestrator {
   private readonly sessions = new Map<string, SessionState>();
   /** requestId → sessionId for approval audit */
   private readonly requestSessions = new Map<string, string>();
+  private catalogCache: { at: number; items: CatalogHit[] } | null = null;
 
   constructor(baseUrl = process.env.APIJSON_BASE_URL ?? "http://localhost:8080") {
     this.client = new ApiJsonClient({ baseUrl });
@@ -250,6 +299,12 @@ export class Orchestrator {
 
   getSession(sessionId: string): SessionState | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  /** Access + information_schema table comments for layout inference. */
+  async liveSchemaComments(): Promise<SchemaComments> {
+    const tables = await loadLiveTableCatalog(this.client);
+    return catalogToComments(mergeLiveTables(localSchemaTables(), tables));
   }
 
   private bindClientCookie(session: SessionState): void {
@@ -353,6 +408,62 @@ export class Orchestrator {
     return { ok: true };
   }
 
+  /** Document → Request/Access/Function catalog from admin. */
+  private async fetchApiCatalog(): Promise<CatalogHit[]> {
+    if (this.catalogCache && Date.now() - this.catalogCache.at < 60_000) {
+      return this.catalogCache.items;
+    }
+    try {
+      const res = await fetch(`${adminBaseUrl()}/api/available-requests`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        items?: CatalogHit[];
+      } | null;
+      const items = res.ok && Array.isArray(data?.items) ? data.items : [];
+      this.catalogCache = { at: Date.now(), items };
+      return items;
+    } catch {
+      return this.catalogCache?.items ?? [];
+    }
+  }
+
+  /**
+   * Writes: Document first, then Request/Access/Function, else Apply.
+   */
+  private async gateExistingApi(
+    method: string,
+    body: Record<string, unknown>,
+  ): Promise<{ decision: string; reason?: string } | null> {
+    const write =
+      method === "post" ||
+      method === "put" ||
+      method === "delete" ||
+      method === "crud";
+    if (!write) return null;
+    const tag =
+      typeof body.tag === "string" && body.tag.trim()
+        ? body.tag.trim()
+        : extractRequestTables(body)[0] || "";
+    if (!tag) return null;
+    try {
+      const qs = new URLSearchParams({ operation: method, tag });
+      const gateRes = await fetch(`${adminBaseUrl()}/api/write-gate?${qs}`, {
+        signal: AbortSignal.timeout(4000),
+      });
+      const gate = (await gateRes.json().catch(() => null)) as {
+        decision?: string;
+        reason?: string;
+      } | null;
+      if (gateRes.ok && gate?.decision) {
+        return { decision: gate.decision, reason: gate.reason };
+      }
+    } catch {
+      /* lookup failed — try the call */
+    }
+    return null;
+  }
+
   /** Prefetch Access + Request tables for role / structure checks. */
   private async ensureMetaCaches(): Promise<void> {
     try {
@@ -403,6 +514,68 @@ export class Orchestrator {
   }
 
   /**
+   * Outermost tag = table name unless that Request is taken and unfit.
+   */
+  private async applyRequestTag(
+    body: Record<string, unknown>,
+    method: string,
+    pageContext?: PageChatContext | null,
+  ): Promise<Record<string, unknown>> {
+    const tables = extractRequestTables(body);
+    const table = tables.find((t) => t !== "Verify") || tables[0] || "";
+    if (!table) return body;
+    const tag = typeof body.tag === "string" ? body.tag.trim() : "";
+    if (shouldOmitOpenGetTag(method, tag, table)) {
+      const next = { ...body };
+      delete next.tag;
+      return next;
+    }
+    const m = method.toLowerCase();
+    if (m === "get" || m === "head") return body;
+
+    await this.client.requestStructures.ensureLoaded(this.client);
+    const row = this.client.requestStructures.lookup(m, table);
+    let unfit = false;
+    if (row) {
+      const extra = Object.keys(body).filter(
+        (k) => /^[A-Z]/.test(k) && k !== table,
+      );
+      const nested = Object.keys(row.structure).filter((k) =>
+        /^[A-Z]/.test(k),
+      );
+      if (extra.some((t) => !nested.includes(t))) unfit = true;
+      else if (
+        m === "post" ||
+        m === "put" ||
+        m === "delete" ||
+        m === "gets" ||
+        m === "heads"
+      ) {
+        unfit = !validateRequestStructure(
+          m as ApiJsonMethod,
+          { ...body, tag: table },
+          row,
+        ).ok;
+      }
+    }
+    return {
+      ...body,
+      tag: resolveRequestTag({
+        table,
+        currentTag: tag,
+        tableTagOccupied: row != null,
+        tableTagUnfit: unfit,
+        variants: variantRequestTagCandidates(table, {
+          title: pageContext?.title || undefined,
+          pageId: pageContext?.pageId || undefined,
+        }),
+        variantOccupied: (t) =>
+          this.client.requestStructures.lookup(m, t) != null,
+      }),
+    };
+  }
+
+  /**
    * Bind a UI action slot (like / comment / …) via A2API bindRequest.
    * Does not replace the session list bind or execute the write.
    */
@@ -431,15 +604,28 @@ export class Orchestrator {
     }
     this.bindClientCookie(session);
     try {
+      const liveTables = await loadLiveTableCatalog(this.client).catch(
+        () => [] as Awaited<ReturnType<typeof loadLiveTableCatalog>>,
+      );
+      const liveComments = catalogToComments(liveTables);
+      const extra: SchemaComments = {
+        tables: {
+          ...(session.dataModel.schemaComments?.tables || {}),
+          ...(context?.comments?.tables || {}),
+        },
+        columns: {
+          ...(session.dataModel.schemaComments?.columns || {}),
+          ...(context?.comments?.columns || {}),
+        },
+        types: session.dataModel.schemaComments?.types || {},
+      };
+      const comments = mergeComments(liveComments, extra);
       const generated = await generateActionBind(
         slot,
         {
           table: context?.table ?? null,
           columns: context?.columns ?? [],
-          comments:
-            context?.comments ??
-            session.dataModel.schemaComments ??
-            null,
+          comments,
           app: context?.app,
           page: context?.page,
         },
@@ -504,6 +690,7 @@ export class Orchestrator {
     auth?: ApijsonAuth | null,
     action?: { slot: ActionSlot; context?: ActionBindContext },
     pageContext?: PageChatContext,
+    schemaPick?: string | null,
   ) {
     if (action?.slot) {
       return this.bindAction(
@@ -531,7 +718,13 @@ export class Orchestrator {
     }
     this.bindClientCookie(session);
     try {
-      return await this.chatWithSession(session, message, llm, pageContext);
+      return await this.chatWithSession(
+        session,
+        message,
+        llm,
+        pageContext,
+        schemaPick,
+      );
     } finally {
       this.saveClientCookie(session);
     }
@@ -547,6 +740,7 @@ export class Orchestrator {
       message,
       pageContext,
       llm,
+      session.messages,
     );
     session.messages.push({ role: "assistant", content: assistantMessage });
     return {
@@ -564,13 +758,275 @@ export class Orchestrator {
     };
   }
 
+  private modifyUiReply(
+    session: SessionState,
+    pageContext: PageChatContext | undefined,
+    modified: ModifyPageResult,
+  ) {
+    session.messages.push({ role: "assistant", content: modified.message });
+    const bind = pageContext?.bind?.url ? pageContext.bind : undefined;
+    return {
+      sessionId: session.id,
+      source: modified.source,
+      chatMode: "modify" as ChatMode,
+      assistantMessage: modified.message,
+      pagePatch: {
+        ...(modified.ui || {}),
+        ...(modified.title ? { title: modified.title } : {}),
+      } as PageUiPatch,
+      pending: {
+        status: "done",
+        method: "get",
+        body: pageContext?.bind?.bodyTemplate ?? {},
+      },
+      ...(bind ? { bind } : {}),
+      lastResult: session.lastResult,
+      plan: {
+        filters: session.plan?.a2uiHint.filters ?? [],
+        surfaceId: pageContext?.pageId || session.plan?.a2uiHint.surfaceId || "page",
+        viewMode:
+          pageContext?.pageKind === "list"
+            ? "list"
+            : pageContext?.pageKind
+              ? "detail"
+              : session.plan?.viewMode,
+        title: modified.title || pageContext?.title,
+      },
+      dataModel: session.dataModel,
+    };
+  }
+
+  private planPrimaryTable(plan: BootstrapPlan): string {
+    const tables = extractRequestTables(plan.propose.body);
+    return tables.find((t) => t !== "Verify") || tables[0] || "";
+  }
+
+  private schemaChoiceReply(
+    session: SessionState,
+    pending: SchemaChoicePayload & {
+      originalMessage: string;
+      pageContext?: PageChatContext;
+    },
+  ) {
+    session.pendingSchemaChoice = pending;
+    const names = pending.candidates
+      .map((c) => (c.comment ? `${c.name} (${c.comment})` : c.name))
+      .join(", ");
+    const kind = pending.kind === "field" ? "field" : "table";
+    const assistantMessage =
+      pending.reason === "ambiguous"
+        ? `Local schema is not unique for “${pending.query}”. APIJSON candidates: ${names || "—"}. Confirm one to continue.`
+        : `No local ${kind} matched “${pending.query}”. APIJSON candidates: ${names || "type a name"}. Confirm one to continue.`;
+    session.messages.push({ role: "assistant", content: assistantMessage });
+    return {
+      sessionId: session.id,
+      chatMode: "explain" as ChatMode,
+      assistantMessage,
+      schemaChoice: {
+        kind: pending.kind,
+        reason: pending.reason,
+        query: pending.query,
+        table: pending.table,
+        candidates: pending.candidates,
+      },
+      pending: { status: "awaiting_schema", method: "get", body: {} },
+      plan: {
+        filters: [],
+        surfaceId: pending.pageContext?.pageId || "schema_choice",
+        title: pending.pageContext?.title,
+      },
+      dataModel: session.dataModel,
+    };
+  }
+
+  private async resolveTableForChat(query: string): Promise<
+    | { status: "matched"; hint: SchemaHint }
+    | { status: "ask"; payload: SchemaChoicePayload }
+    | { status: "none" }
+  > {
+    const tokens = extractQueryTokens(query);
+    if (!tokens.length) return { status: "none" };
+    const local = localSchemaTables();
+    let decision = resolveTableName(query, local);
+    if (decision.status === "matched") {
+      return { status: "matched", hint: { table: decision.name } };
+    }
+    const live = await loadLiveTableCatalog(this.client).catch(() => []);
+    const merged = mergeLiveTables(local, live);
+    decision = resolveTableName(query, merged);
+    if (decision.status === "matched") {
+      return { status: "matched", hint: { table: decision.name } };
+    }
+    if (decision.status === "ask") {
+      return {
+        status: "ask",
+        payload: candidatesToPayload(
+          "table",
+          decision.reason,
+          tokens.join(" "),
+          decision.ranked,
+        ),
+      };
+    }
+    if (live.length) {
+      return {
+        status: "ask",
+        payload: candidatesToPayload("table", "local_miss", tokens.join(" "), []),
+      };
+    }
+    return { status: "none" };
+  }
+
+  private async resolveFieldsForChat(
+    session: SessionState,
+    message: string,
+    ctx: PageChatContext,
+  ): Promise<
+    | { status: "ok"; message: string }
+    | {
+        status: "ask";
+        payload: SchemaChoicePayload;
+      }
+  > {
+    const mentions = extractFieldMentions(message);
+    const table = (ctx.table || "").trim();
+    if (!mentions.length || !table) return { status: "ok", message };
+    const extra = [
+      ...(ctx.columns || []),
+      ...(ctx.columnOrder || []),
+      ...Object.keys(ctx.columnMetas || {}),
+    ];
+    let columns = columnsFromComments(
+      table,
+      session.dataModel.schemaComments,
+      extra,
+    );
+    const needsLive = mentions.some(
+      (m) => resolveFieldName(m, columns).status !== "matched",
+    );
+    if (needsLive) {
+      const live = await loadLiveColumns(this.client, table).catch(() => null);
+      if (live) {
+        session.dataModel.schemaComments = mergeComments(
+          session.dataModel.schemaComments || {
+            tables: {},
+            columns: {},
+            types: {},
+          },
+          live.comments,
+        );
+        columns = columnsFromComments(table, live.comments, extra);
+      }
+    }
+    let next = message;
+    for (const mention of mentions) {
+      const d = resolveFieldName(mention, columns);
+      if (d.status === "matched") {
+        next = applyFieldAlias(next, mention, d.name);
+        continue;
+      }
+      if (d.status === "ask") {
+        return {
+          status: "ask",
+          payload: candidatesToPayload(
+            "field",
+            d.reason,
+            mention,
+            d.ranked,
+            table,
+          ),
+        };
+      }
+      if (columns.length) {
+        return {
+          status: "ask",
+          payload: candidatesToPayload(
+            "field",
+            "local_miss",
+            mention,
+            columns.slice(0, 8).map((c) => ({
+              name: c.name,
+              comment: c.comment,
+              source: c.source,
+              score: 1,
+            })),
+            table,
+          ),
+        };
+      }
+    }
+    return { status: "ok", message: next };
+  }
+
   private async chatWithSession(
     session: SessionState,
     message: string,
     llm?: LlmConfig | null,
     pageContext?: PageChatContext,
-  ) {
+    schemaPick?: string | null,
+  ): Promise<Record<string, unknown>> {
     await loadSkills(this.client).catch(() => undefined);
+
+    const waiting = session.pendingSchemaChoice;
+    if (waiting) {
+      if (looksLikeCancel(message)) {
+        session.pendingSchemaChoice = undefined;
+        return this.explainReply(
+          session,
+          "Cancelled. Name the table or field to use, or ask again.",
+          pageContext,
+          llm,
+        );
+      }
+      let pick = parseSchemaPick(message, waiting.candidates, schemaPick);
+      if (!pick && waiting.kind === "table") {
+        const again = await this.resolveTableForChat(message);
+        if (again.status === "matched" && again.hint.table) {
+          pick = again.hint.table;
+        } else if (again.status === "ask") {
+          return this.schemaChoiceReply(session, {
+            ...again.payload,
+            originalMessage: waiting.originalMessage,
+            pageContext: waiting.pageContext,
+          });
+        }
+      }
+      if (pick) {
+        session.pendingSchemaChoice = undefined;
+        if (waiting.kind === "table") {
+          const ctx: PageChatContext = {
+            ...(waiting.pageContext || pageContext || {}),
+            table: pick,
+          };
+          return this.chatWithSession(
+            session,
+            waiting.originalMessage,
+            llm,
+            ctx,
+          );
+        }
+        const rewritten = applyFieldAlias(
+          waiting.originalMessage,
+          waiting.query,
+          pick,
+        );
+        return this.chatWithSession(
+          session,
+          rewritten,
+          llm,
+          waiting.pageContext || pageContext,
+        );
+      }
+      if (
+        messageLooksLikePageRequest(message) &&
+        message.trim().length > 12
+      ) {
+        session.pendingSchemaChoice = undefined;
+      } else {
+        return this.schemaChoiceReply(session, waiting);
+      }
+    }
+
     const classified = classifyChatMode(message, pageContext);
     if (classified === "explain") {
       return this.explainReply(session, message, pageContext, llm);
@@ -579,24 +1035,170 @@ export class Orchestrator {
     let plan: BootstrapPlan;
     let source: "rules" | "llm";
     let chatMode: ChatMode = classified;
+    let pendingPagePatch: PageUiPatch | undefined;
 
     if (classified === "modify") {
-      const modified = await modifyPageBind(message, pageContext, llm);
-      if (!modified || !hasCurrentPage(pageContext)) {
+      if (!hasCurrentPage(pageContext)) {
         return this.explainReply(
           session,
-          modified
-            ? message
-            : `${message}\n\n(Could not patch the current bind from that request. Say how to change sort/filter, or name a different page to generate.)`,
+          `${message}\n\n(No page is open to edit. Open or generate a page first, or switch to Generate.)`,
           pageContext,
           llm,
         );
       }
+      if (pageContext) {
+        const fields = await this.resolveFieldsForChat(
+          session,
+          message,
+          pageContext,
+        );
+        if (fields.status === "ask") {
+          return this.schemaChoiceReply(session, {
+            ...fields.payload,
+            originalMessage: message,
+            pageContext,
+          });
+        }
+        message = fields.message;
+      }
+      const modified = await modifyPageBind(message, pageContext, llm);
+      if (!modified) {
+        session.messages.push({
+          role: "assistant",
+          content:
+            "Could not apply that edit on this page. Try: contacts list layout, card grid, hide a column, or sort by a field. Edit never opens a new page.",
+        });
+        return {
+          sessionId: session.id,
+          chatMode: "explain" as ChatMode,
+          assistantMessage:
+            "Could not apply that edit on this page. Try: contacts list layout, card grid, hide a column, or sort by a field. Edit never opens a new page.",
+          pending: { status: "done", method: "get", body: {} },
+          plan: {
+            filters: [],
+            surfaceId: pageContext?.pageId || "explain",
+            viewMode:
+              pageContext?.pageKind === "list"
+                ? "list"
+                : pageContext?.pageKind
+                  ? "detail"
+                  : undefined,
+            title: pageContext?.title,
+          },
+          dataModel: session.dataModel,
+        };
+      }
+      if (!modified.body) {
+        if (!modified.ui && !modified.title) {
+          session.messages.push({
+            role: "assistant",
+            content: modified.message,
+          });
+          return {
+            sessionId: session.id,
+            source: modified.source,
+            chatMode: "explain" as ChatMode,
+            assistantMessage: modified.message,
+            pending: { status: "done", method: "get", body: {} },
+            plan: {
+              filters: [],
+              surfaceId: pageContext?.pageId || "explain",
+              viewMode:
+                pageContext?.pageKind === "list"
+                  ? "list"
+                  : pageContext?.pageKind
+                    ? "detail"
+                    : undefined,
+              title: pageContext?.title,
+            },
+            dataModel: session.dataModel,
+          };
+        }
+        return this.modifyUiReply(session, pageContext, modified);
+      }
       plan = planFromModifiedBind(modified.body, pageContext!, modified.title);
       source = modified.source;
+      pendingPagePatch = {
+        ...(modified.ui || {}),
+        ...(modified.title ? { title: modified.title } : {}),
+      };
     } else {
-      const boot = await bootstrapFromMessage(message, llm, pageContext);
-      plan = boot.plan;
+      const catalog = await this.fetchApiCatalog();
+      const peeked =
+        (pageContext?.generatePage ? planFromLayoutNav(pageContext) : null) ??
+        planFromLayoutMessage(message) ??
+        planFromIntent(message);
+      let schemaHint: SchemaHint | undefined;
+      const knownTable = (pageContext?.table || "").trim();
+      const peekedTable = this.planPrimaryTable(peeked);
+      const localKnown =
+        Boolean(knownTable) ||
+        (peeked.kind !== "unknown" && Boolean(peekedTable));
+      if (
+        !localKnown &&
+        (messageLooksLikePageRequest(message) || pageContext?.generatePage)
+      ) {
+        const query = [message, pageContext?.targetApp, pageContext?.app]
+          .filter(Boolean)
+          .join(" ");
+        const resolved = await this.resolveTableForChat(query);
+        if (resolved.status === "ask") {
+          return this.schemaChoiceReply(session, {
+            ...resolved.payload,
+            originalMessage: message,
+            pageContext,
+          });
+        }
+        if (resolved.status === "matched") {
+          schemaHint = resolved.hint;
+          pageContext = {
+            ...(pageContext || {}),
+            table: resolved.hint.table,
+          };
+        } else if (peeked.kind === "unknown") {
+          return this.schemaChoiceReply(session, {
+            kind: "table",
+            reason: "local_miss",
+            query: extractQueryTokens(query).join(" ") || message.trim(),
+            candidates: [],
+            originalMessage: message,
+            pageContext,
+          });
+        }
+      } else if (knownTable) {
+        schemaHint = { table: knownTable };
+      }
+      if (schemaHint?.table) {
+        const cols = await loadLiveColumns(this.client, schemaHint.table).catch(
+          () => null,
+        );
+        if (cols) {
+          schemaHint = {
+            ...schemaHint,
+            keywordField: pickKeywordField(
+              schemaHint.table,
+              cols.comments,
+            ),
+            digest: formatSchemaDigest(cols.comments, schemaHint.table),
+          };
+          session.dataModel.schemaComments = mergeComments(
+            session.dataModel.schemaComments || {
+              tables: {},
+              columns: {},
+              types: {},
+            },
+            cols.comments,
+          );
+        }
+      }
+      const boot = await bootstrapFromMessage(
+        message,
+        llm,
+        pageContext,
+        catalog,
+        schemaHint,
+      );
+      plan = overlayPlanWithDocument(boot.plan, catalog);
       source = boot.source;
       chatMode = chatModeForPlan(plan);
       if (chatMode === "explain") {
@@ -615,6 +1217,11 @@ export class Orchestrator {
         plan.propose.method,
       );
     }
+    plan.propose.body = await this.applyRequestTag(
+      plan.propose.body,
+      plan.propose.method,
+      pageContext,
+    );
     session.plan = plan;
     session.a2uiMessages = buildA2uiMessages(plan);
 
@@ -676,7 +1283,11 @@ export class Orchestrator {
       );
       if (!repaired) return false;
       repairAttempts += 1;
-      const fixed = this.ownerBody(session, repaired, p.method);
+      const fixed = await this.applyRequestTag(
+        this.ownerBody(session, repaired, p.method),
+        p.method,
+        pageContext,
+      );
       pending = this.hitl.revise({
         requestId: p.requestId,
         body: fixed,
@@ -697,51 +1308,35 @@ export class Orchestrator {
       /* revise until validated or repairs exhausted */
     }
 
-    const isEditDelete =
-      plan.propose.method === "put" || plan.propose.method === "delete";
+    const skipExecuteForCreate =
+      plan.openCreate === true &&
+      plan.viewMode === "detail" &&
+      !plan.bind;
 
-    // Edit/delete: Document + Access gate before execute (no Data API jump).
-    if (isEditDelete && pending.status === "validated") {
-      const tag =
-        typeof plan.propose.body.tag === "string" &&
-        plan.propose.body.tag.trim()
-          ? plan.propose.body.tag.trim()
-          : extractRequestTables(plan.propose.body)[0] || "";
-      if (tag) {
-        try {
-          const adminBase =
-            process.env.ADMIN_BASE_URL?.replace(/\/+$/, "") ||
-            `http://127.0.0.1:${process.env.ADMIN_PORT || 3001}`;
-          const qs = new URLSearchParams({
-            operation: plan.propose.method,
-            tag,
-          });
-          const gateRes = await fetch(`${adminBase}/api/write-gate?${qs}`);
-          const gate = (await gateRes.json().catch(() => null)) as {
-            decision?: string;
-            reason?: string;
-          } | null;
-          if (gateRes.ok && gate?.decision === "apply") {
-            pending = await this.hitl.awaitPermissionConfig(
-              plan.propose.requestId,
-              [
-                gate.reason ||
-                  "Document found but Access missing — submit Apply",
-              ],
-            );
-          }
-        } catch {
-          /* no Document lookup — fall through to try */
-        }
+    const isWrite =
+      plan.propose.method === "post" ||
+      plan.propose.method === "put" ||
+      plan.propose.method === "delete";
+
+    // Writes: Document → Request/Access/Function → Apply (no Data API jump).
+    if (isWrite && pending.status === "validated" && !skipExecuteForCreate) {
+      const gate = await this.gateExistingApi(
+        plan.propose.method,
+        plan.propose.body,
+      );
+      if (gate?.decision === "apply") {
+        pending = await this.hitl.awaitPermissionConfig(
+          plan.propose.requestId,
+          [
+            gate.reason ||
+              "No existing Document/Request/Access/Function — submit Apply",
+          ],
+        );
       }
     }
 
     const advanceStarted = Date.now();
     // Create flows open an empty detail form — no list GET / Table bind.
-    const skipExecuteForCreate =
-      plan.openCreate === true &&
-      plan.viewMode === "detail" &&
-      !plan.bind;
     if (skipExecuteForCreate && pending.status === "validated") {
       pending.status = "done";
       pending.result = { ok: true, status: 200, body: {} };
@@ -774,6 +1369,9 @@ export class Orchestrator {
       a2apiEnvelopes: envelopes,
       pending,
       schemaComments,
+      ...(pendingPagePatch && Object.keys(pendingPagePatch).length
+        ? { pagePatch: pendingPagePatch }
+        : {}),
       plan: {
         filters: plan.a2uiHint.filters,
         writeForm: plan.writeForm,
@@ -934,8 +1532,8 @@ export class Orchestrator {
       isPermissionGateIssue(err) ||
       partitionPermissionIssues(pending.issues || [err]).permission.length > 0;
 
-    // Edit/delete: never auto-jump Data API; permission → Apply instead.
-    if (isEditDelete && permFail && !pending.permissionGate) {
+    // Writes: never auto-jump Data API; permission → Apply instead.
+    if (isWrite && permFail && !pending.permissionGate) {
       pending = await this.hitl.awaitPermissionConfig(
         pending.requestId,
         pending.issues?.length ? pending.issues : [err],
@@ -958,11 +1556,11 @@ export class Orchestrator {
       return response;
     }
 
-    response.guideToDataApi = !isEditDelete;
-    response.assistantMessage = isEditDelete
+    response.guideToDataApi = !isWrite;
+    response.assistantMessage = isWrite
       ? repairAttempts > 0
         ? `Tried AI repair ${repairAttempts} time(s) but still failing: ${err}. Fix the request and retry from Chat (not jumping to Data API).`
-        : `Edit/delete failed: ${err}. Retry from Chat after fixing, or submit Apply if this is a permission issue.`
+        : `Write failed: ${err}. Retry from Chat after fixing, or submit Apply if this is a permission issue.`
       : repairAttempts > 0
         ? `Tried AI repair ${repairAttempts} time(s) but still failing: ${err}. Open the Data API tab, edit the request JSON, then Retry.`
         : `Could not connect APIJSON: ${err}. Open the Data API tab, edit the request JSON, then Retry.`;
@@ -1050,7 +1648,10 @@ export class Orchestrator {
       await this.ensureMetaCaches();
       const requestId = `w_${Date.now().toString(36)}`;
       this.requestSessions.set(requestId, session.id);
-      const body = this.ownerBody(session, payload.body, payload.method);
+      const body = await this.applyRequestTag(
+        this.ownerBody(session, payload.body, payload.method),
+        payload.method,
+      );
       let pending = this.hitl.propose({
         requestId,
         method: payload.method,
@@ -1059,7 +1660,16 @@ export class Orchestrator {
         rationale: payload.rationale ?? "Detail form save",
       });
       const startedAt = Date.now();
-      if (pending.status !== "failed") {
+      if (pending.status === "validated") {
+        const gate = await this.gateExistingApi(payload.method, body);
+        if (gate?.decision === "apply") {
+          pending = await this.hitl.awaitPermissionConfig(requestId, [
+            gate.reason ||
+              "No existing Document/Request/Access/Function — submit Apply",
+          ]);
+        }
+      }
+      if (pending.status !== "failed" && pending.status !== "awaiting_approval") {
         pending = await this.hitl.advance(requestId);
       }
       session.pending = pending;
@@ -1173,13 +1783,14 @@ export class Orchestrator {
 
       const bind = session.bind;
       const merged = this.bound.mergeBody(bind, session.dataModel);
-      const body = applyTableQuery(
+      let body = applyTableQuery(
         merged,
         bind.bodyTemplate,
         query?.sorts ?? [],
         query?.filters ?? [],
         query?.combineExpr,
       );
+      body = await this.applyRequestTag(body, bind.method);
       const startedAt = Date.now();
       const result = await this.client.execute(bind.method, body, bind.url);
       this.logExecute({
@@ -1235,9 +1846,12 @@ export class Orchestrator {
     this.bindClientCookie(session);
     try {
       const requestId = session.plan.propose.requestId;
-      const fixed = this.ownerBody(
-        session,
-        body,
+      const fixed = await this.applyRequestTag(
+        this.ownerBody(
+          session,
+          body,
+          session.plan.propose.method,
+        ),
         session.plan.propose.method,
       );
       let pending = this.hitl.revise({ requestId, body: fixed });

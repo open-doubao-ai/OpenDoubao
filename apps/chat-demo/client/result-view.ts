@@ -122,6 +122,8 @@ import {
   inferLayoutSpec,
   isCartOrOrder,
   isCatalogListPage,
+  isDataFormPage,
+  layoutPageLabel,
   isLayoutKind,
   legacyKindFromSpec,
   pickRowPresentation,
@@ -194,12 +196,31 @@ import {
   type FilterJoin,
   type FilterOp,
 } from "./table-query.js";
+import {
+  appendTableColGroup,
+  beginTableGridSession,
+  bindTableGrid,
+  clearTableGridEdits,
+  commitTableGridEditor,
+  enableColumnDrag,
+  enableColumnResize,
+  flashTableEditSave,
+  getTableGridDirty,
+  markGridCell,
+  paintTableEditChrome,
+  registerTableGridSave,
+  setTableGridActive,
+  hintGridCells,
+  type GridEditorKind,
+} from "./table-grid-edit.js";
+
+export { paintTableEditChrome } from "./table-grid-edit.js";
 
 export type { SchemaComments } from "./schema-types.js";
 export type { ColumnMeta, ColumnShow, FieldType } from "./field-meta.js";
 
 export type ViewMode = "list" | "detail";
-export type DisplayKind = "combined" | "table" | "grid" | ChartKind;
+export type DisplayKind = "combined" | "table" | "list" | "grid" | ChartKind;
 export type { CatalogStyle } from "./layout-list-chrome.js";
 
 function columnShowOf(
@@ -1081,6 +1102,8 @@ export function renderResultView(
     onCombineExprChange?: (expr: string) => void;
     onColumnOrderChange?: (order: string[]) => void;
     onColumnMetasChange?: (metas: Record<string, ColumnMeta>) => void;
+    /** Width-only persist — do not remount the table. */
+    onColumnWidthChange?: (metas: Record<string, ColumnMeta>) => void;
     onDisplayKindChange?: (kind: DisplayKind) => void;
     onChartConfigChange?: (
       dimensions: ChartDimension[],
@@ -1200,6 +1223,8 @@ export function renderResultView(
   container.innerHTML = "";
   container.classList.remove("hidden");
   listCreateAction = null;
+  registerTableGridSave(null);
+  setTableGridActive(false);
   if (mode === "list") setDetailChrome(null);
 
   const state: ResultViewState = {
@@ -1723,26 +1748,31 @@ export function renderResultView(
   });
   const viewTabs = document.createElement("div");
   viewTabs.className = "display-tabs";
-  for (const [kind, label] of [
-    ["table", "Table"],
-    ["grid", "Grid"],
-    ["combined", "Charts"],
-    ["bar", "Bar"],
-    ["line", "Line"],
-    ["area", "Area"],
-    ["pie", "Pie"],
-    ["doughnut", "Doughnut"],
-  ] as const) {
+  for (const kind of [
+    "table",
+    "list",
+    "grid",
+    "combined",
+    "bar",
+    "hbar",
+    "line",
+    "pie",
+    "area",
+    "doughnut",
+  ] as const satisfies readonly DisplayKind[]) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "display-tab" + (displayKind === kind ? " active" : "");
-    b.textContent = label;
+    const page: LayoutPage = kind === "combined" ? "charts" : kind;
+    b.textContent = layoutPageLabel(page);
     if (kind === "combined") {
       b.title = t("result.chartsTitle");
     } else if (kind === "grid") {
       b.title = t("result.gridTitle");
+    } else if (kind === "list") {
+      b.title = t("result.listTitle");
     } else if (kind !== "table") {
-      b.title = `Show ${label} only`;
+      b.title = layoutPageLabel(page);
     }
     b.onclick = () => opts.onDisplayKindChange?.(kind);
     viewTabs.appendChild(b);
@@ -1765,6 +1795,7 @@ export function renderResultView(
   const isCombined = displayKind === "combined";
   const isChartOnly =
     displayKind !== "table" &&
+    displayKind !== "list" &&
     displayKind !== "grid" &&
     displayKind !== "combined";
 
@@ -2528,11 +2559,20 @@ export function renderResultView(
     }
   }
 
-  if (displayKind === "table" || displayKind === "grid") {
+  if (displayKind === "table" || displayKind === "grid" || displayKind === "list") {
   const listWrap = document.createElement("div");
-  listWrap.className = displayKind === "grid" ? "grid-wrap" : "table-wrap";
+  listWrap.className =
+    displayKind === "grid"
+      ? "grid-wrap"
+      : displayKind === "list"
+        ? "list-wrap"
+        : "table-wrap";
   listWrap.id =
-    displayKind === "grid" ? "result-grid-wrap" : "result-table-wrap";
+    displayKind === "grid"
+      ? "result-grid-wrap"
+      : displayKind === "list"
+        ? "result-list-wrap"
+        : "result-table-wrap";
 
   const selected = new Set<string>();
   const queryTables =
@@ -2617,6 +2657,10 @@ export function renderResultView(
     const detailPageTitle = table
       ? pageTitleForTable(table, "detail", id)
       : opts.pageTitle;
+    const formSpec =
+      layoutSpec.app === "data" || isDataFormPage(layoutSpec.page)
+        ? { app: "data" as const, page: "form" as const }
+        : layoutSpec;
     if (apijsonBase && table && String(id) !== "") {
       void openFkDetail(container, {
         table,
@@ -2627,8 +2671,8 @@ export function renderResultView(
         mode,
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
-        layoutKind,
-        layoutSpec,
+        layoutKind: formSpec.page === "form" ? "data" : layoutKind,
+        layoutSpec: formSpec,
         actionBindings: opts.actionBindings,
         onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
@@ -2733,10 +2777,79 @@ export function renderResultView(
     }
     listWrap.appendChild(grid);
     container.appendChild(listWrap);
+  } else if (displayKind === "list") {
+    const list = document.createElement("div");
+    list.className = "result-list";
+    const captionCols = visibleCols.length ? visibleCols : parsed.columns;
+    for (const row of parsed.rows) {
+      const fieldPool = [
+        ...new Set([
+          ...captionCols,
+          ...parsed.columns,
+          ...Object.keys(row.cells),
+        ]),
+      ];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "result-list-row";
+      btn.dataset.key = row.key;
+      const pres = pickRowPresentation(row.cells, {
+        primaryTable,
+        columns: fieldPool,
+        comments,
+        showByPath: showMapFromMetas(metas),
+        recordId: resolveRowRecordId(row, primaryTable),
+      });
+      const thumb = document.createElement("div");
+      thumb.className = "result-list-thumb";
+      if (pres.coverUrl) {
+        const img = document.createElement("img");
+        img.src = resolveImageSrc(pres.coverUrl, apijsonBase);
+        img.alt = "";
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        img.draggable = false;
+        img.onerror = () => {
+          thumb.classList.add("is-empty");
+          img.remove();
+        };
+        thumb.appendChild(img);
+      } else {
+        thumb.classList.add("is-empty");
+      }
+      const body = document.createElement("div");
+      body.className = "result-list-body";
+      const title = document.createElement("div");
+      title.className = "result-list-title";
+      title.textContent = pres.title || `#${row.key}`;
+      const sub = document.createElement("div");
+      sub.className = "result-list-sub";
+      sub.textContent = pres.subtitle || pres.body || "";
+      body.append(title, sub);
+      btn.append(thumb, body);
+      btn.title = write
+        ? t("result.editRecord")
+        : t("result.editRecord");
+      btn.onclick = () => openRowDetail(row.key, write ? "edit" : "view");
+      list.appendChild(btn);
+    }
+    if (!parsed.rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "result-list-empty muted";
+      empty.textContent = t("result.noRows");
+      list.appendChild(empty);
+    }
+    listWrap.appendChild(list);
+    container.appendChild(listWrap);
   } else {
 
   const table = document.createElement("table");
-  table.className = "data-table";
+  table.className = "data-table is-grid-edit";
+  const tableEditHost = document.createElement("div");
+  tableEditHost.id = "table-edit-chrome";
+  tableEditHost.className = "detail-chrome table-edit-chrome";
+  statusBar.prepend(tableEditHost);
+  appendTableColGroup(table, visibleCols, metas, parsed.rows);
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   headRow.id = "result-head-row";
@@ -2810,6 +2923,18 @@ export function renderResultView(
     opts.onColumnOrderChange?.(nextOrder);
   });
 
+  const pathTableCol = (path: string): { table: string; col: string } => {
+    const i = path.indexOf(".");
+    if (i < 0) return { table: primaryTable || "", col: path };
+    return { table: path.slice(0, i), col: path.slice(i + 1) };
+  };
+  const gridCanEdit = (path: string) => {
+    const { col } = pathTableCol(path);
+    return (
+      !isDetailReadonlyCol(col) && (metas[path]?.type ?? "text") !== "formula"
+    );
+  };
+
   const syncBatchUi = () => {
     const label = statusBar.querySelector(".status-selected");
     const delBtn = statusBar.querySelector(".batch-del") as HTMLElement | null;
@@ -2826,12 +2951,7 @@ export function renderResultView(
   for (const row of parsed.rows) {
     const tr = document.createElement("tr");
     tr.dataset.key = row.key;
-    tr.className = "result-row-clickable";
-    tr.title = write
-      ? "Click row to edit details (full fields)"
-      : "Click row to view details (full fields)";
-    // If writes are allowed, open editable detail by default
-    tr.onclick = () => openRowDetail(row.key, write ? "edit" : "view");
+    tr.className = "result-row";
 
     const tdCheck = document.createElement("td");
     tdCheck.className = "col-check";
@@ -2849,6 +2969,7 @@ export function renderResultView(
 
     for (const col of visibleCols) {
       const td = document.createElement("td");
+      markGridCell(td, row.key, col);
       const rawVal = row.cells[col];
       const text = formatCell(rawVal, metas[col]?.type ?? "text");
       const tip = commentFor(col, comments);
@@ -3025,6 +3146,92 @@ export function renderResultView(
   }
   table.appendChild(tbody);
 
+  const saveGridEdits = async () => {
+    commitTableGridEditor();
+    const dirty = getTableGridDirty();
+    if (!dirty.length || !write) return;
+    const groups = new Map<
+      string,
+      { table: string; id: string | number; fields: Record<string, unknown> }
+    >();
+    for (const cell of dirty) {
+      const { table, col } = pathTableCol(cell.path);
+      if (!table || !col || isDetailReadonlyCol(col)) continue;
+      const row = parsed.rows.find((r) => r.key === cell.rowKey);
+      if (!row) continue;
+      const idRaw =
+        table === (primaryTable || "")
+          ? resolveRowRecordId(row, table)
+          : row.cells[`${table}.id`];
+      if (
+        idRaw == null ||
+        idRaw === "" ||
+        (typeof idRaw !== "string" && typeof idRaw !== "number")
+      ) {
+        continue;
+      }
+      const id = idRaw;
+      const gkey = `${table}\0${String(id)}`;
+      let g = groups.get(gkey);
+      if (!g) {
+        g = { table, id, fields: { id } };
+        groups.set(gkey, g);
+      }
+      g.fields[col] = coerceField(cell.original, cell.text, cell.path);
+    }
+    if (!groups.size) {
+      flashTableEditSave(t("common.failed"));
+      return;
+    }
+    for (const g of groups.values()) {
+      const ok = await write({
+        method: "put",
+        table: g.table,
+        stayOnPage: true,
+        body: stripApiJsonRole({ [g.table]: g.fields, tag: g.table }),
+      });
+      if (ok === false) {
+        flashTableEditSave(t("common.failed"));
+        paintTableEditChrome();
+        return;
+      }
+    }
+    clearTableGridEdits();
+    flashTableEditSave(t("common.saved"));
+    opts.onListPageChange?.(opts.page ?? 0);
+  };
+  beginTableGridSession(opts.response);
+  registerTableGridSave(saveGridEdits);
+  enableColumnResize(table, metas, (path, width) => {
+    const cur = metas[path] ?? defaultColumnMeta(path);
+    metas[path] = { ...cur, width };
+    opts.onColumnWidthChange?.({ ...metas });
+  });
+  bindTableGrid({
+    table,
+    visibleCols,
+    rows: parsed.rows,
+    canEdit: gridCanEdit,
+    editorKind: (path): GridEditorKind => {
+      if (isGenderField(path)) return "select";
+      const sample = parsed.rows[0]?.cells[path];
+      if (looksLikeJsonField(path, sample)) return "textarea";
+      return "input";
+    },
+    inputType: (path) => inputTypeForField(metas[path]?.type ?? "text"),
+    selectOptions: (path) => (isGenderField(path) ? GENDER_OPTIONS : null),
+    editValue: (path, raw) => {
+      const type = metas[path]?.type ?? "text";
+      if (type === "date" || type === "time") {
+        return displayTimeValue(type, cellText(raw));
+      }
+      return cellText(raw);
+    },
+    displayValue: (_path, _raw, text) => truncate(text, 48),
+    onDirtyChange: () => paintTableEditChrome(),
+  });
+  hintGridCells(table, gridCanEdit);
+
   checkAll.onchange = () => {
     const boxes = tbody.querySelectorAll<HTMLInputElement>("input.row-check");
     selected.clear();
@@ -3035,7 +3242,10 @@ export function renderResultView(
     }
     syncBatchUi();
   };
-  listWrap.appendChild(table);
+  const tableScroll = document.createElement("div");
+  tableScroll.className = "table-scroll";
+  tableScroll.appendChild(table);
+  listWrap.appendChild(tableScroll);
   container.appendChild(listWrap);
   }
   }
@@ -3081,7 +3291,7 @@ function buildColumnHeader(
   const th = document.createElement("th");
   th.className = "col-head";
   th.dataset.path = col;
-  th.title = `${tooltip(col, opts.comments)}\nType: ${fieldTypeLabel(opts.meta.type)}\nLong-press to drag reorder`;
+  th.title = `${tooltip(col, opts.comments)}\nType: ${fieldTypeLabel(opts.meta.type)}\n${t("result.longPressReorder")}\n${t("result.resizeColumn")}`;
 
   const wrap = document.createElement("div");
   wrap.className = "col-head-inner";
@@ -3143,74 +3353,6 @@ function buildColumnHeader(
 
   th.appendChild(wrap);
   return th;
-}
-
-/** Long-press (~350ms) then drag to reorder columns. */
-function enableColumnDrag(
-  headRow: HTMLTableRowElement,
-  visibleCols: string[],
-  fullOrder: string[],
-  onChange: (order: string[]) => void,
-) {
-  let pressTimer: number | null = null;
-  let draggingPath: string | null = null;
-
-  for (const th of Array.from(headRow.querySelectorAll<HTMLElement>("th.col-head"))) {
-    const path = th.dataset.path!;
-    th.addEventListener("pointerdown", (e) => {
-      if ((e.target as HTMLElement).closest("button")) return;
-      pressTimer = window.setTimeout(() => {
-        draggingPath = path;
-        th.classList.add("dragging");
-        th.setPointerCapture(e.pointerId);
-      }, 350);
-    });
-    th.addEventListener("pointerup", (e) => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
-      }
-      if (!draggingPath) return;
-      th.classList.remove("dragging");
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const targetTh = el?.closest("th.col-head") as HTMLElement | null;
-      const targetPath = targetTh?.dataset.path;
-      if (targetPath && targetPath !== draggingPath) {
-        const vis = [...visibleCols];
-        const from = vis.indexOf(draggingPath);
-        const to = vis.indexOf(targetPath);
-        if (from >= 0 && to >= 0) {
-          vis.splice(from, 1);
-          vis.splice(to, 0, draggingPath);
-          // merge back into full order
-          const next = [...fullOrder];
-          const hidden = next.filter((p) => !vis.includes(p));
-          onChange([...vis, ...hidden]);
-        }
-      }
-      draggingPath = null;
-    });
-    th.addEventListener("pointermove", (e) => {
-      if (!draggingPath) return;
-      // visual hint: highlight drop target
-      for (const other of Array.from(
-        headRow.querySelectorAll<HTMLElement>("th.col-head"),
-      )) {
-        other.classList.remove("drop-target");
-      }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const targetTh = el?.closest("th.col-head") as HTMLElement | null;
-      if (targetTh && targetTh.dataset.path !== draggingPath) {
-        targetTh.classList.add("drop-target");
-      }
-    });
-    th.addEventListener("pointercancel", () => {
-      if (pressTimer) clearTimeout(pressTimer);
-      pressTimer = null;
-      draggingPath = null;
-      th.classList.remove("dragging");
-    });
-  }
 }
 
 function isRangeFieldType(type: FieldType): boolean {
@@ -4218,7 +4360,7 @@ export type WritePayload = {
   structure?: Record<string, unknown>;
   /** Like / comment / follow stay on the detail page after success. */
   stayOnPage?: boolean;
-  /** Keep body.tag (Video / Comment / User) instead of rewriting from the page title. */
+  /** Keep body.tag when it is already a table-qualified Request tag (Video / Comment:circle). */
   keepTag?: boolean;
   /** Do not merge a saved Data-API write template (social ops are exact). */
   skipTemplate?: boolean;
@@ -4516,7 +4658,7 @@ export function buildPutFromDetail(
 }
 
 const LIST_HIDE_SEL =
-  "#result-table-wrap, #result-grid-wrap, #result-layout-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
+  "#result-table-wrap, #result-grid-wrap, #result-list-wrap, #result-layout-wrap, .display-tabs, #result-chart-host, .table-status, .filter-combine-bar";
 
 function buildCombineExprBar(opts: {
   value: string;

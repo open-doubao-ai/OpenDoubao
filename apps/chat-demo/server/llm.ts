@@ -1,5 +1,9 @@
 import { SCHEMA_DICT } from "./schema-dict.js";
-import { planFromIntent, type BootstrapPlan } from "./intent.js";
+import {
+  planFromIntent,
+  planFromResolvedTable,
+  type BootstrapPlan,
+} from "./intent.js";
 import { resolveLlmConfig, type LlmConfig } from "./llm-config.js";
 import {
   planFromLayoutMessage,
@@ -7,6 +11,7 @@ import {
   type PageChatContext,
 } from "./chat-mode.js";
 import { matchSkills, peekSkills, skillsPromptBlock } from "./skills.js";
+import { formatApiCatalogPrompt, type CatalogHit } from "./api-reuse.js";
 
 /**
  * Optional OpenAI-compatible refinement. Falls back to deterministic intent planner.
@@ -26,19 +31,38 @@ const RULES_LOCKED_KINDS = new Set<BootstrapPlan["kind"]>([
   "delete_comment",
 ]);
 
+export type SchemaHint = {
+  table?: string;
+  digest?: string;
+  keywordField?: string;
+};
+
 export async function bootstrapFromMessage(
   message: string,
   llmOverride?: LlmConfig | null,
   pageContext?: PageChatContext | null,
+  apiCatalog?: CatalogHit[] | null,
+  schemaHint?: SchemaHint | null,
 ): Promise<{ plan: BootstrapPlan; source: "rules" | "llm" }> {
   const layoutPlan =
     pageContext?.generatePage ? planFromLayoutNav(pageContext) : null;
-  const rulesPlan =
+  let rulesPlan =
     layoutPlan ?? planFromLayoutMessage(message) ?? planFromIntent(message);
+  if (schemaHint?.table && rulesPlan.kind === "unknown") {
+    rulesPlan = planFromResolvedTable({
+      table: schemaHint.table,
+      message,
+      keywordField: schemaHint.keywordField,
+    });
+  }
   const { apiKey, baseUrl, model, language } = resolveLlmConfig(llmOverride);
   const layoutNav = Boolean(pageContext?.generatePage && layoutPlan);
+  const unlockedTable = Boolean(schemaHint?.table);
 
-  if (!apiKey || (!layoutNav && RULES_LOCKED_KINDS.has(rulesPlan.kind))) {
+  if (
+    !apiKey ||
+    (!layoutNav && !unlockedTable && RULES_LOCKED_KINDS.has(rulesPlan.kind))
+  ) {
     return { plan: rulesPlan, source: "rules" };
   }
 
@@ -69,7 +93,14 @@ ${SCHEMA_DICT}${skillsPromptBlock(
           )}
 Return JSON: { "method": "get|post|put|delete", "body": {...}, "title": "...", "bindingId": "optional for reads" }
 Only use APIJSON, never SQL.
-${
+Prefer existing Document APIs; if none, reuse Request / Access / Function. Do not invent a new tag when the catalog already covers the call.
+If the live schema names a primary table, use that table and its fields — do not guess Demo names.
+${schemaHint?.digest || ""}${
+  schemaHint?.table
+    ? `\nPrimary table MUST be "${schemaHint.table}".`
+    : ""
+}
+${formatApiCatalogPrompt(apiCatalog || [])}${
   layoutNav
     ? `Generate ONLY this one layout page (app=${pageContext?.targetApp || pageContext?.app} page=${pageContext?.targetPage || pageContext?.page}). Do not invent other pages. Keep bindingId "${rulesPlan.a2uiHint.surfaceId}". Never hardcode sample ids.`
     : ""

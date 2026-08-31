@@ -508,19 +508,28 @@ export function initDataPanel(root: HTMLElement) {
     if (!r) return;
     const base = baseFromUrl(urlEl.value || `${APIJSON_BROWSER_BASE}/get`);
     const doc = r.document;
+    const fn = r.function;
     methodEl.value = (doc?.method || "POST").toUpperCase();
     if (doc?.type) typeEl.value = doc.type;
     urlEl.value = doc?.url || `${base}/${r.operation}`;
     let body: Record<string, unknown> = { [r.tag]: {}, tag: r.tag };
-    if (doc?.request) {
+    const sample =
+      r.source === "function" && fn?.demo ? fn.demo : doc?.request;
+    if (sample) {
       try {
-        const parsed = JSON.parse(doc.request) as unknown;
+        const parsed = JSON.parse(sample) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           body = parsed as Record<string, unknown>;
         }
       } catch {
         /* keep default */
       }
+    } else if (r.source === "function") {
+      const call = fn?.arguments
+        ? `${r.tag}(${fn.arguments})`
+        : `${r.tag}()`;
+      body = { [`${r.tag}()`]: call };
+      urlEl.value = `${base}/get`;
     } else if (r.operation === "get" || r.operation === "head") {
       body = {
         "[]": {

@@ -51,6 +51,16 @@ export type LayoutPage =
   | "category"
   | "recommend"
   | "list"
+  | "table"
+  | "grid"
+  | "charts"
+  | "bar"
+  | "hbar"
+  | "line"
+  | "pie"
+  | "area"
+  | "doughnut"
+  | "form"
   | "detail"
   | "player"
   | "cart"
@@ -212,8 +222,61 @@ export function isCatalogApp(
   return isNewsLikeApp(app) || isArticleLikeApp(app) || isLocalLikeApp(app);
 }
 
+/** Spreadsheet / list / grid / charts — not a record form. */
+export const DATA_LIST_VIEW_PAGES = [
+  "table",
+  "list",
+  "grid",
+  "charts",
+  "bar",
+  "hbar",
+  "line",
+  "pie",
+  "area",
+  "doughnut",
+] as const satisfies readonly LayoutPage[];
+
+export type DataListViewPage = (typeof DATA_LIST_VIEW_PAGES)[number];
+
+/** 数据管理 picker: 表格、列表、网格、图表、柱状图… + 表单. */
+export const DATA_VIEW_PAGES = [
+  ...DATA_LIST_VIEW_PAGES,
+  "form",
+] as const satisfies readonly LayoutPage[];
+
+export function isDataListViewPage(
+  page: LayoutPage | null | undefined,
+): page is DataListViewPage {
+  return (
+    typeof page === "string" &&
+    (DATA_LIST_VIEW_PAGES as readonly string[]).includes(page)
+  );
+}
+
+export function isDataFormPage(page: LayoutPage | null | undefined): boolean {
+  return page === "form";
+}
+
+/** result-view DisplayKind (`charts` → `combined`). */
+export function displayKindFromDataPage(page: LayoutPage): string | null {
+  if (page === "charts") return "combined";
+  if (isDataListViewPage(page)) return page;
+  return null;
+}
+
+export function dataPageFromDisplayKind(kind: string): DataListViewPage | null {
+  if (kind === "combined") return "charts";
+  if (
+    kind !== "charts" &&
+    (DATA_LIST_VIEW_PAGES as readonly string[]).includes(kind)
+  ) {
+    return kind as DataListViewPage;
+  }
+  return null;
+}
+
 export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
-  data: ["list", "detail", "create", "search", "users", "user", ...ACCOUNT_PAGES, "scan"],
+  data: DATA_VIEW_PAGES,
   commerce: [
     "home",
     "search",
@@ -414,6 +477,16 @@ const PAGE_I18N: Record<LayoutPage, `layout.page.${LayoutPage}`> = {
   category: "layout.page.category",
   recommend: "layout.page.recommend",
   list: "layout.page.list",
+  table: "layout.page.table",
+  grid: "layout.page.grid",
+  charts: "layout.page.charts",
+  bar: "layout.page.bar",
+  hbar: "layout.page.hbar",
+  line: "layout.page.line",
+  pie: "layout.page.pie",
+  area: "layout.page.area",
+  doughnut: "layout.page.doughnut",
+  form: "layout.page.form",
   detail: "layout.page.detail",
   player: "layout.page.player",
   cart: "layout.page.cart",
@@ -603,6 +676,7 @@ export function layoutKindLabel(kind: LayoutKind): string {
 /** First-screen page when chat only names a scene / table (电商 / Product). */
 export function appLandingPage(app: LayoutApp): LayoutPage {
   const allowed = LAYOUT_PAGES_BY_APP[app];
+  if (app === "data" && allowed.includes("table")) return "table";
   if (app === "chat" && allowed.includes("list")) return "list";
   if (allowed.includes("home")) return "home";
   if (allowed.includes("feed")) return "feed";
@@ -685,13 +759,15 @@ export function defaultPageForApp(
 ): LayoutPage {
   const allowed = LAYOUT_PAGES_BY_APP[app];
   const prefer =
-    pageKind === "create"
-      ? "create"
-      : pageKind === "detail"
-        ? app === "music"
-          ? "player"
-          : "detail"
-        : appLandingPage(app);
+    pageKind === "create" || pageKind === "detail"
+      ? app === "data" && allowed.includes("form")
+        ? "form"
+        : pageKind === "create"
+          ? "create"
+          : app === "music"
+            ? "player"
+            : "detail"
+      : appLandingPage(app);
   return allowed.includes(prefer) ? prefer : (allowed[0] ?? "list");
 }
 
@@ -716,6 +792,12 @@ export function appFromKind(kind: LayoutKind | null | undefined): LayoutApp {
   return isLayoutApp(kind) ? kind : "data";
 }
 
+function remapDataLayoutPage(app: LayoutApp, page: unknown): unknown {
+  if (app !== "data") return page;
+  if (page === "detail" || page === "create") return "form";
+  return page;
+}
+
 export function parseLayoutSpec(
   raw: unknown,
   pageKind?: "list" | "detail" | "create",
@@ -723,17 +805,24 @@ export function parseLayoutSpec(
   if (raw && typeof raw === "object") {
     const o = raw as { app?: unknown; page?: unknown };
     if (isLayoutApp(o.app)) {
+      const requested = remapDataLayoutPage(o.app, o.page);
       const pages = LAYOUT_PAGES_BY_APP[o.app];
-      const page = isLayoutPage(o.page) && pages.includes(o.page)
-        ? o.page
-        : defaultPageForApp(o.app, pageKind);
+      const page =
+        isLayoutPage(requested) && pages.includes(requested)
+          ? requested
+          : defaultPageForApp(o.app, pageKind);
       return { app: o.app, page };
     }
   }
   if (typeof raw === "string" && raw.includes(".")) {
     const [a, p] = raw.split(".", 2);
-    if (isLayoutApp(a) && isLayoutPage(p) && LAYOUT_PAGES_BY_APP[a].includes(p)) {
-      return { app: a, page: p };
+    const page = isLayoutApp(a) ? remapDataLayoutPage(a, p) : p;
+    if (
+      isLayoutApp(a) &&
+      isLayoutPage(page) &&
+      LAYOUT_PAGES_BY_APP[a].includes(page)
+    ) {
+      return { app: a, page };
     }
   }
   if (isLayoutKind(raw)) return specFromLegacy(raw, pageKind);
@@ -1096,6 +1185,36 @@ function inferPageFromPrompt(
   if (!hay) return null;
   const allowed = LAYOUT_PAGES_BY_APP[app];
   const pick = (page: LayoutPage) => (allowed.includes(page) ? page : null);
+  if (hayHits(hay, ["form", "recordform"], ["表单"])) {
+    return pick("form");
+  }
+  if (hayHits(hay, ["spreadsheet", "datatable"], ["表格"])) {
+    return pick("table");
+  }
+  if (hayHits(hay, ["grid", "gallery"], ["网格", "宫格"])) {
+    return pick("grid");
+  }
+  if (hayHits(hay, ["columnchart"], ["柱状图", "柱图"])) {
+    return pick("bar");
+  }
+  if (hayHits(hay, ["barchart", "horizontalbar"], ["条形图"])) {
+    return pick("hbar");
+  }
+  if (hayHits(hay, ["linechart"], ["折线图", "折线"])) {
+    return pick("line");
+  }
+  if (hayHits(hay, ["piechart"], ["饼状图", "饼图"])) {
+    return pick("pie");
+  }
+  if (hayHits(hay, ["areachart"], ["面积图"])) {
+    return pick("area");
+  }
+  if (hayHits(hay, ["doughnut", "donut"], ["环形图", "圆环"])) {
+    return pick("doughnut");
+  }
+  if (hayHits(hay, ["charts", "chart"], ["图表"])) {
+    return pick("charts");
+  }
   // Explore tabs first — "playCount" / 播放次数 must not steal rank/history.
   if (hayHits(hay, ["search", "find"], ["搜索", "查找", "检索"])) {
     return pick("search");
@@ -1134,7 +1253,7 @@ function inferPageFromPrompt(
       ["新增", "新建", "创建", "发布", "发帖", "发动态"],
     )
   ) {
-    return pick("create");
+    return pick("create") ?? pick("form");
   }
   if (
     hayHits(
@@ -1143,7 +1262,7 @@ function inferPageFromPrompt(
       ["详情", "明细", "编辑", "修改", "播放页", "播放器", "观看页"],
     )
   ) {
-    return pick(app === "music" ? "player" : "detail");
+    return pick(app === "data" ? "form" : app === "music" ? "player" : "detail");
   }
   if (hayHits(hay, ["cart", "shoppingcart"], ["购物车", "购物篮"])) {
     return pick("cart");
@@ -1340,8 +1459,8 @@ export function isExploreListPage(page: LayoutPage | null | undefined): boolean 
 export function isCatalogListPage(page: LayoutPage | null | undefined): boolean {
   return (
     page === "home" ||
-    page === "list" ||
     page === "feed" ||
+    isDataListViewPage(page) ||
     isExploreListPage(page)
   );
 }

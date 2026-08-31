@@ -49,6 +49,11 @@ function toLogical(name: string): string {
   return PHYSICAL_TO_LOGICAL[name] ?? name;
 }
 
+/** Logical APIJSON table name (`User`) from a physical dump name. */
+export function logicalTableName(name: string): string {
+  return toLogical(name);
+}
+
 function listBodyOk(body: unknown): unknown[] {
   if (!body || typeof body !== "object") return [];
   const arr = (body as { "[]"?: unknown })["[]"];

@@ -77,6 +77,9 @@ export function resolveCatalogStyle(
   if ((spec?.app === "data" || kind === "data") && displayKind === "grid") {
     return "grid";
   }
+  if ((spec?.app === "data" || kind === "data") && displayKind === "list") {
+    return "list";
+  }
   return defaultCatalogStyle(spec, kind);
 }
 
@@ -88,6 +91,7 @@ export function shouldPageCatalog(page?: LayoutPage | null): boolean {
     page === "order" ||
     page === "create" ||
     page === "detail" ||
+    page === "form" ||
     page === "player" ||
     page === "orderDetail" ||
     page === "addressDetail"

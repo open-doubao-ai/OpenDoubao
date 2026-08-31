@@ -308,6 +308,52 @@ export function isWritePlanKind(kind: BootstrapPlan["kind"]): boolean {
   return kind === "update_comment" || kind === "delete_comment";
 }
 
+function slugTable(table: string): string {
+  const s = table.trim();
+  if (!s) return "page";
+  return s.charAt(0).toLowerCase() + s.slice(1).replace(/[^A-Za-z0-9_]/g, "");
+}
+
+/** Build a list/detail/create plan after the user (or live catalog) confirmed a table. */
+export function planFromResolvedTable(opts: {
+  table: string;
+  message: string;
+  keywordField?: string;
+  order?: string;
+}): BootstrapPlan {
+  const table = opts.table.trim();
+  const zh = opts.message.trim();
+  const slug = slugTable(table);
+  const wantsCreate =
+    /新增|创建|发一条|发布|\bcreate\b|\badd\b|\bpublish\b/i.test(zh);
+  const wantsDetail =
+    /详情|资料|主页|\bdetail\b|\bprofile\b/i.test(zh) &&
+    !/列表|\blist\b/i.test(zh);
+  const field = opts.keywordField || "title";
+  if (wantsCreate) {
+    return makeCreatePlan({
+      table,
+      title: `Create ${table}`,
+      surfaceId: `${slug}_create`,
+      fields: [{ key: field, label: field, path: `/${table}/${field}` }],
+    });
+  }
+  if (wantsDetail) {
+    return makeDetailPlan({
+      table,
+      title: `${table} Detail`,
+      surfaceId: `${slug}_detail`,
+    });
+  }
+  return makeListPlan({
+    table,
+    title: `${table} List`,
+    surfaceId: `${slug}_list`,
+    keywordField: field,
+    order: opts.order,
+  });
+}
+
 function listTablePlan(entity: LayoutEntity, count: number): BootstrapPlan {
   return makeListPlan({
     table: entity.table,
@@ -476,7 +522,7 @@ export function planFromIntent(message: string): BootstrapPlan {
     };
   }
 
-  if (wantsCreate && (aboutMoment || !aboutComment)) {
+  if (wantsCreate && aboutMoment && !aboutComment) {
     // Empty detail create form (do not auto-POST / do not open Moment Table).
     const contentMatch =
       zh.match(/[「"'](.+?)[」"']/) ||

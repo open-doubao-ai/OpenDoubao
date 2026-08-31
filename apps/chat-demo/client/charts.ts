@@ -1,8 +1,10 @@
 /** Lightweight SVG charts for list data (no external chart lib). */
 
+import { t } from "./i18n/index.js";
+
 export type ChartPoint = { label: string; value: number };
 
-export type ChartKind = "bar" | "line" | "pie" | "doughnut" | "area";
+export type ChartKind = "bar" | "hbar" | "line" | "pie" | "doughnut" | "area";
 
 /** Default palette — each field / series gets a distinct color. */
 export const CHART_PALETTE = [
@@ -130,7 +132,8 @@ export function dimensionSeriesColor(
 }
 
 export const CHART_KIND_OPTIONS: Array<{ kind: ChartKind; label: string }> = [
-  { kind: "bar", label: "Bar" },
+  { kind: "bar", label: "Column" },
+  { kind: "hbar", label: "Bar" },
   { kind: "line", label: "Line" },
   { kind: "area", label: "Area" },
   { kind: "pie", label: "Pie" },
@@ -138,7 +141,7 @@ export const CHART_KIND_OPTIONS: Array<{ kind: ChartKind; label: string }> = [
 ];
 
 export function chartKindLabel(kind: ChartKind): string {
-  return CHART_KIND_OPTIONS.find((o) => o.kind === kind)?.label ?? kind;
+  return t(`layout.page.${kind}` as "layout.page.bar");
 }
 
 function toNumber(v: unknown): number | null {
@@ -760,6 +763,44 @@ export function renderBarChart(
     </svg>`;
 }
 
+export function renderHBarChart(
+  host: HTMLElement,
+  points: ChartPoint[],
+  title: string,
+  opts?: ChartRenderOptions,
+): void {
+  host.innerHTML = "";
+  if (!points.length) {
+    host.innerHTML = `<div class="result-empty">No chartable data</div>`;
+    return;
+  }
+  const w = Math.max(480, host.clientWidth || 560);
+  const rowH = 28;
+  const pad = { t: 28, r: 24, b: 24, l: 88 };
+  const h = Math.max(200, pad.t + pad.b + points.length * rowH);
+  const max = Math.max(...points.map((p) => p.value), 1);
+  const innerW = w - pad.l - pad.r;
+  const fill = toCssColor(seriesColor(opts));
+
+  let bars = "";
+  points.forEach((p, i) => {
+    const bw = (innerW * p.value) / max;
+    const y = pad.t + i * rowH + 4;
+    const color = opts?.categoryColors?.[i]
+      ? toCssColor(opts.categoryColors[i])
+      : fill;
+    bars += `<rect class="chart-bar" fill="${color}" style="fill:${color}" x="${pad.l}" y="${y}" width="${Math.max(2, bw)}" height="${rowH - 8}" rx="3">
+      <title>${escapeXml(p.label)}: ${p.value}</title></rect>`;
+    bars += `<text class="chart-tick" x="${pad.l - 8}" y="${y + (rowH - 8) / 2 + 4}" text-anchor="end">${escapeXml(p.label)}</text>`;
+  });
+
+  host.innerHTML = `<div class="chart-title">${escapeXml(title)}</div>
+    <svg class="chart-svg" viewBox="0 0 ${w} ${h}" width="100%" height="${h}">
+      <line class="chart-axis" x1="${pad.l}" y1="${pad.t}" x2="${pad.l}" y2="${h - pad.b}" />
+      ${bars}
+    </svg>`;
+}
+
 export function renderLineChart(
   host: HTMLElement,
   points: ChartPoint[],
@@ -892,6 +933,9 @@ export function renderChart(
   switch (kind) {
     case "bar":
       renderBarChart(host, points, title, opts);
+      break;
+    case "hbar":
+      renderHBarChart(host, points, title, opts);
       break;
     case "line":
       renderLineChart(host, points, title, false, opts);

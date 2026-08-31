@@ -19,7 +19,7 @@ const news = [
     "早高峰预计分流 12 万人次",
     "都市日报",
     "林晓",
-    "https://picsum.photos/id/1011/800/450",
+    "/media/covers/1011.svg",
     19200,
     "2026-08-22 07:30:00",
     1321,
@@ -32,7 +32,7 @@ const news = [
     "加时赛 2:1 逆转",
     "体育报",
     "周衡",
-    "https://picsum.photos/id/28/800/450",
+    "/media/covers/28.svg",
     22300,
     "2026-08-19 22:10:00",
     1324,
@@ -45,7 +45,7 @@ const news = [
     "每周五延长至 21 点",
     "文化资讯",
     "韩梅",
-    "https://picsum.photos/id/1015/800/450",
+    "/media/covers/1015.svg",
     5400,
     "2026-08-18 09:00:00",
     1325,
@@ -58,7 +58,7 @@ const news = [
     "API 先行团队开始审计依赖许可证",
     "技术周刊",
     "陈舟",
-    "https://picsum.photos/id/0/800/450",
+    "/media/covers/0.svg",
     8600,
     "2026-08-21 11:00:00",
     1323,
@@ -71,7 +71,7 @@ const news = [
     "气象台发布橙色预警",
     "气象台",
     "苏晚",
-    "https://picsum.photos/id/1019/800/450",
+    "/media/covers/1019.svg",
     45100,
     "2026-08-20 16:45:00",
     1326,
@@ -84,7 +84,7 @@ const news = [
     "释放长期资金约 5000 亿",
     "财经早报",
     "顾深",
-    "https://picsum.photos/id/20/800/450",
+    "/media/covers/20.svg",
     31800,
     "2026-08-17 08:20:00",
     1322,
@@ -97,7 +97,7 @@ const news = [
     "大学城站安检扩到六条仍短暂排队",
     "都市日报",
     "林晓",
-    "https://picsum.photos/id/1011/800/450",
+    "/media/covers/1011.svg",
     8600,
     "2026-08-22 18:00:00",
     1321,
@@ -110,7 +110,7 @@ const news = [
     "名单以区县官网为准",
     "气象台",
     "苏晚",
-    "https://picsum.photos/id/1019/800/450",
+    "/media/covers/1019.svg",
     12800,
     "2026-08-20 20:10:00",
     1326,
@@ -123,7 +123,7 @@ const news = [
     "窗口指导优先技改与小微续贷",
     "财经早报",
     "顾深",
-    "https://picsum.photos/id/20/800/450",
+    "/media/covers/20.svg",
     9100,
     "2026-08-17 16:40:00",
     1322,
@@ -137,7 +137,7 @@ const notices = [
     100,
     "系统维护通知：8 月 24 日 02:00–04:00",
     "published",
-    "https://picsum.photos/id/60/800/450",
+    "/media/covers/60.svg",
     "2026-08-21 10:00:00",
     1331,
     "8月24日02:00至04:00升级数据库索引。窗口期内写入接口返回503，列表与详情只读查询不受影响。请把批量导入改到05:00之后，值班号已同步到运维群。不要在窗口期重试写脚本。",
@@ -147,7 +147,7 @@ const notices = [
     100,
     "办公区门禁升级完成",
     "published",
-    "https://picsum.photos/id/180/800/450",
+    "/media/covers/180.svg",
     "2026-08-20 14:20:00",
     1332,
     "办公区门禁升级完成，进出需工卡加人脸双因子。访客请提前在前台登记，临时码当天有效。如识别失败，走西侧人工通道，不要尾随进门。快递停在一层柜，骑手不得上楼。",
@@ -157,7 +157,7 @@ const notices = [
     100,
     "食堂本周菜单调整",
     "published",
-    "https://picsum.photos/id/292/800/450",
+    "/media/covers/292.svg",
     "2026-08-11 08:40:00",
     1334,
     "食堂本周菜单调整：周三增加素食窗口，周五供应牛肉面。过敏原见各窗口告示牌。请自带杯具打汤，一次性碗筷按份计费，剩饭请倒进回收桶。高峰请错峰十分钟。",
@@ -167,7 +167,7 @@ const notices = [
     200,
     "Q3 团建意向征集",
     "published",
-    "https://picsum.photos/id/1016/800/450",
+    "/media/covers/1016.svg",
     "2026-08-19 09:15:00",
     1333,
     "第三季度团建开始征集意向，选项为郊外徒步、密室逃脱和湖边野餐。请于本周五下班前在表格中投票，过期按弃权处理。名额按部门人数分配，家属门票需自付。活动当天如遇暴雨，自动改到备用室内场馆，不再另行投票。集合时间与包车座位表将在投票截止后下一个工作日公布，请不要私下换人导致保险名单对不上。逾期报名不再加座。素食和过敏信息请一并填在备注里，后勤按表备餐。",
@@ -177,7 +177,7 @@ const notices = [
     200,
     "开源贡献奖励办法（试行）",
     "published",
-    "https://picsum.photos/id/96/800/450",
+    "/media/covers/96.svg",
     "2026-08-12 11:00:00",
     1332,
     "开源贡献奖励办法进入试行：合并到主仓的PR按复杂度计分，文档与测试补齐后可再加分。季度末按积分兑换周边或调休，封顶两天。抄袭、代提和未经评审强合的记录一律不计分，并会在贡献榜备注。积分只统计主仓和官方插件仓，个人实验仓库不算。有异议可在公示期内向架构组提交说明，逾期视为接受当期结果。调休须在次季度内用完，不能折现。",
@@ -187,7 +187,7 @@ const notices = [
     200,
     "草稿：年会场地待定",
     "draft",
-    "https://picsum.photos/id/201/800/450",
+    "/media/covers/201.svg",
     "2026-08-22 17:00:00",
     1333,
     "年会场地仍在两家酒店之间比选，预算表和交通接驳方案本周发出。节目彩排暂定11月，部门请先报节目时长，不要先定灯光舞美。草稿状态仅供内部讨论，对外不要传播候选报价。如需预定住宿，请等场地敲定后再走差旅系统，避免两头占房。主持人候选名单也先放在同一份表格里，方便行政统一对接。供应商询价邮件请抄送行政，不要单独承诺桌数。",
@@ -197,7 +197,7 @@ const notices = [
     500,
     "数据库索引升级细则（值班与回滚）",
     "published",
-    "https://picsum.photos/id/60/800/450",
+    "/media/covers/60.svg",
     "2026-08-21 16:00:00",
     1331,
     "本次数据库索引升级安排在8月24日02:00至04:00。升级内容包括为Comment、Video、Music三张表补联合索引，以及重建ShopOrder的date字段统计索引。窗口期内所有POST、PUT、DELETE将返回503，并在响应头带Retry-After。GET列表、详情和导出不受影响，但分析接口会暂时关闭，以免扫全表。请各业务在23日下班前把定时导入、对账和爬虫停掉，24日05:00后再启动。值班顺序：02:00至03:00由数据组值守，03:00至04:00由平台组值守，手机保持接通。若主从延迟超过30秒，会自动中止切换并回滚到旧索引，不会强行切写。升级完成后，会在运维群发一条「索引可用」消息，同时把执行计划和慢查询对比贴到文档站。不要在窗口期内用本地脚本重试写接口，以免堆积错误工单。完成后如需核对，请用只读账号查information_schema，不要直接改线上统计表。回滚演练记录放在运维周报附件，审计抽查时要能打开。缓存和搜索索引不必同步重建，等主库稳定后再刷。",
@@ -207,7 +207,7 @@ const notices = [
     500,
     "开源贡献奖励办法全文（试行）",
     "published",
-    "https://picsum.photos/id/96/800/450",
+    "/media/covers/96.svg",
     "2026-08-12 15:00:00",
     1332,
     "开源贡献奖励办法（试行）适用于所有把代码、文档或测试合并进主仓的同事。计分规则：修复缺陷1至3分，新增接口或页面3至8分，重构或性能优化需架构组确认后可到10分。补齐文档、示例和单测各加1分。季度末按积分兑换：20分周边礼包，40分调休一天，70分调休两天，封顶两天，不可累计到下一季度。以下情况不计分：未走评审、代他人提交、复制外部仓库不注明出处、把密钥写进仓库。公示期为季度最后五个工作日，有异议先找直属经理，再提交架构组。积分只统计主仓和官方插件仓。本办法解释权在工程委员会，试行满两个季度后复盘是否写入正式制度。对外宣传请用「试行」字样，不要写成已生效的薪酬政策。积分看板每周五更新，以合并时间为准，不以提交时间为准。跨组协作的PR由两边经理各确认一次，避免重复计分。调休须走人事系统，不能口头抵班。",
@@ -217,7 +217,7 @@ const notices = [
     500,
     "门禁、访客与外卖通行说明",
     "published",
-    "https://picsum.photos/id/180/800/450",
+    "/media/covers/180.svg",
     "2026-08-20 18:00:00",
     1332,
     "办公区门禁已切换为工卡加人脸双因子。本人进出时先刷卡再正视摄像头，戴口罩或逆光失败请走西侧人工通道，不要尾随。访客须由接待人提前在前台登记，临时码当天23:00失效，过闸一次即作废。快递和外卖停在一层柜，员工自行取件，骑手不得上楼。外包同事使用橙色工卡，权限仅覆盖所在项目楼层，周末需单独申请。丢失工卡请当天挂失，补卡工本费20元。监控按法规保存九十天，仅供安保和合规调阅。本通知从发布之日起执行，旧的密码门方案同步停用。如需带领媒体或外部评审进楼，请至少提前一个工作日邮件告知行政。消防通道严禁堆放纸箱。访客离开时接待人负责送出闸机，不得把临时码转发给下一位未登记人员。夜间加班请在前台登记预计离开时间，保安巡楼时好核对。自行车棚也已纳入门禁，旧钥匙本周五作废。",
@@ -230,7 +230,7 @@ const articles = [
     100,
     "智能字段：图片、性别与外键",
     "Jan",
-    "https://picsum.photos/id/177/800/450",
+    "/media/covers/177.svg",
     "[82001]",
     "[38710]",
     6,
@@ -243,7 +243,7 @@ const articles = [
     100,
     "运营活动页需要的最小字段集",
     "Wechat",
-    "https://picsum.photos/id/1018/800/450",
+    "/media/covers/1018.svg",
     "[82001]",
     "[]",
     0,
@@ -256,7 +256,7 @@ const articles = [
     100,
     "电商列表为什么要独立购物车页",
     "Steve",
-    "https://picsum.photos/id/292/800/450",
+    "/media/covers/292.svg",
     "[38710,82002]",
     "[82001]",
     9,
@@ -269,7 +269,7 @@ const articles = [
     200,
     "权限门控：缺 Access 时自动提交 Apply",
     "Test User",
-    "https://picsum.photos/id/48/800/450",
+    "/media/covers/48.svg",
     "[38710]",
     "[]",
     4,
@@ -282,7 +282,7 @@ const articles = [
     200,
     "不要把 SQL 交给模型临场拼装",
     "Strong",
-    "https://picsum.photos/id/60/800/450",
+    "/media/covers/60.svg",
     "[]",
     "[82012]",
     2,
@@ -295,7 +295,7 @@ const articles = [
     200,
     "列表与详情为什么必须是两页",
     "Test User",
-    "https://picsum.photos/id/1015/800/450",
+    "/media/covers/1015.svg",
     "[38710]",
     "[]",
     3,
@@ -308,7 +308,7 @@ const articles = [
     500,
     "从文本到结构化请求：A2API 0.1",
     "TommyLemon",
-    "https://picsum.photos/id/0/800/450",
+    "/media/covers/0.svg",
     "[82001,82002,70793]",
     "[82001]",
     21,
@@ -321,7 +321,7 @@ const articles = [
     500,
     "Apply 门控怎么和页面 tag 对齐",
     "Test User",
-    "https://picsum.photos/id/48/800/450",
+    "/media/covers/48.svg",
     "[38710]",
     "[82001]",
     5,
@@ -334,7 +334,7 @@ const articles = [
     500,
     "Access 与 Request：到底约束什么",
     "Steve",
-    "https://picsum.photos/id/24/800/450",
+    "/media/covers/24.svg",
     "[82001,70793]",
     "[82002]",
     8,
@@ -518,14 +518,14 @@ lines.push(`PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;`);
 for (const r of news) {
   const [id, , title, headline, source, author, cover, views, date, cat, body] = r;
   lines.push(
-    `INSERT INTO \`News\` (\`id\`,\`userId\`,\`title\`,\`headline\`,\`source\`,\`author\`,\`cover\`,\`content\`,\`viewCount\`,\`date\`,\`categoryId\`) VALUES (${id}, 82001, '${esc(title)}', '${esc(headline)}', '${esc(source)}', '${esc(author)}', '${cover}', '${esc(body)}', ${views}, '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), headline=VALUES(headline), content=VALUES(content), categoryId=VALUES(categoryId);`,
+    `INSERT INTO \`News\` (\`id\`,\`userId\`,\`title\`,\`headline\`,\`source\`,\`author\`,\`cover\`,\`content\`,\`viewCount\`,\`date\`,\`categoryId\`) VALUES (${id}, 82001, '${esc(title)}', '${esc(headline)}', '${esc(source)}', '${esc(author)}', '${cover}', '${esc(body)}', ${views}, '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), headline=VALUES(headline), cover=VALUES(cover), content=VALUES(content), categoryId=VALUES(categoryId);`,
   );
 }
 
 for (const r of notices) {
   const [id, , title, status, cover, date, cat, body] = r;
   lines.push(
-    `INSERT INTO \`Notice\` (\`id\`,\`userId\`,\`title\`,\`cover\`,\`content\`,\`status\`,\`date\`,\`categoryId\`) VALUES (${id}, 82001, '${esc(title)}', '${cover}', '${esc(body)}', '${status}', '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), content=VALUES(content), status=VALUES(status), categoryId=VALUES(categoryId);`,
+    `INSERT INTO \`Notice\` (\`id\`,\`userId\`,\`title\`,\`cover\`,\`content\`,\`status\`,\`date\`,\`categoryId\`) VALUES (${id}, 82001, '${esc(title)}', '${cover}', '${esc(body)}', '${status}', '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), cover=VALUES(cover), content=VALUES(content), status=VALUES(status), categoryId=VALUES(categoryId);`,
   );
 }
 
@@ -536,23 +536,23 @@ for (const r of articles) {
   void collect;
   void share;
   lines.push(
-    `INSERT INTO \`Article\` (\`id\`,\`userId\`,\`title\`,\`author\`,\`cover\`,\`content\`,\`date\`,\`categoryId\`) VALUES (${id}, ${uid}, '${esc(title)}', '${esc(author)}', '${cover}', '${esc(body)}', '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), content=VALUES(content), categoryId=VALUES(categoryId);`,
+    `INSERT INTO \`Article\` (\`id\`,\`userId\`,\`title\`,\`author\`,\`cover\`,\`content\`,\`date\`,\`categoryId\`) VALUES (${id}, ${uid}, '${esc(title)}', '${esc(author)}', '${cover}', '${esc(body)}', '${date}', ${cat}) ON DUPLICATE KEY UPDATE title=VALUES(title), cover=VALUES(cover), content=VALUES(content), categoryId=VALUES(categoryId);`,
   );
 }
 
 const musicRows = [
-  [907, 82001, "Amazing Grace", "United States Marine Band", "Public Domain Hymns", "https://picsum.photos/id/1015/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/21/Amazing_Grace_US_Marine_Band.ogg/Amazing_Grace_US_Marine_Band.ogg.mp3", 234, 42000, "2026-08-08 12:00:00", 1313, lyrics.grace],
-  [908, 38710, "Amazing Grace (1922)", "Original Sacred Harp Choir", "Library of Congress", "https://picsum.photos/id/1016/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/f/f2/Amazing_grace_1922.ogg/Amazing_grace_1922.ogg.mp3", 120, 18000, "2026-08-08 12:10:00", 1313, lyrics.grace1922],
-  [909, 82002, "Auld Lang Syne", "U.S. Navy Band", "Ceremonial Music", "https://picsum.photos/id/1018/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/7/74/Auld_Lang_Syne_-_U.S._Navy_Band.ogg/Auld_Lang_Syne_-_U.S._Navy_Band.ogg.mp3", 64, 26000, "2026-08-08 12:20:00", 1311, lyrics.auld],
-  [910, 82001, "Oh! Susanna", "United States Navy Band", "American Folk", "https://picsum.photos/id/1080/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c3/Oh_Susanna.ogg/Oh_Susanna.ogg.mp3", 233, 31000, "2026-08-08 12:30:00", 1315, lyrics.susanna],
-  [911, 82003, "Twinkle Twinkle Little Star", "John Casale", "Nursery (CC BY-SA)", "https://picsum.photos/id/1025/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/9/91/Twinkle_Twinkle_Little_Star.ogg/Twinkle_Twinkle_Little_Star.ogg.mp3", 44, 15000, "2026-08-08 12:40:00", 1313, lyrics.twinkle],
-  [912, 70793, "America the Beautiful", "United States Navy Band", "Ceremonial Vocals", "https://picsum.photos/id/1043/400/400", "https://upload.wikimedia.org/wikipedia/commons/transcoded/0/0e/America_the_Beautiful_%28male_vocalist%29_-_United_States_Navy_Band.opus/America_the_Beautiful_%28male_vocalist%29_-_United_States_Navy_Band.opus.mp3", 226, 22000, "2026-08-08 12:50:00", 1311, lyrics.america],
+  [907, 82001, "Amazing Grace", "United States Marine Band", "Public Domain Hymns", "/media/covers/1015.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/2/21/Amazing_Grace_US_Marine_Band.ogg/Amazing_Grace_US_Marine_Band.ogg.mp3", 234, 42000, "2026-08-08 12:00:00", 1313, lyrics.grace],
+  [908, 38710, "Amazing Grace (1922)", "Original Sacred Harp Choir", "Library of Congress", "/media/covers/1016.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/f/f2/Amazing_grace_1922.ogg/Amazing_grace_1922.ogg.mp3", 120, 18000, "2026-08-08 12:10:00", 1313, lyrics.grace1922],
+  [909, 82002, "Auld Lang Syne", "U.S. Navy Band", "Ceremonial Music", "/media/covers/1018.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/7/74/Auld_Lang_Syne_-_U.S._Navy_Band.ogg/Auld_Lang_Syne_-_U.S._Navy_Band.ogg.mp3", 64, 26000, "2026-08-08 12:20:00", 1311, lyrics.auld],
+  [910, 82001, "Oh! Susanna", "United States Navy Band", "American Folk", "/media/covers/1080.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c3/Oh_Susanna.ogg/Oh_Susanna.ogg.mp3", 233, 31000, "2026-08-08 12:30:00", 1315, lyrics.susanna],
+  [911, 82003, "Twinkle Twinkle Little Star", "John Casale", "Nursery (CC BY-SA)", "/media/covers/1025.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/9/91/Twinkle_Twinkle_Little_Star.ogg/Twinkle_Twinkle_Little_Star.ogg.mp3", 44, 15000, "2026-08-08 12:40:00", 1313, lyrics.twinkle],
+  [912, 70793, "America the Beautiful", "United States Navy Band", "Ceremonial Vocals", "/media/covers/1043.svg", "https://upload.wikimedia.org/wikipedia/commons/transcoded/0/0e/America_the_Beautiful_%28male_vocalist%29_-_United_States_Navy_Band.opus/America_the_Beautiful_%28male_vocalist%29_-_United_States_Navy_Band.opus.mp3", 226, 22000, "2026-08-08 12:50:00", 1311, lyrics.america],
 ];
 
 for (const r of musicRows) {
   const [id, uid, title, artist, album, cover, url, dur, plays, date, cat, lrc] = r;
   lines.push(
-    `INSERT INTO \`Music\` (\`id\`,\`userId\`,\`title\`,\`artist\`,\`album\`,\`cover\`,\`audioUrl\`,\`lyrics\`,\`duration\`,\`playCount\`,\`date\`,\`categoryId\`) VALUES (${id}, ${uid}, '${esc(title)}', '${esc(artist)}', '${esc(album)}', '${cover}', '${url}', '${esc(lrc)}', ${dur}, ${plays}, '${date}', ${cat}) ON DUPLICATE KEY UPDATE lyrics=VALUES(lyrics), audioUrl=VALUES(audioUrl), title=VALUES(title), categoryId=VALUES(categoryId);`,
+    `INSERT INTO \`Music\` (\`id\`,\`userId\`,\`title\`,\`artist\`,\`album\`,\`cover\`,\`audioUrl\`,\`lyrics\`,\`duration\`,\`playCount\`,\`date\`,\`categoryId\`) VALUES (${id}, ${uid}, '${esc(title)}', '${esc(artist)}', '${esc(album)}', '${cover}', '${url}', '${esc(lrc)}', ${dur}, ${plays}, '${date}', ${cat}) ON DUPLICATE KEY UPDATE lyrics=VALUES(lyrics), audioUrl=VALUES(audioUrl), title=VALUES(title), cover=VALUES(cover), categoryId=VALUES(categoryId);`,
   );
 }
 
@@ -587,7 +587,7 @@ for (const [id, cap, q] of videoMeta) {
 lines.push(`INSERT INTO \`Video\` (\`id\`,\`userId\`,\`title\`,\`author\`,\`cover\`,\`videoUrl\`,\`subtitleList\`,\`qualityList\`,\`duration\`,\`playCount\`,\`date\`,\`categoryId\`) VALUES
 (807, 82001, 'Big Buck Bunny 10s', 'Blender Foundation', 'https://media.w3.org/2010/05/bunny/poster.png', 'https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_2MB.mp4', CAST('${esc(caps("bbb10"))}' AS JSON), CAST('${esc(BBB_Q)}' AS JSON), 10, 6400, '2026-08-16 10:00:00', 1346),
 (808, 38710, 'Sintel Short (captions)', 'Blender Foundation / MDN', 'https://media.w3.org/2010/05/sintel/poster.png', 'https://media.w3.org/2010/05/sintel/trailer.mp4', CAST('${esc(caps("sintel"))}' AS JSON), CAST('${esc(SINTEL_Q)}' AS JSON), 52, 8800, '2026-08-16 11:00:00', 1346)
-ON DUPLICATE KEY UPDATE subtitleList=VALUES(subtitleList), qualityList=VALUES(qualityList), videoUrl=VALUES(videoUrl);`);
+ON DUPLICATE KEY UPDATE subtitleList=VALUES(subtitleList), qualityList=VALUES(qualityList), videoUrl=VALUES(videoUrl), cover=VALUES(cover);`);
 
 writeFileSync(
   new URL("./layout_demo_media_text.sql", import.meta.url),

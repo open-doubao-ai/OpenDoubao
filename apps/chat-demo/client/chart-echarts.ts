@@ -142,6 +142,7 @@ export function renderEcharts(
   const aligned = seriesDataAligned(series, categories);
   const isArea = kind === "area";
   const isLine = kind === "line" || isArea;
+  const isHBar = kind === "hbar";
 
   chart.setOption(
     {
@@ -157,28 +158,47 @@ export function renderEcharts(
         textStyle: { color: textColor, fontSize: 11 },
       },
       grid: {
-        left: 48,
+        left: isHBar ? 88 : 48,
         right: 20,
         top: 56,
-        bottom: categories.some((c) => c.length > 8) ? 72 : 40,
+        bottom: isHBar
+          ? 40
+          : categories.some((c) => c.length > 8)
+            ? 72
+            : 40,
       },
-      xAxis: {
-        type: "category",
-        data: categories,
-        axisLabel: {
-          color: textColor,
-          fontSize: 10,
-          rotate: categories.length > 6 ? 30 : 0,
-          interval: 0,
-        },
-        axisLine: { lineStyle: { color: lineColor } },
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: { color: textColor, fontSize: 10 },
-        splitLine: { lineStyle: { color: lineColor, opacity: 0.45 } },
-        axisLine: { show: false },
-      },
+      xAxis: isHBar
+        ? {
+            type: "value" as const,
+            axisLabel: { color: textColor, fontSize: 10 },
+            splitLine: { lineStyle: { color: lineColor, opacity: 0.45 } },
+            axisLine: { show: false },
+          }
+        : {
+            type: "category" as const,
+            data: categories,
+            axisLabel: {
+              color: textColor,
+              fontSize: 10,
+              rotate: categories.length > 6 ? 30 : 0,
+              interval: 0,
+            },
+            axisLine: { lineStyle: { color: lineColor } },
+          },
+      yAxis: isHBar
+        ? {
+            type: "category" as const,
+            data: categories,
+            inverse: true,
+            axisLabel: { color: textColor, fontSize: 10 },
+            axisLine: { lineStyle: { color: lineColor } },
+          }
+        : {
+            type: "value" as const,
+            axisLabel: { color: textColor, fontSize: 10 },
+            splitLine: { lineStyle: { color: lineColor, opacity: 0.45 } },
+            axisLine: { show: false },
+          },
       series: aligned.map((s) => ({
         name: s.name,
         type: isLine ? ("line" as const) : ("bar" as const),

@@ -102,7 +102,16 @@ app.post("/api/chat", async (c) => {
       targetApp?: string | null;
       targetPage?: string | null;
       preferredMode?: "auto" | "generate" | "modify" | "explain" | null;
+      displayKind?: string | null;
+      catalogStyle?: "grid" | "list" | null;
+      columnOrder?: string[];
+      columnMetas?: Record<
+        string,
+        { visible?: boolean; displayName?: string; show?: string }
+      >;
     };
+    schemaPick?: string | null;
+    schemaChoice?: { pick?: string | null };
   }>();
   if (!body.message?.trim()) {
     return c.json({ error: "message required" }, 400);
@@ -118,6 +127,7 @@ app.post("/api/chat", async (c) => {
         ? { slot, context: body.actionContext }
         : undefined,
       body.pageContext,
+      body.schemaPick || body.schemaChoice?.pick || null,
     );
     return c.json(result);
   } catch (e) {
@@ -308,6 +318,18 @@ app.post("/api/analyze", async (c) => {
       llm: body.llm,
     });
     return c.json(result);
+  } catch (e) {
+    return c.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      500,
+    );
+  }
+});
+
+app.get("/api/schema-catalog", async (c) => {
+  try {
+    const data = await orch.liveSchemaComments();
+    return c.json(data);
   } catch (e) {
     return c.json(
       { error: e instanceof Error ? e.message : String(e) },
@@ -592,7 +614,7 @@ app.get("/api/approvals/status", async (c) => {
   return c.json({ items });
 });
 
-/** Proxy: Access + Request + Document catalog from admin. */
+/** Proxy: Document first, then Request / Access / Function catalog from admin. */
 app.get("/api/available-requests", async (c) => {
   try {
     const res = await fetch(`${adminBaseUrl()}/api/available-requests`);
@@ -623,7 +645,7 @@ app.get("/api/available-requests", async (c) => {
   }
 });
 
-/** Proxy: Document + Access gate for edit/delete. */
+/** Proxy: Document → Request/Access/Function → Apply gate. */
 app.get("/api/write-gate", async (c) => {
   const operation = c.req.query("operation") || "";
   const tag = c.req.query("tag") || "";

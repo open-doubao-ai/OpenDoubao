@@ -3,6 +3,8 @@
  * Chat UI buttons pick the matching template (get→Search, post→Add, …).
  */
 
+import { tableNameFromRequestTag } from "@a2api/protocol";
+
 export type ReqMethod =
   | "get"
   | "gets"
@@ -98,7 +100,7 @@ export function inferBodyTable(body: Record<string, unknown>): string | null {
   }
   const tag = typeof body.tag === "string" ? body.tag.trim() : "";
   if (tag) {
-    const base = tag.replace(/:\[\]$/, "").replace(/\[\]$/, "");
+    const base = tableNameFromRequestTag(tag);
     if (/^[A-Z]/.test(base)) return base;
   }
   return null;

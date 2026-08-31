@@ -11,6 +11,10 @@ const CAPTURE_SEL = "#results";
 const FALLBACK_SEL = "#result-view";
 const THUMB_W = 364;
 const THUMB_H = 218;
+/** html-to-image hangs if a CORS fetch fails and it then sets img.src to "". */
+const CAPTURE_MS = 1500;
+const TRANSPARENT_PIXEL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 let captureSeq = 0;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,6 +42,17 @@ function bgColor(): string {
   return v || "#0f1419";
 }
 
+function isInlineOrSameOrigin(src: string): boolean {
+  const s = src.trim();
+  if (!s || s.startsWith("data:") || s.startsWith("blob:")) return true;
+  if (s.startsWith("/") && !s.startsWith("//")) return true;
+  try {
+    return new URL(s, location.href).origin === location.origin;
+  } catch {
+    return false;
+  }
+}
+
 function includeNode(node: HTMLElement): boolean {
   const skip = [
     "page-menu",
@@ -50,7 +65,38 @@ function includeNode(node: HTMLElement): boolean {
   for (const c of skip) {
     if (node.classList?.contains(c)) return false;
   }
+  // Cross-origin <img> (picsum, CDN) cannot be fetched from localhost;
+  // embedding them via fetch() CORS-fails and can stall toJpeg forever.
+  if (node instanceof HTMLImageElement) {
+    const src = node.currentSrc || node.src || node.getAttribute("src") || "";
+    if (src && !isInlineOrSameOrigin(src)) return false;
+  }
   return true;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const t = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, ms);
+    p.then(
+      (v) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(t);
+        resolve(null);
+      },
+    );
+  });
 }
 
 function captureTarget(): HTMLElement | null {
@@ -76,20 +122,31 @@ export async function captureWorkspaceThumb(): Promise<string | null> {
   );
 
   try {
-    const dataUrl = await toJpeg(node, {
-      quality: 0.62,
-      pixelRatio: 1,
-      width: srcW,
-      height: srcH,
-      canvasWidth: THUMB_W,
-      canvasHeight: THUMB_H,
-      backgroundColor: bgColor(),
-      cacheBust: false,
-      filter: (n) => {
-        if (!(n instanceof HTMLElement)) return true;
-        return includeNode(n);
-      },
-    });
+    const dataUrl = await withTimeout(
+      toJpeg(node, {
+        quality: 0.62,
+        pixelRatio: 1,
+        width: srcW,
+        height: srcH,
+        canvasWidth: THUMB_W,
+        canvasHeight: THUMB_H,
+        backgroundColor: bgColor(),
+        cacheBust: false,
+        skipFonts: true,
+        imagePlaceholder: TRANSPARENT_PIXEL,
+        fetchRequestInit: {
+          mode: "cors",
+          credentials: "omit",
+          signal: AbortSignal.timeout(600),
+        },
+        onImageErrorHandler: () => undefined,
+        filter: (n) => {
+          if (!(n instanceof HTMLElement)) return true;
+          return includeNode(n);
+        },
+      }),
+      CAPTURE_MS,
+    );
     return isValidPageThumb(dataUrl) ? dataUrl : null;
   } catch {
     return null;

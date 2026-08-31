@@ -10,7 +10,7 @@ description: Work on the A2API monorepo (protocol, runtime, chat-demo UI/APIJSON
 - `packages/protocol` — A2API 0.1 envelopes / validators
 - `packages/runtime` — `ApiJsonClient`, HITL, `BoundExecutor`
 - `apps/chat-demo` — Hono API + Vite client (Bootstrap chat + steady-state UI)
-- `apps/admin` — Apply submit/status + `available-requests` (Access∩Request+Document) + approve → Access/Request/Document/Chain then `/post/verify` (TYPE_RELOAD=4) + `/reload`; SPA list/edit via APIJSON; Login/Settings (same chrome as chat-demo); SQL `sql/sys_Apply.sql`, `sql/sys_Call.sql`
+- `apps/admin` — Apply submit/status + `available-requests` (Document first, then Request∩Access, then Function) + approve → Access/Request/Document/Chain then `/post/verify` (TYPE_RELOAD=4) + `/reload`; SPA list/edit via APIJSON; Login/Settings (same chrome as chat-demo); SQL `sql/sys_Apply.sql`, `sql/sys_Call.sql`
 - chat-demo calls admin for permission-gate Apply submit/poll and available request catalog
 - `conversations/` — git-managed chat examples
 - `.cursor/skills/` — project skills (this file)
@@ -29,13 +29,17 @@ npm install && npm run dev
 
 - Steady-state filter/sort/page must not call the LLM (`usedLlm: false`); client rebuilds the body and calls `/apijson/{method}` (Node BFF) — never absolute `:8080` URLs from bind templates.
 - Sensitive writes (default `delete`) go to Admin approval; other writes auto-execute and store `auto_approved` audit rows (`apps/chat-demo/data/approvals.jsonl`).
-- Edit/delete: do **not** auto-jump Data API. Always try the API first; on permission / parameter / illegal errors auto-submit Admin Apply. Demo never shows Approve/Reject (Admin only). Refresh polls Apply and notifies only on status change.
-- Apply / Request.tag: from page title → lowercase English, spaces→`_`, strip other specials (e.g. `Moment Detail` → `moment_detail`); also set on write body `tag` for retry.
+- Edit/delete: do **not** auto-jump Data API. Resolve APIs in order: (1) existing **Document**, (2) **Request** + **Access** + **Function** for an existing APIJSON call, (3) Admin **Apply** for a new API. If an existing API matches, call it; on permission / parameter / illegal errors auto-submit Apply. If nothing matches, Apply without inventing a call. Demo never shows Approve/Reject (Admin only). Refresh polls Apply and notifies only on status change.
+- APIJSON outermost `tag` defaults to the **table name** (`Moment`). Page titles / surfaceIds (`Moment Detail`, `moment_list`) are not tags.
+- Mint a new tag only when that table-name Request (method + tag) already exists **and** its structure does not fit this call. Prefer `Table:alias` (`Moment:mine`, `Comment:circle`); otherwise a slug like `moment_list`. Set the same tag on the write body and on Apply / Request.tag for retry. Never mint a tag while a Document / Request / Function already covers the call.
+- Prefer existing Document APIs; if none, reuse Request / Access / Function. Otherwise Apply for a new API.
+- Table/field names: local SCHEMA_DICT / skills / comments first. If no unique match, query APIJSON Access + information_schema Table/Column live. If still uncertain, ask the user with candidates and continue only after they confirm.
 - Chart field pool = all query tables × fields (not table visible-column config).
 - User list / primary User: omit `@column` (all fields). JOIN User defaults include `name,tag,head,pictureList` (not only `name`).
 - UI copy is i18n via `i18next` in chat-demo (`apps/chat-demo/client/i18n/`) and admin (`apps/admin/client/i18n/`), locales `en` / `zh-CN`; Settings → **UI Language** (reload on change). Both apps share `localStorage` key `a2api.uiLocale`. Separate from **AI Language** (LLM reply language).
 - Chinese NLP matching may remain for intent; chat-demo chip `data-msg` follows UI locale.
 - Account menu (top-right) holds AI Model / Base URL / API Key; pass as `llm` on `/api/chat` and `/api/analyze`.
+- Chat modes: **Generate** = new page; **Edit** = patch the open page in place (bind + layout/columns/charts), never a new surfaceId; **Ask** = text only (discuss/plan); **Auto** = prefer Edit/Ask when a page is open, Generate only for a new or different page. Mode is sent as `pageContext.preferredMode`.
 
 ## Detail / table smart fields
 

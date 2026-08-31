@@ -1,10 +1,15 @@
-import type { LayoutApp, LayoutPage } from "./page-layout.js";
+import {
+  isDataListViewPage,
+  type LayoutApp,
+  type LayoutPage,
+} from "./page-layout.js";
 
 /** Built-in chrome (cart / settings / scan) — no AI page bind. */
 export function pageNeedsChatGenerate(page: LayoutPage): boolean {
   return (
     page === "home" ||
     page === "list" ||
+    isDataListViewPage(page) ||
     page === "feed" ||
     page === "rank" ||
     page === "recommend" ||
@@ -17,6 +22,7 @@ export function pageNeedsChatGenerate(page: LayoutPage): boolean {
     page === "orders" ||
     page === "address" ||
     page === "detail" ||
+    page === "form" ||
     page === "player" ||
     page === "create" ||
     page === "orderDetail" ||
@@ -54,13 +60,16 @@ export function generateLayoutPagePrompt(
     hints.push("Use the person / User table.");
   } else if (page === "favorite") {
     hints.push("List the app's item table (favorites).");
-  } else if (page === "home" || page === "list" || page === "feed") {
+  } else if (page === "form") {
+    hints.push("Open a record form (edit existing or empty create).");
+  } else if (page === "home" || page === "list" || page === "feed" || isDataListViewPage(page)) {
     hints.push("List many rows (array GET). Do not open a single-record detail.");
   }
   const shape =
     page === "create"
       ? "Open an empty create form (no list bind)."
       : page === "detail" ||
+          page === "form" ||
           page === "player" ||
           page === "profile" ||
           page === "orderDetail" ||

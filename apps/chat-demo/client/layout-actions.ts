@@ -6,6 +6,7 @@
 import { withApijsonAuth } from "./aj-auth.js";
 import { withRequestRole } from "./access-roles.js";
 import type { SchemaComments } from "./schema-types.js";
+import { tableNameFromRequestTag } from "@a2api/protocol";
 import {
   isActionSlot,
   type ActionBinding,
@@ -225,11 +226,16 @@ export function fillActionBody(
 }
 
 export function inferWriteTable(body: Record<string, unknown>): string | null {
-  const tag = typeof body.tag === "string" ? body.tag.trim() : "";
-  if (tag) return tag;
   for (const key of Object.keys(body)) {
     if (RESERVED.has(key) || key.startsWith("@")) continue;
-    if (/^[A-Z]/.test(key)) return key;
+    if (/^[A-Z]/.test(key)) {
+      return tableNameFromRequestTag(key) || key;
+    }
+  }
+  const tag = typeof body.tag === "string" ? body.tag.trim() : "";
+  if (tag) {
+    const base = tableNameFromRequestTag(tag);
+    if (/^[A-Z]/.test(base)) return base;
   }
   return null;
 }
