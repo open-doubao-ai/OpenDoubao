@@ -3226,7 +3226,6 @@ export function renderResultView(
   listWrap.appendChild(table);
   container.appendChild(listWrap);
   }
-  }
 
   const detailHost = document.createElement("div");
   detailHost.id = "result-detail-host";
