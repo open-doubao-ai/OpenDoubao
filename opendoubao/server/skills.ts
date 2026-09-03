@@ -280,8 +280,11 @@ export function layoutAppForSkill(skill: {
   name: string;
   family?: string | null;
 }): string {
-  if (LAYOUT_APP_NAMES.has(skill.name)) return skill.name;
+  if (LAYOUT_APP_NAMES.has(skill.name)) {
+    return skill.name === "info" ? "news" : skill.name;
+  }
   const family = String(skill.family || "").trim();
+  if (family === "info") return "news";
   if (LAYOUT_APP_NAMES.has(family)) return family;
   return FAMILY_APP[family] || "data";
 }

@@ -45,9 +45,9 @@
     "titleEn": "News",
     "tableName": "News",
     "family": "news",
-    "tokens": ["news", "headline", "新闻", "新闻资讯"],
+    "tokens": ["news", "headline", "新闻", "资讯", "新闻资讯"],
     "description": "新闻稿件、栏目、阅读数。",
-    "body": "# 新闻资讯\n- 主表 News，分类 Category.app=news\n- 门户+正文；列表 date-，排行 viewCount-"
+    "body": "# 新闻资讯\n- 主表 News，分类 Category.app=news\n- 门户+正文；列表 date-，排行 viewCount-\n- 资讯与新闻同一页面类型；公告表 Notice 也走新闻门户"
   },
   {
     "name": "info",
@@ -56,8 +56,8 @@
     "tableName": "Notice",
     "family": "news",
     "tokens": ["notice", "bulletin", "资讯公告", "公告"],
-    "description": "公告、制度、内部资讯。",
-    "body": "# 资讯公告\n- 主表 Notice，分类 Category.app=info\n- 不要和体育资讯/新闻资讯抢表"
+    "description": "公告、制度；页面类型与新闻资讯合并。",
+    "body": "# 资讯公告\n- 主表 Notice，分类 Category.app=info\n- 页面类型并入新闻资讯（news），不要单独出资讯门户\n- 不要和体育资讯抢表"
   },
   {
     "name": "blog",
@@ -81,13 +81,13 @@
   },
   {
     "name": "books",
-    "title": "图书阅读",
-    "titleEn": "Books",
+    "title": "小说阅读",
+    "titleEn": "Novels",
     "tableName": "Book",
     "family": "article",
-    "tokens": ["book", "ebook", "图书", "图书阅读"],
-    "description": "书目、简介、出版社。",
-    "body": "# 图书阅读\n- 主表 Book，分类 Category.app=books\n- 阅读器内核不要用 APIJSON"
+    "tokens": ["book", "ebook", "novel", "图书", "图书阅读", "小说"],
+    "description": "小说书目、简介、出版社。",
+    "body": "# 小说阅读\n- 主表 Book，分类 Category.app=books\n- 阅读器内核不要用 APIJSON"
   },
   {
     "name": "comics",

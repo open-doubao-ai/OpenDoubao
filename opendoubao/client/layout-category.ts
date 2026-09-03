@@ -52,7 +52,7 @@ const PERSON_PENALTY = [
 const APP_ITEM_TOKENS: Record<LayoutApp, string[]> = {
   commerce: ["product", "goods", "sku", "commodity", "merchandise", "商品", "货品", "电商"],
   music: ["music", "song", "track", "audio", "音乐", "歌曲"],
-  news: ["news", "headline", "新闻"],
+  news: ["news", "headline", "新闻", "资讯"],
   info: ["notice", "info", "bulletin", "announce", "资讯", "公告"],
   video: ["video", "film", "vod", "视频", "影片"],
   blog: ["blog", "博客"],
@@ -62,7 +62,7 @@ const APP_ITEM_TOKENS: Record<LayoutApp, string[]> = {
   chat: ["message", "chat", "消息", "聊天"],
   data: ["employee", "staff", "员工"],
   education: ["course", "lesson", "curriculum", "课程", "教育学习", "网课"],
-  books: ["book", "ebook", "textbook", "图书", "图书阅读", "电子书"],
+  books: ["book", "ebook", "textbook", "novel", "图书", "图书阅读", "小说", "电子书"],
   comics: ["comic", "manga", "manhua", "漫画", "漫画阅读"],
   lifestyle: ["local", "localservice", "errand", "本地生活", "到家", "到店"],
   food: ["recipe", "dish", "cuisine", "菜谱", "餐饮美食", "美食"],

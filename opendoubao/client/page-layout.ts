@@ -98,8 +98,8 @@ export type LayoutKind =
 /**
  * Parent scene (4-char zh) → item table. Child rows live in Category.app.
  * 数据管理 Employee · 电商购物 Product · 视频影像 Video · 音乐歌曲 Music
- * 新闻资讯 News · 资讯公告 Notice · 博客日志 Blog · 文章专栏 Article
- * 图书阅读 Book · 漫画阅读 Comic · 社交动态 Moment · 即时通讯 Message
+ * 新闻资讯 News（含原资讯公告） · 博客日志 Blog · 文章专栏 Article
+ * 小说阅读 Book · 漫画阅读 Comic · 社交动态 Moment · 即时通讯 Message
  * 运营活动 Activity · 教育学习 Course · 办公效率 Note · 本地生活 Local
  * 餐饮美食 Recipe · 旅游出行 Trip · 体育资讯 Sport · 母婴育儿 Baby
  * 健康运动 Workout · 汽车服务 Vehicle · 招聘求职 Job · 房产家居 House
@@ -111,7 +111,6 @@ export const LAYOUT_APPS: readonly LayoutApp[] = [
   "video",
   "music",
   "news",
-  "info",
   "blog",
   "article",
   "books",
@@ -434,8 +433,15 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
   office: CONTENT_PAGES,
 };
 
+/** Saved `info` pages stay valid; picker shows them as `news`. */
+const LAYOUT_APP_ALIASES = { info: "news" } as const satisfies Record<
+  string,
+  LayoutApp
+>;
+
 export const LAYOUT_KINDS: readonly LayoutKind[] = [
   ...LAYOUT_APPS,
+  "info",
   "cart",
   "order",
 ] as const;
@@ -515,7 +521,23 @@ const PAGE_I18N: Record<LayoutPage, `layout.page.${LayoutPage}`> = {
 };
 
 export function isLayoutApp(v: unknown): v is LayoutApp {
-  return typeof v === "string" && (LAYOUT_APPS as readonly string[]).includes(v);
+  return (
+    typeof v === "string" &&
+    ((LAYOUT_APPS as readonly string[]).includes(v) || v in LAYOUT_APP_ALIASES)
+  );
+}
+
+/** Notices (`info`) use the same portal as news. */
+export function canonicalLayoutApp(app: LayoutApp): LayoutApp {
+  return app === "info" ? "news" : app;
+}
+
+export function canonicalizeLayoutSpec(spec: LayoutSpec): LayoutSpec {
+  const app = canonicalLayoutApp(spec.app);
+  if (app === spec.app) return spec;
+  const pages = LAYOUT_PAGES_BY_APP[app];
+  const page = pages.includes(spec.page) ? spec.page : defaultPageForApp(app);
+  return { app, page };
 }
 
 /** DB Skill row used to overlay inference (query / upload, no code change). */
@@ -545,7 +567,7 @@ export function familyToLayoutApp(
   family: string | null | undefined,
 ): LayoutApp {
   const f = (family || "").trim().toLowerCase();
-  if (isLayoutApp(f)) return f;
+  if (isLayoutApp(f)) return canonicalLayoutApp(f);
   if (f === "media") return "video";
   if (f === "local" || f === "catalog") return "lifestyle";
   if (f === "read" || f === "article") return "article";
@@ -554,7 +576,7 @@ export function familyToLayoutApp(
 }
 
 export function layoutAppFromSkill(skill: SkillHint): LayoutApp {
-  if (isLayoutApp(skill.name)) return skill.name;
+  if (isLayoutApp(skill.name)) return canonicalLayoutApp(skill.name);
   return familyToLayoutApp(skill.family);
 }
 
@@ -777,7 +799,7 @@ export function specFromLegacy(
 ): LayoutSpec {
   if (kind === "cart") return { app: "commerce", page: "cart" };
   if (kind === "order") return { app: "commerce", page: "order" };
-  const app = isLayoutApp(kind) ? kind : "data";
+  const app = canonicalLayoutApp(isLayoutApp(kind) ? kind : "data");
   return { app, page: defaultPageForApp(app, pageKind) };
 }
 
@@ -789,7 +811,7 @@ export function legacyKindFromSpec(spec: LayoutSpec): LayoutKind {
 
 export function appFromKind(kind: LayoutKind | null | undefined): LayoutApp {
   if (kind === "cart" || kind === "order") return "commerce";
-  return isLayoutApp(kind) ? kind : "data";
+  return isLayoutApp(kind) ? canonicalLayoutApp(kind) : "data";
 }
 
 function remapDataLayoutPage(app: LayoutApp, page: unknown): unknown {
@@ -811,7 +833,7 @@ export function parseLayoutSpec(
         isLayoutPage(requested) && pages.includes(requested)
           ? requested
           : defaultPageForApp(o.app, pageKind);
-      return { app: o.app, page };
+      return canonicalizeLayoutSpec({ app: o.app, page });
     }
   }
   if (typeof raw === "string" && raw.includes(".")) {
@@ -822,7 +844,7 @@ export function parseLayoutSpec(
       isLayoutPage(page) &&
       LAYOUT_PAGES_BY_APP[a].includes(page)
     ) {
-      return { app: a, page };
+      return canonicalizeLayoutSpec({ app: a, page });
     }
   }
   if (isLayoutKind(raw)) return specFromLegacy(raw, pageKind);
@@ -1006,16 +1028,16 @@ function scoreTableName(table: string, scores: KindScore) {
     add(scores, "chat", 34);
   }
   if (has("comment", "comments", "评论")) add(scores, "social", 22);
-  if (has("news", "headline", "新闻")) add(scores, "news", 34);
+  if (has("news", "headline", "新闻", "资讯")) add(scores, "news", 34);
   if (has("blog", "博客")) add(scores, "blog", 34);
   if (has("article", "essay", "文章")) add(scores, "article", 32);
   if (has("info", "information", "notice", "announcement", "资讯公告", "公告", "通知")) {
-    add(scores, "info", 30);
+    add(scores, "news", 30);
   }
   if (has("course", "lesson", "curriculum", "课程", "教育学习", "网课")) {
     add(scores, "education", 36);
   }
-  if (has("book", "ebook", "textbook", "图书", "图书阅读", "电子书")) {
+  if (has("book", "ebook", "textbook", "novel", "图书", "图书阅读", "小说", "电子书")) {
     add(scores, "books", 36);
   }
   if (has("comic", "manga", "manhua", "漫画", "漫画阅读")) {
@@ -1107,13 +1129,13 @@ function scoreFieldsAndComments(hay: string, scores: KindScore) {
   hit(/\b(consignee|shippingaddr)\b|收货人|收件地址/, "commerce", 8);
   hit(/\b(content|picturelist|praise|likecount|commentcount)\b|点赞|动态/, "social", 8);
   hit(/\b(message|msgid|fromid|toid|conversation)\b|聊天|会话|私信/, "chat", 10);
-  hit(/\b(headline|newstime|source)\b|新闻|头条/, "news", 8);
+  hit(/\b(headline|newstime|source)\b|新闻|头条|资讯/, "news", 8);
   hit(/\b(blog|blogtitle)\b|博客/, "blog", 8);
   hit(/\b(article|bodyhtml|markdown)\b|正文|文章/, "article", 8);
-  hit(/\b(notice|announcement|infotitle)\b|资讯公告|公告/, "info", 8);
+  hit(/\b(notice|announcement|infotitle)\b|资讯公告|公告/, "news", 8);
   hit(/\b(campaign|activity|starttime|endtime|promo)\b|活动|运营|促销/, "campaign", 8);
   hit(/\b(course|lesson|curriculum)\b|课程|教育学习|网课/, "education", 10);
-  hit(/\b(ebook|textbook|isbn)\b|图书阅读|电子书/, "books", 10);
+  hit(/\b(ebook|textbook|isbn|novel)\b|图书阅读|小说|电子书/, "books", 10);
   hit(/\b(comic|manga|manhua)\b|漫画阅读|漫画/, "comics", 10);
   hit(/\b(localservice|errand)\b|本地生活|到家|到店/, "lifestyle", 10);
   hit(/\b(recipe|cuisine|catering)\b|餐饮美食|菜谱|美食/, "food", 10);
@@ -1166,7 +1188,8 @@ export function inferLayoutKind(opts: InferLayoutInput): LayoutKind {
     if ((scores.cart ?? 0) >= 20) return "cart";
   }
 
-  return pickWinner(scores, table);
+  const winner = pickWinner(scores, table);
+  return winner === "info" ? "news" : winner;
 }
 
 function hayHits(hay: string, en: string[], zh: string[]): boolean {

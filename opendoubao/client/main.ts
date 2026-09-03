@@ -48,6 +48,7 @@ import {
   legacyKindFromSpec,
   parseLayoutSpec,
   pickSearchColumnPath,
+  canonicalizeLayoutSpec,
   specFromLegacy,
   specsEqual,
   type ActionBinding,
@@ -1421,6 +1422,7 @@ function applyLayoutSpec(
   spec: LayoutSpec,
   opts?: { manual?: boolean; rerender?: boolean; persist?: boolean },
 ) {
+  spec = canonicalizeLayoutSpec(spec);
   state.layoutSpec = spec;
   state.layoutKind = legacyKindFromSpec(spec);
   if (opts?.manual) state.layoutKindManual = true;
