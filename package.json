@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "A2API: agent-generated controlled APIJSON CRUD with A2UI-style bindings",
   "workspaces": [
-    "packages/*",
+    "a2api/*",
     "opendoubao",
     "opendoubao-admin"
   ],

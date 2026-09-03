@@ -1,8 +1,8 @@
 /** English UI copy — source of truth for key shape. */
 export const en = {
   meta: {
-    title: "A2API — AI Agent safely view & edit data",
-    tagline: "AI Agent safely view & edit data",
+    title: "OpenDoubao — generate UI and safe APIs",
+    tagline: "generate UI and safe APIs",
   },
   nav: {
     chatUi: "Chat UI",

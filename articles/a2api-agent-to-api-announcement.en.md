@@ -123,8 +123,8 @@ A2API is an open-source monorepo with three layers:
 
 | Piece | Role |
 |-------|------|
-| **`packages/protocol`** | A2API 0.1 envelopes: `proposeRequest`, `reviseRequest`, `decision`, `bindRequest`, `requestResult`, `status` |
-| **`packages/runtime`** | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
+| **`a2api/protocol`** | A2API 0.1 envelopes: `proposeRequest`, `reviseRequest`, `decision`, `bindRequest`, `requestResult`, `status` |
+| **`a2api/runtime`** | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
 | **`@a2api/admin`** | Chat bootstrap + steady-state table/detail/charts + Data debugger + Admin approval |
 
 ### Two-phase UX (the core idea)

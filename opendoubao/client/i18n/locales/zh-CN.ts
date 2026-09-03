@@ -3,8 +3,8 @@ import type { TranslationSchema } from "./en.js";
 /** Simplified Chinese UI copy — mirrors `en` keys. */
 export const zhCN: TranslationSchema = {
   meta: {
-    title: "A2API — AI Agent 安全查看与编辑数据",
-    tagline: "AI Agent 安全查看与编辑数据",
+    title: "OpenDoubao — 生成高可用网页前后端",
+    tagline: "生成高可用网页前后端",
   },
   nav: {
     chatUi: "对话界面",

@@ -1,10 +1,10 @@
 English | [中文](./README.md)
-# OpenDoubao - Doubao Work alternative
-AI Agent to generate web pages and safe APIs,
+# A2API - AI once, API everytime safely, quickly and stably
+
+Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. <br />
 **AI generate UI once, API repeat everytime safely, quickly and stably.**
 
-Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, <br />
-then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
+Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
 **without going through the LLM again, no more token cost**.
 
 No SQL execution path. **Writes or sensitive reads** wait in the Admin approval queue.
@@ -50,12 +50,12 @@ Optional: set `OPENAI_API_KEY` in `.env` to refine bootstrap with an LLM. Withou
 
 ## Monorepo layout
 
-| Path               | Role |
-|--------------------|------|
-| `opendoubao`       | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
-| `opendoubao-admin` | Config application approvals → write Access / Request / Document / Chain |
-| `a2api/protocol`   | A2API 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
-| `a2api/runtime`    | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
+| Path | Role |
+|------|------|
+| `a2api/protocol` | A2API 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
+| `a2api/runtime` | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
+| `@a2api/admin` | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
+| `admin` | Config application approvals → write Access / Request / Document / Chain |
 
 ## Protocol (MVP)
 
@@ -136,4 +136,4 @@ If you have any questions or suggestions, you can [create an issue](https://gith
 
 ### Please ⭐ Star(on the top right) this project ^_^
 
-https://github.com/open-doubao-ai/OpenDoubao
+https://github.com/TommyLemon/A2API

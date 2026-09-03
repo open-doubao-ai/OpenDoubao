@@ -1,14 +1,14 @@
 ---
-name: a2api-demo
-description: Work on the A2API monorepo (protocol, runtime, opendoubao UI/APIJSON). Use when changing envelopes, BoundExecutor, opendoubao charts/tables/detail, account AI settings, or APIJSON Demo integration.
+name: OpenDoubao
+description: Work on the OpenDoubao monorepo (protocol, runtime, OpenDoubao UI/APIJSON). Use when changing envelopes, BoundExecutor, opendoubao charts/tables/detail, account AI settings, or APIJSON Demo integration.
 ---
 
-# A2API demo skill
+# OpenDoubao skill
 
 ## Layout
 
-- `packages/protocol` — A2API 0.1 envelopes / validators
-- `packages/runtime` — `ApiJsonClient`, HITL, `BoundExecutor`
+- `a2api/protocol` — A2API 0.1 envelopes / validators
+- `a2api/runtime` — `ApiJsonClient`, HITL, `BoundExecutor`
 - `@a2api/admin` — Hono API + Vite client (Bootstrap chat + steady-state UI)
 - `admin` — Apply submit/status + `available-requests` (Document first, then Request∩Access, then Function) + approve → Access/Request/Document/Chain then `/post/verify` (TYPE_RELOAD=4) + `/reload`; SPA list/edit via APIJSON; Login/Settings (same chrome as opendoubao); SQL `sql/sys_Apply.sql`, `sql/sys_Call.sql`
 - `opendoubao` calls admin for permission-gate Apply submit/poll and available request catalog

@@ -1,7 +1,8 @@
 中文 | [English](./README.en.md)
 
-# OpenDoubao - 豆包工作开源平替
-AI Agent 聊天即兴生成高可用网页前后端，<br />
+# A2API - 一次 AI，次次 API 安全、快速、稳定读写数据
+
+用 A2UI 聊天即兴生成 UI 来安全、快速、稳定调用 HTTP API 增删改查表格、表单、图表等数据。<br />
 **AI 生成一次 UI，API 每次都安全、快速、稳定执行。**
 
 Agent-to-API 协议、引擎与 Demo：生成任务 UI，之后改筛选/排序/分页直接调用 HTTP API，<br />
@@ -50,12 +51,12 @@ npm run dev
 
 ## 仓库结构
 
-| 路径                 | 作用 |
-|--------------------|------|
-| `opendoubao`       | 编排器 + 聊天 UI(生成) + 绑定筛选(稳态) |
-| `opendoubao-admin` | 配置申请审批：批准后写入 Access / Request / Document |
-| `a2qpi/protocol`   | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
-| `a2qpi/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
+| 路径 | 作用 |
+|------|------|
+| `a2api/protocol` | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
+| `a2api/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
+| `@a2api/admin` | 编排器 + 聊天 UI(生成) + 绑定筛选(稳态) |
+| `admin` | 配置申请审批：批准后写入 Access / Request / Document |
 
 ## 协议
 
@@ -119,4 +120,4 @@ npm run typecheck
 
 ### 我要赞赏
 创作不易，右上角点亮 ⭐ Star 来收藏/支持下吧，谢谢 ^_^ <br />
-https://github.com/open-doubao-ai/OpenDoubao
+https://github.com/TommyLemon/A2API
