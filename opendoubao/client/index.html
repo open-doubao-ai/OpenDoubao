@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenDoubao — generate web pages and safe APIs</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="top-left">
+          <button
+            type="button"
+            class="vt-locales-btn"
+            id="locale-toggle"
+            data-i18n-aria="account.uiLanguage"
+            aria-label="UI Language"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+              focusable="false"
+              viewBox="0 0 24 24"
+              class="vt-locales-btn-icon"
+            >
+              <path d="M0 0h24v24H0z" fill="none"></path>
+              <path
+                d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"
+              ></path>
+            </svg>
+          </button>
+          <span class="mark">OpenDoubao</span>
+          <nav class="main-tabs" role="tablist">
+            <button type="button" class="main-tab active" data-tab="ui" role="tab" aria-selected="true" data-i18n="nav.chatUi">
+              Chat UI
+            </button>
+            <button type="button" class="main-tab" data-tab="data" role="tab" aria-selected="false" data-i18n="nav.dataApi">
+              Data API
+            </button>
+            <button
+              type="button"
+              class="main-tab admin-tab-btn hidden"
+              data-tab="admin"
+              role="tab"
+              aria-selected="false"
+              hidden
+              data-i18n="nav.admin"
+            >
+              Admin
+            </button>
+          </nav>
+          <span class="sub" data-i18n="meta.tagline">generate UI and safe APIs</span>
+        </div>
+        <nav class="eco-links" data-i18n-aria="nav.apijsonLinks" aria-label="APIJSON links">
+          <a
+            href="https://github.com/Tencent/APIJSON/blob/master/Document.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-i18n="nav.doc"
+            >Doc</a
+          >
+          <a
+            href="https://search.bilibili.com/all?keyword=APIJSON"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-i18n="nav.video"
+            >Video</a
+          >
+          <a
+            href="https://github.com/search?o=desc&q=apijson&s=stars&type=Repositories"
+            target="_blank"
+            rel="noopener noreferrer"
+            data-i18n="nav.ecosys"
+            >Ecosys</a
+          >
+        </nav>
+        <div class="account-wrap" id="account-root">
+          <button type="button" class="account-link" id="account-login-btn">Login</button>
+          <button type="button" class="account-link" id="account-settings-btn" data-i18n="account.settings">Settings</button>
+        </div>
+      </header>
+
+      <section id="tab-ui" class="ui-tab layout">
+        <div class="panel chat-panel">
+          <div id="messages" class="messages" data-testid="chat-messages"></div>
+          <div class="chips">
+            <button type="button" data-i18n="chat.moments" data-i18n-msg="chat.msgMoments" data-msg="List the latest 10 moments">Moments</button>
+            <button type="button" data-i18n="chat.userDetail" data-i18n-msg="chat.msgUserDetail" data-msg="User detail">User Detail</button>
+            <button type="button" data-i18n="chat.comments" data-i18n-msg="chat.msgComments" data-msg="List comments">Comments</button>
+            <button type="button" data-i18n="chat.newMoment" data-i18n-msg="chat.msgNewMoment" data-msg="Create moment">New moment</button>
+            <button type="button" data-i18n="chat.addComment" data-i18n-msg="chat.msgAddComment" data-msg="Create comment">Add Comment</button>
+            <button type="button" data-i18n="chat.employees" data-i18n-msg="chat.msgEmployees" data-msg="List employees">Employees</button>
+            <button type="button" data-i18n="chat.campaigns" data-i18n-msg="chat.msgCampaigns" data-msg="List campaigns">Campaigns</button>
+            <button type="button" data-i18n="chat.messages" data-i18n-msg="chat.msgMessages" data-msg="List chat messages">Messages</button>
+            <button type="button" data-i18n="chat.news" data-i18n-msg="chat.msgNews" data-msg="List news">News</button>
+            <button type="button" data-i18n="chat.notices" data-i18n-msg="chat.msgNotices" data-msg="List notices">Notices</button>
+            <button type="button" data-i18n="chat.blogs" data-i18n-msg="chat.msgBlogs" data-msg="List blogs">Blogs</button>
+            <button type="button" data-i18n="chat.articles" data-i18n-msg="chat.msgArticles" data-msg="List articles">Articles</button>
+            <button type="button" data-i18n="chat.videos" data-i18n-msg="chat.msgVideos" data-msg="List videos">Videos</button>
+            <button type="button" data-i18n="chat.music" data-i18n-msg="chat.msgMusic" data-msg="List music">Music</button>
+            <button type="button" data-i18n="chat.products" data-i18n-msg="chat.msgProducts" data-msg="List products">Products</button>
+          </div>
+          <form id="chat-form" class="chat-form">
+            <div class="chat-mode" id="chat-mode">
+              <button
+                type="button"
+                class="chat-mode-btn"
+                id="chat-mode-btn"
+                data-i18n-aria="chat.modeLegend"
+                aria-label="Chat mode"
+                aria-haspopup="listbox"
+                aria-expanded="false"
+              >
+                <span id="chat-mode-label" data-i18n="chat.modeAuto">Auto</span>
+              </button>
+              <div
+                class="page-menu chat-mode-menu"
+                id="chat-mode-menu"
+                role="listbox"
+              >
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="generate"
+                  data-i18n="chat.modeGenerate"
+                  data-i18n-title="chat.modeGenerateHint"
+                >
+                  Generate
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="modify"
+                  data-i18n="chat.modeEdit"
+                  data-i18n-title="chat.modeEditHint"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="explain"
+                  data-i18n="chat.modeAsk"
+                  data-i18n-title="chat.modeAskHint"
+                >
+                  Ask
+                </button>
+                <button
+                  type="button"
+                  class="chat-mode-item"
+                  role="option"
+                  data-mode="auto"
+                  data-i18n="chat.modeAuto"
+                  data-i18n-title="chat.modeAutoHint"
+                >
+                  Auto
+                </button>
+              </div>
+            </div>
+            <input
+              id="chat-input"
+              type="text"
+              data-i18n-placeholder="chat.placeholder"
+              placeholder="e.g. List the latest 10 moments"
+              autocomplete="off"
+            />
+            <button type="submit" data-i18n="chat.send">Send</button>
+          </form>
+        </div>
+
+        <div
+          class="ui-split-handle"
+          id="ui-split-handle"
+          role="separator"
+          aria-orientation="vertical"
+          data-i18n-aria="nav.resizeChat"
+          aria-label="Resize chat and workspace"
+          tabindex="0"
+        ></div>
+
+        <div class="panel work-panel">
+          <div id="filters" class="filters hidden"></div>
+
+          <div id="results" class="results">
+            <div id="result-view" class="result-view"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Data tab: APIAuto-like layout -->
+      <section id="tab-data" class="data-tab hidden" hidden>
+        <div class="data-toolbar">
+          <span class="data-toolbar-title" data-i18n="data.title">Data</span>
+          <button type="button" id="data-embed-apiauto" data-i18n="data.embedApiAuto">Embed APIAuto</button>
+          <button type="button" id="data-open-apiauto" data-i18n="data.openApiAuto">Open APIAuto in new window</button>
+        </div>
+
+        <div id="data-builtin" class="data-split">
+          <div class="data-request panel">
+            <div class="data-req-bar">
+              <select id="data-method" data-i18n-title="data.method" title="Method">
+                <option>POST</option>
+                <option>GET</option>
+                <option>PUT</option>
+                <option>DELETE</option>
+                <option>HEAD</option>
+              </select>
+              <select id="data-type" data-i18n-title="data.bodyType" title="Body type">
+                <option value="JSON">JSON</option>
+                <option value="PARAM">PARAM</option>
+                <option value="FORM">FORM</option>
+              </select>
+              <input id="data-url" type="text" data-i18n-placeholder="data.url" placeholder="URL" />
+              <button type="button" id="data-send" class="primary" data-i18n="data.sendRequest">Send request</button>
+              <button type="button" id="data-save-template" data-i18n="data.saveTemplateBtn" data-i18n-title="data.saveTemplate" title="Save request template bound to table + operation + Chat UI buttons">Save template</button>
+            </div>
+            <div class="data-available-bar">
+              <label for="data-available">
+                <span data-i18n="data.available">Available</span>
+                <select id="data-available" data-i18n-title="data.availableTitle" title="From Access + Request + Document (via admin)">
+                  <option value="" data-i18n="data.loadAvailable">— Load available requests —</option>
+                </select>
+              </label>
+              <button type="button" id="data-available-reload" data-i18n="data.reload" data-i18n-title="data.reloadCatalog" title="Reload catalog">Reload</button>
+            </div>
+            <div id="data-template-bind" class="data-template-bind hidden" hidden>
+              <label>
+                <span data-i18n="data.table">Table</span>
+                <input id="data-tpl-table" type="text" placeholder="Moment" autocomplete="off" />
+              </label>
+              <label>
+                <span data-i18n="data.operation">Operation</span>
+                <select id="data-tpl-method">
+                  <option value="get" data-i18n="data.opGet">get → Search</option>
+                  <option value="gets" data-i18n="data.opGets">gets → Search</option>
+                  <option value="head" data-i18n="data.opHead">head</option>
+                  <option value="heads" data-i18n="data.opHeads">heads</option>
+                  <option value="post" data-i18n="data.opPost">post → Add</option>
+                  <option value="put" data-i18n="data.opPut">put → Save</option>
+                  <option value="delete" data-i18n="data.opDelete">delete → Delete</option>
+                </select>
+              </label>
+              <span id="data-tpl-buttons" class="data-tpl-buttons"></span>
+              <button type="button" id="data-tpl-confirm" class="primary" data-i18n="data.confirmSave">Confirm save</button>
+              <button type="button" id="data-tpl-cancel" data-i18n="common.cancel">Cancel</button>
+            </div>
+            <p id="data-template-hint" class="hint data-template-hint" hidden></p>
+            <label class="data-block-label" data-i18n="data.requestJson">Request JSON</label>
+            <textarea id="data-json" spellcheck="false"></textarea>
+            <label class="data-block-label" data-i18n="data.requestHeaders">Request headers (one key: value per line)</label>
+            <textarea id="data-headers" rows="4" spellcheck="false"></textarea>
+          </div>
+          <div
+            class="data-split-handle"
+            id="data-split-handle"
+            role="separator"
+            aria-orientation="vertical"
+            data-i18n-aria="nav.resizeData"
+            aria-label="Resize request and response"
+            tabindex="0"
+          ></div>
+          <div class="data-response panel">
+            <div class="data-resp-bar">
+              <span data-i18n="data.responseJson">Response JSON</span>
+            </div>
+            <pre id="data-response">—</pre>
+          </div>
+        </div>
+
+        <div id="data-apiauto-wrap" class="data-apiauto-wrap hidden">
+          <iframe
+            id="data-apiauto-frame"
+            title="APIAuto"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          ></iframe>
+        </div>
+      </section>
+
+      <!-- Admin: vendor-admin only — approval queue + audit tables -->
+      <section id="tab-admin" class="admin-tab hidden" hidden data-i18n-aria="admin.ariaLabel" aria-label="Admin approvals">
+        <div class="admin-toolbar">
+          <span class="admin-toolbar-title" data-i18n="admin.title">Admin · Approvals</span>
+          <span class="hint-inline" id="admin-sensitive-hint">Sensitive methods: delete</span>
+          <button type="button" id="admin-refresh" class="primary" data-i18n="admin.refresh">Refresh</button>
+        </div>
+        <div class="admin-split">
+          <div class="admin-panel">
+            <h3 data-i18n="admin.pending">Pending approvals</h3>
+            <div id="admin-pending" class="admin-table-wrap" data-i18n="admin.loading">Loading…</div>
+          </div>
+          <div class="admin-panel">
+            <h3 data-i18n="admin.audit">Audit trail</h3>
+            <div class="admin-filters">
+              <label>
+                <input type="checkbox" id="admin-filter-auto" checked />
+                <span data-i18n="admin.filterAuto">Auto-approved</span>
+              </label>
+              <label>
+                <input type="checkbox" id="admin-filter-approved" checked />
+                <span data-i18n="admin.filterApproved">Approved</span>
+              </label>
+              <label>
+                <input type="checkbox" id="admin-filter-rejected" checked />
+                <span data-i18n="admin.filterRejected">Rejected</span>
+              </label>
+              <label>
+                <input type="checkbox" id="admin-filter-pending" checked />
+                <span data-i18n="admin.filterPending">Pending</span>
+              </label>
+            </div>
+            <div id="admin-audit" class="admin-table-wrap" data-i18n="admin.loading">Loading…</div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

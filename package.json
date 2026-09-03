@@ -4,18 +4,19 @@
   "version": "0.1.0",
   "description": "A2API: agent-generated controlled APIJSON CRUD with A2UI-style bindings",
   "workspaces": [
-    "packages/*",
-    "apps/*"
+    "a2api/*",
+    "opendoubao",
+    "opendoubao-admin"
   ],
   "scripts": {
-    "build": "npm run build -w @a2api/protocol && npm run build -w @a2api/runtime && npm run build -w @a2api/chat-demo && npm run build -w @a2api/admin",
+    "build": "npm run build -w @a2api/protocol && npm run build -w @a2api/runtime && npm run build -w @a2api/opendoubao && npm run build -w @a2api/admin",
     "test": "npm run build -w @a2api/protocol && npm run test -w @a2api/protocol && npm run test -w @a2api/runtime && npm run test -w @a2api/admin",
     "test:e2e": "npm run test:e2e -w @a2api/admin",
     "test:ui": "bash e2e/run-ui.sh",
     "test:ui:headed": "HEADED=1 SLOW_MO=500 bash e2e/run-ui.sh --headed",
-    "dev": "npm run dev -w @a2api/chat-demo",
+    "dev": "npm run dev -w @a2api/opendoubao",
     "dev:admin": "npm run dev -w @a2api/admin",
-    "typecheck": "npm run typecheck -w @a2api/protocol && npm run typecheck -w @a2api/runtime && npm run typecheck -w @a2api/chat-demo && npm run typecheck -w @a2api/admin"
+    "typecheck": "npm run typecheck -w @a2api/protocol && npm run typecheck -w @a2api/runtime && npm run typecheck -w @a2api/opendoubao && npm run typecheck -w @a2api/admin"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.2"

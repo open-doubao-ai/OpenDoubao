@@ -1,8 +1,7 @@
 中文 | [English](./README.en.md)
 
-# A2API - 一次 AI，次次 API 安全、快速、稳定读写数据
-
-用 A2UI 聊天即兴生成 UI 来安全、快速、稳定调用 HTTP API 增删改查表格、表单、图表等数据。<br />
+# OpenDoubao - 豆包工作开源平替
+AI Agent 聊天即兴生成高可用网页前后端，<br />
 **AI 生成一次 UI，API 每次都安全、快速、稳定执行。**
 
 Agent-to-API 协议、引擎与 Demo：生成任务 UI，之后改筛选/排序/分页直接调用 HTTP API，<br />
@@ -33,12 +32,12 @@ npm run build
 npm run dev
 ```
 
-- 客户端（Vite）：http://localhost:5173
-- API（Hono）：http://localhost:3000
-- 管理后台（配置审批）：`npm run dev:admin` → http://localhost:5174
-  - 申请表 `Apply`、调用日志表 `Call`：执行 `apps/admin/sql/sys_Apply.sql` 与 `sys_Call.sql` 后重载 Access/Request。
-  - 普通增删改查直连 APIJSON HTTP；管理端仅保留「批准写入 Access/Request/Document/Chain」复杂流程
-  - 管理台页签：Apply · Call logs · Stats
+- 客户端（Vite）：http://localhost:5173  
+- API（Hono）：http://localhost:3000  
+- 管理后台（配置审批）：`npm run dev:admin` → http://localhost:5174  
+  - 申请表 `Apply`、调用日志表 `Call`：执行 `admin/sql/sys_Apply.sql` 与 `sys_Call.sql` 后重载 Access/Request。
+  - 普通增删改查直连 APIJSON HTTP；管理端仅保留「批准写入 Access/Request/Document/Chain」复杂流程  
+  - 管理台页签：Apply · Call logs · Stats  
 
 
 
@@ -51,28 +50,28 @@ npm run dev
 
 ## 仓库结构
 
-| 路径 | 作用 |
-|------|------|
-| `packages/protocol` | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
-| `packages/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
-| `apps/chat-demo` | 编排器 + 聊天 UI(生成) + 绑定筛选(稳态) |
-| `apps/admin` | 配置申请审批：批准后写入 Access / Request / Document |
+| 路径                 | 作用 |
+|--------------------|------|
+| `opendoubao`       | 编排器 + 聊天 UI(生成) + 绑定筛选(稳态) |
+| `opendoubao-admin` | 配置申请审批：批准后写入 Access / Request / Document |
+| `a2qpi/protocol`   | A2API 0.1 信封、JSON Pointer、校验器、CRUD 夹具测试 |
+| `a2qpi/runtime` | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
 
 ## 协议
 
 信封格式：`{ "version": "0.1", "<type>": { ... } }`
 
-- `proposeRequest` — 候选 APIJSON 调用
-- `reviseRequest` / `decision` — 修改 / 批准|拒绝
-- `bindRequest` — `code == 200` 后，产出模板 + `paramMap` 供 UI 驱动调用
-- `requestResult` / `status` — 结果与状态
+- `proposeRequest` — 候选 APIJSON 调用  
+- `reviseRequest` / `decision` — 修改 / 批准|拒绝  
+- `bindRequest` — `code == 200` 后，产出模板 + `paramMap` 供 UI 驱动调用  
+- `requestResult` / `status` — 结果与状态  
 
 读操作自动执行，敏感方法（默认 `post`,`put`,`delete`,`gets`,`heads`，可用 `SENSITIVE_METHODS` 覆盖）需在 **Admin** 页签批准/拒绝。
 
 ## 两阶段体验
 
-1. **生成(聊天 / AI 或规则)** — 生成 UI + 提出 APIJSON → 校验 → 执行至成功 → 发出 `bindRequest`
-2. **稳态(无 LLM)** — 筛选/排序/分页 → `BoundExecutor` 将 `paramMap` 合并进 `bodyTemplate` → `POST {baseUrl}/{method}`
+1. **生成(聊天 / AI 或规则)** — 生成 UI + 提出 APIJSON → 校验 → 执行至成功 → 发出 `bindRequest`  
+2. **稳态(无 LLM)** — 筛选/排序/分页 → `BoundExecutor` 将 `paramMap` 合并进 `bodyTemplate` → `POST {baseUrl}/{method}`  
 
 ## Agent 自动化：
 
@@ -93,7 +92,7 @@ export APIJSON_BASE_URL=http://localhost:8080
 # 或编辑 .env
 ```
 
-请确保 Demo 库表在该服务上可用。业务表示例见 `apps/chat-demo/sql/layout_demo_tables.sql`（User / Moment / Comment 以及员工、活动、聊天、新闻、资讯、博客、文章、视频、音乐、商品、订单、收件地址、分类等），导入后需重载 Access/Request。仅补分类表可跑 `apps/chat-demo/sql/layout_demo_categories.sql`；仅补地址表可跑 `apps/chat-demo/sql/layout_demo_address.sql`（对应页缺表时也会自动导入）。
+请确保 Demo 库表在该服务上可用。业务表示例见 `opendoubao/sql/layout_demo_tables.sql`（User / Moment / Comment 以及员工、活动、聊天、新闻、资讯、博客、文章、视频、音乐、商品、订单、收件地址、分类等），导入后需重载 Access/Request。仅补分类表可跑 `opendoubao/sql/layout_demo_categories.sql`；仅补地址表可跑 `opendoubao/sql/layout_demo_address.sql`（对应页缺表时也会自动导入）。
 
 **写操作（POST/PUT/DELETE）：** Demo 常要求已登录会话（`@role` OWNER/LOGIN）。MVP 仍会生成请求并展示 HITL 批准/拒绝界面；若 APIJSON 返回未登录，请通过 Demo/APIAuto 会话 Cookie 登录，或在本地放宽 Access。**读操作**可直接使用公开 Demo 数据。
 
@@ -101,7 +100,7 @@ export APIJSON_BASE_URL=http://localhost:8080
 
 ```bash
 npm test          # protocol + runtime 单元测试
-npm run build     # 编译 packages + demo
+npm run build     # 编译 a2api + demo
 npm run dev       # API :3000 + Vite :5173
 npm run typecheck
 ```
@@ -120,4 +119,4 @@ npm run typecheck
 
 ### 我要赞赏
 创作不易，右上角点亮 ⭐ Star 来收藏/支持下吧，谢谢 ^_^ <br />
-https://github.com/TommyLemon/A2API
+https://github.com/open-doubao-ai/OpenDoubao

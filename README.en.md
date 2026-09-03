@@ -1,10 +1,10 @@
 English | [中文](./README.md)
-# A2API - AI once, API everytime safely, quickly and stably
-
-Chat agent to HTTP API to safely, quickly and stably add, view, edit or remove data in tables, forms or charts together with A2UI. <br />
+# OpenDoubao - Doubao Work alternative
+AI Agent to generate web pages and safe APIs,
 **AI generate UI once, API repeat everytime safely, quickly and stably.**
 
-Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
+Agent-to-API protocol and MVP demo: generate a simple task UI, **tune an HTTP API request until it works**, <br />
+then let users change filters, sort, and paging from the UI — which directly calls HTTP API  <br />
 **without going through the LLM again, no more token cost**.
 
 No SQL execution path. **Writes or sensitive reads** wait in the Admin approval queue.
@@ -34,7 +34,7 @@ npm run dev
 
 - Client (Vite): http://localhost:5173  
 - Admin (config approvals): `npm run dev:admin` → http://localhost:5174  
-  - Tables `Apply` + `Call`: run `apps/admin/sql/sys_Apply.sql` and `sys_Call.sql`, reload Access/Request. If Call logs say GET denied for LOGIN, run `apps/admin/sql/patch_Call_access.sql` (Access id 9003; 9002 is Apply).  
+  - Tables `Apply` + `Call`: run `admin/sql/sys_Apply.sql` and `sys_Call.sql`, reload Access/Request. If Call logs say GET denied for LOGIN, run `admin/sql/patch_Call_access.sql` (Access id 9003; 9002 is Apply).  
   - Ordinary CRUD hits APIJSON HTTP directly; admin server only runs approve → Access/Request/Document/Chain  
   - Admin tabs: Apply · Call logs · Stats  
 
@@ -50,12 +50,12 @@ Optional: set `OPENAI_API_KEY` in `.env` to refine bootstrap with an LLM. Withou
 
 ## Monorepo layout
 
-| Path | Role |
-|------|------|
-| `packages/protocol` | A2API 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
-| `packages/runtime` | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
-| `apps/chat-demo` | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
-| `apps/admin` | Config application approvals → write Access / Request / Document / Chain |
+| Path               | Role |
+|--------------------|------|
+| `opendoubao`       | Orchestrator + chat UI (Bootstrap) + bound filters (Steady-state) |
+| `opendoubao-admin` | Config application approvals → write Access / Request / Document / Chain |
+| `a2api/protocol`   | A2API 0.1 envelopes, JSON Pointer helpers, validators, CRUD fixture tests |
+| `a2api/runtime`    | `ApiJsonClient`, `HitlController`, `BoundExecutor` |
 
 ## Protocol (MVP)
 
@@ -105,7 +105,7 @@ export APIJSON_BASE_URL=http://localhost:8080
 # or edit .env
 ```
 
-Ensure the Demo schema is available on that server. Business layout tables are in `apps/chat-demo/sql/layout_demo_tables.sql` (User / Moment / Comment plus Employee, Activity, Message, News, Notice, Blog, Article, Video, Music, Product, ShopOrder, Address, Category, …). After import, reload Access/Request. To add only categories, run `apps/chat-demo/sql/layout_demo_categories.sql`; to add only addresses, run `apps/chat-demo/sql/layout_demo_address.sql` (those pages also auto-import if the table is missing).
+Ensure the Demo schema is available on that server. Business layout tables are in `opendoubao/sql/layout_demo_tables.sql` (User / Moment / Comment plus Employee, Activity, Message, News, Notice, Blog, Article, Video, Music, Product, ShopOrder, Address, Category, …). After import, reload Access/Request. To add only categories, run `opendoubao/sql/layout_demo_categories.sql`; to add only addresses, run `opendoubao/sql/layout_demo_address.sql` (those pages also auto-import if the table is missing).
 
 **Writes (POST/PUT/DELETE):** the Demo often requires a logged-in session (`@role` OWNER/LOGIN). The MVP still generates the request and shows the HITL Approve/Reject UI; if APIJSON returns "not logged in", log in via your Demo/APIAuto session cookies or relax Access for local testing. **Reads** work out of the box against the public Demo data.
 
@@ -113,7 +113,7 @@ Ensure the Demo schema is available on that server. Business layout tables are i
 
 ```bash
 npm test          # protocol + runtime unit tests
-npm run build     # compile packages + demo
+npm run build     # compile a2api + demo
 npm run dev       # API :3000 + Vite :5173
 npm run typecheck
 ```
@@ -136,4 +136,4 @@ If you have any questions or suggestions, you can [create an issue](https://gith
 
 ### Please ⭐ Star(on the top right) this project ^_^
 
-https://github.com/TommyLemon/A2API
+https://github.com/open-doubao-ai/OpenDoubao
