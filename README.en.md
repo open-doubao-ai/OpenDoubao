@@ -8,6 +8,9 @@ then let users change filters, sort, and paging from the UI — which directly c
 **without going through the LLM again, no more token cost**.
 
 No SQL execution path. **Writes or sensitive reads** wait in the Admin approval queue.
+![](https://github.com/user-attachments/assets/d797f469-65af-4c4a-b6c2-067c4284a826)
+![](https://github.com/user-attachments/assets/25ef1618-3f5e-4b2e-bd08-d58999602bed)
+![](https://github.com/user-attachments/assets/c2ebed08-99c4-45fe-9dc0-16e6433330a2)
 
 ![](https://github.com/user-attachments/assets/27928660-ab00-41ec-ad2a-fd318eaeacf5)
 ![](https://github.com/user-attachments/assets/173aa5ac-84ce-40c3-9453-1d98051585b3)
