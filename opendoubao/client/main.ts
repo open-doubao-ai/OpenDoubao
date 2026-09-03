@@ -2720,6 +2720,7 @@ function renderFilters(filters: FilterDef[]) {
     parent.textContent = layoutAppLabel(app);
     const sub = document.createElement("div");
     sub.className = "page-layout-sub";
+    parent.onmousedown = (ev) => ev.stopPropagation();
     parent.onclick = (ev) => {
       ev.stopPropagation();
       for (const g of Array.from(
@@ -2744,7 +2745,8 @@ function renderFilters(filters: FilterDef[]) {
         (app === state.layoutSpec.app && page === state.layoutSpec.page
           ? " active"
           : "");
-        item.textContent = layoutPageLabel(page, app);
+      item.textContent = layoutPageLabel(page, app);
+      item.onmousedown = (ev) => ev.stopPropagation();
       item.onclick = (ev) => {
         ev.stopPropagation();
         closePageMenus();
@@ -5302,7 +5304,9 @@ document.addEventListener("mousedown", (ev) => {
   if (!t) return;
   if (
     (t as HTMLElement).closest?.(
-      ".page-title-control, .page-version-control",
+      // Layout flyout is position:fixed; closing on mousedown hides it
+      // (visibility/display) before click, so page-type switches never fire.
+      ".page-title-control, .page-version-control, .page-layout-control",
     )
   ) {
     return;
