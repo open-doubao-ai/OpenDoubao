@@ -1,5 +1,5 @@
 -- Scene skills (query / match / upload). Safe to re-run.
---   mysql -h127.0.0.1 -P3306 -uroot -papijson sys < apps/chat-demo/sql/layout_demo_skills.sql
+--   mysql -h127.0.0.1 -P3306 -uroot -papijson sys < opendoubao/sql/layout_demo_skills.sql
 
 SET NAMES utf8mb4;
 

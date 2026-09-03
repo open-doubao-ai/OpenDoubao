@@ -33,7 +33,7 @@ function normalizeNotifyStatus(item: StatusItem): string {
   return item.status || "unknown";
 }
 
-/** Mirrors chat-demo syncTrackedApprovals: notify only when status changes. */
+/** Mirrors opendoubao syncTrackedApprovals: notify only when status changes. */
 function notifyOnChange(
   prev: string | undefined,
   next: string,
@@ -142,7 +142,7 @@ describe("E2E Apply flow: submit → decide → notify", () => {
     expect(submitted.body.item.requestId).toBe(requestId);
     const applyId = submitted.body.item.id;
 
-    // 2) Poll — still pending (chat-demo tracks lastStatus=pending, no notify)
+    // 2) Poll — still pending (opendoubao tracks lastStatus=pending, no notify)
     const pendingPoll = await json<{ items: StatusItem[] }>(
       app,
       `/api/applications/status?requestIds=${encodeURIComponent(requestId)}`,

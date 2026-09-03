@@ -1,6 +1,6 @@
 /**
  * UI i18n via i18next (bundled resources, sync init).
- * Shares `a2api.uiLocale` with chat-demo so language preference stays in sync.
+ * Shares `a2api.uiLocale` with opendoubao so language preference stays in sync.
  */
 import i18next from "i18next";
 import { en, type TranslationSchema } from "./locales/en.js";

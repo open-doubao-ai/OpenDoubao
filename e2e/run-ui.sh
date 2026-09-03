@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start (or reuse) admin + chat-demo, then run watchable Playwright UI tests.
+# Start (or reuse) admin + opendoubao, then run watchable Playwright UI tests.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -43,21 +43,21 @@ else
 fi
 
 if curl -sf "http://127.0.0.1:5173/" >/dev/null 2>&1 && curl -sf "http://127.0.0.1:3000/api/health" >/dev/null 2>&1; then
-  echo "Reusing chat-demo on :5173 / :3000"
+  echo "Reusing opendoubao on :5173 / :3000"
 else
-  echo "Starting chat-demo…"
+  echo "Starting opendoubao…"
   for port in 3000 5173; do
     pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
     [[ -n "${pids}" ]] && kill $pids 2>/dev/null || true
   done
   sleep 1
-  START_CHAT=(env PORT=3000 npm run dev -w @a2api/chat-demo)
+  START_CHAT=(env PORT=3000 npm run dev -w @a2api/opendoubao)
   if command -v arch >/dev/null 2>&1 && [[ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
-    START_CHAT=(arch -arm64 env PORT=3000 npm run dev -w @a2api/chat-demo)
+    START_CHAT=(arch -arm64 env PORT=3000 npm run dev -w @a2api/opendoubao)
   fi
   "${START_CHAT[@]}" >/tmp/a2api-chat-ui-e2e.log 2>&1 &
   wait_http "http://127.0.0.1:5173/" 90 || {
-    echo "chat-demo failed to start. Log:"
+    echo "opendoubao failed to start. Log:"
     tail -40 /tmp/a2api-chat-ui-e2e.log || true
     exit 1
   }

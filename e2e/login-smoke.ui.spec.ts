@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("chat-demo Login opens modal and signs in via /apijson BFF", async ({
+test("opendoubao Login opens modal and signs in via /apijson BFF", async ({
   page,
 }) => {
   const badModule404: string[] = [];

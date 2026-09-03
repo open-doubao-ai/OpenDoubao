@@ -125,7 +125,7 @@ A2API 是一个开源 monorepo，分三层：
 |------|------|
 | **`packages/protocol`** | A2API 0.1 信封：`proposeRequest`、`reviseRequest`、`decision`、`bindRequest`、`requestResult`、`status` |
 | **`packages/runtime`** | `ApiJsonClient`、`HitlController`、`BoundExecutor` |
-| **`apps/chat-demo`** | 聊天冷启动 + 稳态表格/详情/图表 + Data 调试器 + Admin 审批 |
+| **`@a2api/admin`** | 聊天冷启动 + 稳态表格/详情/图表 + Data 调试器 + Admin 审批 |
 
 ### 两阶段 UX（核心想法）
 

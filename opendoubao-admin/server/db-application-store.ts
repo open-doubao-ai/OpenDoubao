@@ -1,6 +1,6 @@
 /**
  * Persist config applications + approval results in DB via APIJSON (`Apply`).
- * Requires apps/admin/sql/sys_Apply.sql applied + Access/Request reload.
+ * Requires @a2api/admin/sql/sys_Apply.sql applied + Access/Request reload.
  */
 
 import { ApiJsonClient } from "@a2api/runtime";
@@ -234,7 +234,7 @@ export class DbApplicationStore implements ApplicationStore {
       return new Error(msg);
     }
     return new Error(
-      `${msg}. Apply apps/admin/sql/sys_Apply.sql and reload Access/Request.`,
+      `${msg}. Apply admin/sql/sys_Apply.sql and reload Access/Request.`,
     );
   }
 
@@ -436,11 +436,11 @@ export class DbApplicationStore implements ApplicationStore {
       return app;
     }
 
-    // 3) Local JSONL fallback so chat-demo Apply submit never hard-fails on Request misconfig
+    // 3) Local JSONL fallback so opendoubao Apply submit never hard-fails on Request misconfig
     const local = await this.fallback.submit(input);
     local.detail = [
       local.detail,
-      `stored locally (APIJSON: ${errMsg(res.body, res.error || "POST failed")}). Run apps/admin/sql/patch_Apply_post_request.sql + reload Request for DB persistence.`,
+      `stored locally (APIJSON: ${errMsg(res.body, res.error || "POST failed")}). Run admin/sql/patch_Apply_post_request.sql + reload Request for DB persistence.`,
     ]
       .filter(Boolean)
       .join(" | ");

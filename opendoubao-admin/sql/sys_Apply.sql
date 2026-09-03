@@ -21,7 +21,7 @@ CREATE TABLE `Apply` (
   `accessName` varchar(50) COMMENT 'Access.name 实际物理表名，例如 apijson_user',
   `name` varchar(100) COMMENT '申请/接口名称，写入 Document.name',
   `detail` text COMMENT '申请说明、审批备注',
-  `requestId` varchar(80) COMMENT '关联 chat-demo / HITL 的 requestId',
+  `requestId` varchar(80) COMMENT '关联 opendoubao / HITL 的 requestId',
   `sessionId` varchar(80) COMMENT '关联会话 sessionId',
   `submitter` varchar(80) COMMENT '提交人标识',
   `issues` text COMMENT '权限门控等问题列表 JSON 数组文本',

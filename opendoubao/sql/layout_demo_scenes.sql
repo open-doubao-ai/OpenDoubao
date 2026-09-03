@@ -1,7 +1,7 @@
 -- Incremental scene tables for APIJSON-suitable app families.
 -- Safe to re-run. Used by ensure-layout-categories when Course is missing.
 --
---   /usr/local/mysql/bin/mysql -h127.0.0.1 -P3306 -uroot -papijson sys < apps/chat-demo/sql/layout_demo_scenes.sql
+--   /usr/local/mysql/bin/mysql -h127.0.0.1 -P3306 -uroot -papijson sys < opendoubao/sql/layout_demo_scenes.sql
 --
 -- After first import: reload Access/Request (TYPE_RELOAD=4 + /reload, or restart).
 

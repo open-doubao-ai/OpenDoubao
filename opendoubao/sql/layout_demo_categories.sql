@@ -1,8 +1,8 @@
 -- Idempotent Category table + categoryId on content tables.
--- Safe to re-run. Used by chat-demo POST /api/ensure-layout-categories
+-- Safe to re-run. Used by opendoubao POST /api/ensure-layout-categories
 -- and as the incremental tail of layout_demo_tables.sql.
 --
---   /usr/local/mysql/bin/mysql -h127.0.0.1 -P3306 -uroot -papijson sys < apps/chat-demo/sql/layout_demo_categories.sql
+--   /usr/local/mysql/bin/mysql -h127.0.0.1 -P3306 -uroot -papijson sys < opendoubao/sql/layout_demo_categories.sql
 --
 -- After first import: reload Access/Request (TYPE_RELOAD=4 + /reload, or restart).
 

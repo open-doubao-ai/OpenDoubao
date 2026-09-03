@@ -9,7 +9,7 @@ CREATE TABLE `Call` (
   `submitter` varchar(80) DEFAULT NULL COMMENT '提交人标识 / 登录名',
   `sessionId` varchar(80) DEFAULT NULL COMMENT '会话 id',
   `requestId` varchar(80) DEFAULT NULL COMMENT '业务 requestId（propose/HITL）',
-  `source` varchar(40) NOT NULL DEFAULT 'unknown' COMMENT '来源：chat-demo/bound/data-api/admin/approve',
+  `source` varchar(40) NOT NULL DEFAULT 'unknown' COMMENT '来源：opendoubao/bound/data-api/admin/approve',
   `operation` varchar(20) NOT NULL COMMENT 'APIJSON 方法：get/head/gets/heads/post/put/delete',
   `method` varchar(10) NOT NULL DEFAULT 'POST' COMMENT 'HTTP Method，APIJSON 一般为 POST',
   `type` varchar(10) NOT NULL DEFAULT 'JSON' COMMENT '请求体类型：JSON/PARAM/FORM',
@@ -68,7 +68,7 @@ INSERT INTO `Call` (
   `operation`, `method`, `type`, `url`, `bizTable`, `tag`, `role`,
   `request`, `response`, `ok`, `code`, `durationMs`, `usedLlm`, `error`, `detail`, `date`
 ) VALUES
-(9100001, 82001, 'alice', 'sess_a1', 'r_get_moments', 'chat-demo',
+(9100001, 82001, 'alice', 'sess_a1', 'r_get_moments', 'opendoubao',
  'get', 'POST', 'JSON', 'http://localhost:8080/get', 'Moment', NULL, 'LOGIN',
  '{"[]":{"count":3,"Moment":{"@order":"date-"}}}',
  '{"code":200,"[]":[{"Moment":{"id":12}}]}', 1, 200, 48, 1, NULL, 'Bootstrap list moments', '2026-07-20 09:01:00'),
@@ -78,12 +78,12 @@ INSERT INTO `Call` (
  '{"[]":{"count":3,"Moment":{"@order":"date-"},"page":1}}',
  '{"code":200,"[]":[{"Moment":{"id":12}}]}', 1, 200, 32, 0, NULL, 'Steady-state page change', '2026-07-20 09:01:20'),
 
-(9100003, 82001, 'alice', 'sess_a1', 'r_user_detail', 'chat-demo',
+(9100003, 82001, 'alice', 'sess_a1', 'r_user_detail', 'opendoubao',
  'get', 'POST', 'JSON', 'http://localhost:8080/get', 'User', NULL, 'LOGIN',
  '{"User":{"id":38710}}',
  '{"code":200,"User":{"id":38710,"name":"Tommy"}}', 1, 200, 41, 1, NULL, 'User detail', '2026-07-20 09:05:00'),
 
-(9100004, 82002, 'bob', 'sess_b1', 'r_put_user', 'chat-demo',
+(9100004, 82002, 'bob', 'sess_b1', 'r_put_user', 'opendoubao',
  'put', 'POST', 'JSON', 'http://localhost:8080/put', 'User', 'User', 'OWNER',
  '{"User":{"id":38710,"name":"Bob"},"tag":"User"}',
  '{"code":400,"msg":"no Request row for PUT tag=\\"User\\""}', 0, 400, 55, 0,
@@ -94,7 +94,7 @@ INSERT INTO `Call` (
  '{"Moment":{"content":"hi"},"tag":"Moment"}',
  '{"code":200,"Moment":{"id":99}}', 1, 200, 67, 0, NULL, 'Data API create', '2026-07-21 10:12:00'),
 
-(9100006, 82001, 'alice', 'sess_a2', 'r_del_comment', 'chat-demo',
+(9100006, 82001, 'alice', 'sess_a2', 'r_del_comment', 'opendoubao',
  'delete', 'POST', 'JSON', 'http://localhost:8080/delete', 'Comment', 'Comment', 'OWNER',
  '{"Comment":{"id":12},"tag":"Comment"}',
  NULL, 0, 0, 120, 0, 'awaiting admin approval', 'Sensitive delete queued', '2026-07-22 11:00:00'),
@@ -104,7 +104,7 @@ INSERT INTO `Call` (
  '{"Request":{"method":"POST","tag":"Moment","structure":{}},"tag":"Request"}',
  '{"code":200,"Request":{"id":9002010}}', 1, 200, 88, 0, NULL, 'Approve wrote Request', '2026-07-23 16:00:05'),
 
-(9100008, 82003, 'carol', 'sess_c1', 'r_gets_privacy', 'chat-demo',
+(9100008, 82003, 'carol', 'sess_c1', 'r_gets_privacy', 'opendoubao',
  'gets', 'POST', 'JSON', 'http://localhost:8080/gets', 'Privacy', 'Privacy', 'OWNER',
  '{"Privacy":{"id":82001},"tag":"Privacy","version":2}',
  '{"code":401,"msg":"请登录或注册"}', 0, 401, 28, 1, '请登录或注册', 'Private read without session', '2026-07-23 18:30:00'),
@@ -114,7 +114,7 @@ INSERT INTO `Call` (
  '{"[]":{"count":20,"Comment":{"momentId":12}}}',
  '{"code":200,"[]":[]}', 1, 200, 36, 0, NULL, 'List comments under moment', '2026-07-24 08:00:00'),
 
-(9100010, 82001, 'alice', 'sess_a3', 'r_post_comment', 'chat-demo',
+(9100010, 82001, 'alice', 'sess_a3', 'r_post_comment', 'opendoubao',
  'post', 'POST', 'JSON', 'http://localhost:8080/post', 'Comment', 'Comment', 'OWNER',
  '{"Comment":{"momentId":12,"content":"nice"},"tag":"Comment"}',
  '{"code":200,"Comment":{"id":44}}', 1, 200, 72, 0, NULL, 'Create comment', '2026-07-24 08:01:00'),

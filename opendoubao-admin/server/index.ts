@@ -1,5 +1,5 @@
 /**
- * Admin API for chat-demo + approve workflow.
+ * Admin API for opendoubao + approve workflow.
  * Admin SPA still does ordinary Apply/Call list/edit via APIJSON HTTP.
  */
 
@@ -37,7 +37,7 @@ const app = createAdminApp({
   apijsonBaseUrl: apijsonBase,
   client: sharedClient,
   // Catalog (available-requests / write-gate) always on when APIJSON client exists.
-  // dryApprove only stubs decide-side writes — must not hide write-gate from chat-demo.
+  // dryApprove only stubs decide-side writes — must not hide write-gate from opendoubao.
   enableCatalog: true,
   ...(dryApprove
     ? {

@@ -1347,7 +1347,7 @@ export class Orchestrator {
     this.logPendingCall(
       session,
       pending,
-      "chat-demo",
+      "opendoubao",
       source !== "rules",
       advanceStarted,
     );
@@ -1595,7 +1595,7 @@ export class Orchestrator {
       const startedAt = Date.now();
       const pending = await this.hitl.decide(requestId, action, "operator");
       session.pending = pending;
-      this.logPendingCall(session, pending, "chat-demo", false, startedAt);
+      this.logPendingCall(session, pending, "opendoubao", false, startedAt);
       if (pending.status === "done" && pending.result?.ok) {
         session.lastResult = pending.result.body;
         session.dataModel.rows = pending.result.body;
@@ -1673,7 +1673,7 @@ export class Orchestrator {
         pending = await this.hitl.advance(requestId);
       }
       session.pending = pending;
-      this.logPendingCall(session, pending, "chat-demo", false, startedAt);
+      this.logPendingCall(session, pending, "opendoubao", false, startedAt);
       let configApplicationId: string | undefined;
       let configApplicationError: string | undefined;
       if (

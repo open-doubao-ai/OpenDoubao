@@ -1,5 +1,5 @@
 /**
- * Login / Settings (copied from chat-demo account UI).
+ * Login / Settings (copied from opendoubao account UI).
  * Creds sync into aj-http localStorage for APIJSON CRUD + approve decide.
  */
 
@@ -10,7 +10,7 @@ import {
   resetApijsonSession,
   saveCreds,
 } from "./aj-http.js";
-import { getUiLocale, setUiLocale, t, type UiLocale } from "./i18n/index.js";
+import { getUiLocale, setUiLocale, t, type UiLocale } from "./i18n";
 
 export type AccountUser = {
   name: string;

@@ -73,7 +73,7 @@ export type ConfigApplication = {
   name?: string;
   /** Free-form detail / rationale */
   detail?: string;
-  /** Linked HITL / chat-demo request */
+  /** Linked HITL / opendoubao request */
   requestId?: string;
   sessionId?: string;
   submitter?: string;

@@ -32,7 +32,7 @@ import {
   type CallLog,
   type CallStats,
 } from "./call-api.js";
-import { applyDomI18n, mountLocaleToggle, t } from "./i18n/index.js";
+import { applyDomI18n, mountLocaleToggle, t } from "./i18n";
 import { mountVerticalSplit } from "./split-resize.js";
 
 applyDomI18n();

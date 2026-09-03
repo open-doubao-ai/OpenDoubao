@@ -1,10 +1,10 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist-server",
     "rootDir": "server",
     "types": ["node"]
   },
   "include": ["server/**/*"],
-  "exclude": ["server/**/*.test.ts", "server/**/*.e2e.test.ts"]
+  "exclude": ["server/**/*.test.ts"]
 }
