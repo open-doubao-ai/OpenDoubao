@@ -4,8 +4,20 @@
  */
 
 import { t } from "./i18n/index.js";
+import { fetchBoundGet } from "./layout-actions.js";
+import {
+  categoryRecordId,
+  isCategoryTable,
+  loadCategoryRows,
+} from "./layout-category.js";
+import type { LayoutApp } from "./page-layout.js";
 import { columnCommentOnly, fieldColName } from "./smart-image-fields.js";
 import type { ColumnMeta, FieldType } from "./field-meta.js";
+import {
+  commentDisplayLabel,
+  fkDisplayLabel,
+  resolveFkRef,
+} from "./fk-nav.js";
 import type { SchemaComments } from "./schema-types.js";
 import {
   newConditionId,
@@ -23,15 +35,19 @@ export type FilterSheetOpts = {
   rows: FlatRow[];
   filters: ColumnFilter[];
   onApply: (filters: ColumnFilter[]) => void;
+  apijsonBase?: string;
+  app?: LayoutApp;
 };
 
 type FacetKind = "enum" | "range";
+
+export type FacetOption = { value: string; label: string };
 
 type Facet = {
   path: string;
   label: string;
   kind: FacetKind;
-  options?: string[];
+  options?: FacetOption[];
 };
 
 const SKIP_TOKENS = [
@@ -100,10 +116,10 @@ function scoreTokens(text: string, tokens: string[]): number {
   return n;
 }
 
-function fieldLabel(path: string, comments?: SchemaComments | null): string {
+export function fieldLabel(path: string, comments?: SchemaComments | null): string {
   const tip = columnCommentOnly(path, comments);
-  if (tip) return tip.split(/[（(]/)[0]!.trim() || fieldColName(path);
-  return fieldColName(path);
+  const label = commentDisplayLabel(tip);
+  return label || fieldColName(path);
 }
 
 function fieldType(path: string, metas?: Record<string, ColumnMeta> | null): FieldType {
@@ -123,7 +139,151 @@ function distinctValues(rows: FlatRow[], path: string, limit = 12): string[] {
   return [...seen];
 }
 
-function inferFacets(opts: FilterSheetOpts): Facet[] {
+export function mapEnumOptions(
+  values: string[],
+  labels: Map<string, string>,
+): FacetOption[] {
+  return values.map((value) => ({
+    value,
+    label: labels.get(value) || value,
+  }));
+}
+
+function extractTableRows(
+  table: string,
+  json: Record<string, unknown> | null,
+): Array<Record<string, unknown>> {
+  if (!json) return [];
+  const arr = json["[]"];
+  if (!Array.isArray(arr)) {
+    const one = json[table];
+    return one && typeof one === "object" && !Array.isArray(one)
+      ? [one as Record<string, unknown>]
+      : [];
+  }
+  const out: Array<Record<string, unknown>> = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const rec = (item as Record<string, unknown>)[table];
+    if (rec && typeof rec === "object" && !Array.isArray(rec)) {
+      out.push(rec as Record<string, unknown>);
+    } else if ((item as Record<string, unknown>).id != null) {
+      out.push(item as Record<string, unknown>);
+    }
+  }
+  return out;
+}
+
+function tableRowName(row: Record<string, unknown>, table?: string): string {
+  const id = table ? row.id ?? row[`${table}.id`] : row.id;
+  for (const f of ["name", "title", "content", "tag"]) {
+    const v = (table ? row[f] ?? row[`${table}.${f}`] : row[f]);
+    if (v == null || v === "") continue;
+    const s = String(v).trim();
+    if (s && s !== String(id ?? "")) return s;
+  }
+  return "";
+}
+
+function cellsDisplayName(
+  cells: Record<string, unknown>,
+  table: string | null,
+): string {
+  return tableRowName(cells, table ?? undefined);
+}
+
+function labelsFromRows(
+  rows: FlatRow[],
+  path: string,
+  comments?: SchemaComments | null,
+  metas?: Record<string, ColumnMeta> | null,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const meta = metas?.[path];
+  for (const row of rows) {
+    const raw = row.cells[path];
+    if (raw == null || raw === "") continue;
+    const value = String(raw).trim();
+    if (!value || map.has(value)) continue;
+    const named = fkDisplayLabel(path, raw, row.cells, comments, meta);
+    if (named?.label) map.set(value, named.label);
+  }
+  return map;
+}
+
+async function fetchFkLabels(
+  table: string,
+  ids: string[],
+  apijsonBase: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const nums = ids.filter((id) => /^-?\d+$/.test(id)).map(Number);
+  if (!nums.length || !apijsonBase) return map;
+  const json = await fetchBoundGet(apijsonBase, {
+    "[]": {
+      count: Math.min(80, Math.max(nums.length, 1)),
+      [table]: { "id{}": nums },
+    },
+  });
+  for (const row of extractTableRows(table, json)) {
+    if (row.id == null) continue;
+    const name = tableRowName(row, table);
+    if (name) map.set(String(row.id), name);
+  }
+  return map;
+}
+
+async function enumOptionsForPath(
+  opts: FilterSheetOpts,
+  path: string,
+): Promise<FacetOption[] | undefined> {
+  const fk = resolveFkRef(path, opts.comments, opts.metas?.[path]);
+  const raw = distinctValues(opts.rows, path);
+  const labels = labelsFromRows(opts.rows, path, opts.comments, opts.metas);
+
+  if (fk && opts.apijsonBase) {
+    const categoryFk =
+      fk.table === "Category" || isCategoryTable(fk.table, opts.comments);
+    if (categoryFk && opts.app) {
+      const loaded = await loadCategoryRows({
+        app: opts.app,
+        apijsonBase: opts.apijsonBase,
+        comments: opts.comments ?? null,
+      });
+      if (loaded.rows.length && loaded.table) {
+        const options: FacetOption[] = [];
+        const seen = new Set<string>();
+        for (const row of loaded.rows) {
+          const id = categoryRecordId(row, loaded.table);
+          if (id == null) continue;
+          const value = String(id);
+          if (seen.has(value)) continue;
+          const name =
+            cellsDisplayName(row.cells, loaded.table) ||
+            labels.get(value) ||
+            value;
+          seen.add(value);
+          options.push({ value, label: name });
+        }
+        for (const id of raw) {
+          if (seen.has(id)) continue;
+          options.push({ value: id, label: labels.get(id) || id });
+        }
+        if (options.length) return options.slice(0, 24);
+      }
+    }
+    const missing = raw.filter((id) => !labels.has(id));
+    if (missing.length) {
+      const fetched = await fetchFkLabels(fk.table, missing, opts.apijsonBase);
+      for (const [k, v] of fetched) labels.set(k, v);
+    }
+  }
+
+  if (!raw.length) return undefined;
+  return mapEnumOptions(raw, labels);
+}
+
+async function inferFacets(opts: FilterSheetOpts): Promise<Facet[]> {
   const scored: Array<Facet & { score: number }> = [];
   for (const path of opts.columns) {
     const col = fieldColName(path);
@@ -138,12 +298,10 @@ function inferFacets(opts: FilterSheetOpts): Facet[] {
     const rangeScore = scoreTokens(text, RANGE_TOKENS);
     const numeric = type === "number" || type === "percent" || type === "date" || type === "time";
     if (enumScore >= 4) {
-      const options = distinctValues(opts.rows, path);
       scored.push({
         path,
         label: fieldLabel(path, opts.comments),
         kind: "enum",
-        options: options.length ? options : undefined,
         score: enumScore + 4,
       });
       continue;
@@ -166,6 +324,11 @@ function inferFacets(opts: FilterSheetOpts): Facet[] {
     out.push(f);
     if (out.length >= 6) break;
   }
+  await Promise.all(
+    out.map(async (f) => {
+      if (f.kind === "enum") f.options = await enumOptionsForPath(opts, f.path);
+    }),
+  );
   return out;
 }
 
@@ -193,7 +356,6 @@ export function mountFilterButton(opts: {
 
 export function openAppFilterSheet(opts: FilterSheetOpts): void {
   document.getElementById("app-filter-sheet")?.remove();
-  const facets = inferFacets(opts);
   const pop = document.createElement("div");
   pop.id = "app-filter-sheet";
   pop.className = "app-filter-sheet";
@@ -203,11 +365,45 @@ export function openAppFilterSheet(opts: FilterSheetOpts): void {
   title.textContent = t("layout.filter.title");
   pop.appendChild(title);
 
+  const body = document.createElement("div");
+  body.className = "app-filter-body";
+  const loading = document.createElement("div");
+  loading.className = "layout-meta";
+  loading.textContent = t("common.loading");
+  body.appendChild(loading);
+  pop.appendChild(body);
+  document.body.appendChild(pop);
+
+  const rect = opts.anchor.getBoundingClientRect();
+  pop.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - 24)}px`;
+  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 360))}px`;
+
+  const closer = (ev: MouseEvent) => {
+    if (!pop.contains(ev.target as Node) && ev.target !== opts.anchor) {
+      pop.remove();
+      document.removeEventListener("mousedown", closer);
+    }
+  };
+  setTimeout(() => document.addEventListener("mousedown", closer), 0);
+
+  void inferFacets(opts).then((facets) => {
+    if (!document.body.contains(pop)) return;
+    body.replaceChildren();
+    paintFilterFacets(pop, body, facets, opts);
+  });
+}
+
+function paintFilterFacets(
+  pop: HTMLElement,
+  body: HTMLElement,
+  facets: Facet[],
+  opts: FilterSheetOpts,
+): void {
   if (!facets.length) {
     const empty = document.createElement("div");
     empty.className = "layout-meta";
     empty.textContent = t("layout.filter.empty");
-    pop.appendChild(empty);
+    body.appendChild(empty);
   }
 
   type Draft = { path: string; kind: FacetKind; min: string; max: string; picked: Set<string>; text: string };
@@ -253,15 +449,16 @@ export function openAppFilterSheet(opts: FilterSheetOpts): void {
         };
         block.appendChild(input);
       } else {
-        for (const v of values) {
+        for (const opt of values) {
           const chip = document.createElement("button");
           chip.type = "button";
-          chip.className = "ex-chip" + (draft.picked.has(v) ? " is-on" : "");
-          chip.textContent = v;
+          chip.className = "ex-chip" + (draft.picked.has(opt.value) ? " is-on" : "");
+          chip.textContent = opt.label;
+          chip.title = opt.label === opt.value ? opt.value : `${opt.label} · ${opt.value}`;
           chip.onclick = () => {
-            if (draft.picked.has(v)) draft.picked.delete(v);
-            else draft.picked.add(v);
-            chip.classList.toggle("is-on", draft.picked.has(v));
+            if (draft.picked.has(opt.value)) draft.picked.delete(opt.value);
+            else draft.picked.add(opt.value);
+            chip.classList.toggle("is-on", draft.picked.has(opt.value));
           };
           row.appendChild(chip);
         }
@@ -290,7 +487,7 @@ export function openAppFilterSheet(opts: FilterSheetOpts): void {
       row.append(min, sep, max);
       block.appendChild(row);
     }
-    pop.appendChild(block);
+    body.appendChild(block);
   });
 
   const actions = document.createElement("div");
@@ -375,17 +572,4 @@ export function openAppFilterSheet(opts: FilterSheetOpts): void {
   cancel.onclick = () => pop.remove();
   actions.append(apply, clear, cancel);
   pop.appendChild(actions);
-  document.body.appendChild(pop);
-
-  const rect = opts.anchor.getBoundingClientRect();
-  pop.style.top = `${Math.min(rect.bottom + 8, window.innerHeight - 24)}px`;
-  pop.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 360))}px`;
-
-  const closer = (ev: MouseEvent) => {
-    if (!pop.contains(ev.target as Node) && ev.target !== opts.anchor) {
-      pop.remove();
-      document.removeEventListener("mousedown", closer);
-    }
-  };
-  setTimeout(() => document.addEventListener("mousedown", closer), 0);
 }

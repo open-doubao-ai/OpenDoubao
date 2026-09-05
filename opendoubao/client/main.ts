@@ -29,6 +29,7 @@ import {
   defaultPageForApp,
   displayKindFromDataPage,
   inferLayoutSpec,
+  createSpecForListData,
   isAddressPage,
   isCatalogListPage,
   isDataFormPage,
@@ -4443,6 +4444,17 @@ function applyReplacedFilters(filters: ColumnFilter[]) {
 }
 
 function selectAppPage(page: LayoutPage) {
+  if (page === "create" && !isMeHubPage(state.layoutSpec.page)) {
+    const spec = createSpecForListData({
+      currentApp: state.layoutSpec.app,
+      currentPage: state.layoutSpec.page,
+      table: currentPrimaryTable(),
+      columns: Object.keys(state.columnMetas),
+      comments: state.comments,
+    });
+    void selectLayoutPage(spec.app, spec.page);
+    return;
+  }
   if (state.layoutNav.tabs.some((t) => t.slot === page)) {
     state.navTabSlot = page;
   }

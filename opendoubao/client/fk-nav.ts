@@ -1,5 +1,6 @@
 /** Resolve logical/physical FK fields → target table + id. */
 
+import { columnCommentOnly } from "./smart-image-fields.js";
 import type { SchemaComments } from "./schema-types.js";
 
 const KNOWN: Record<string, string> = {
@@ -11,10 +12,44 @@ const KNOWN: Record<string, string> = {
   userid: "User",
   momentid: "Moment",
   commentid: "Comment",
+  category: "Category",
   /** contactIdList → friends = User ids */
   contact: "User",
   praiseuser: "User",
 };
+
+/** `分类 Category.id` / `商品 Product.id` — explicit FK in the column comment. */
+const COMMENT_FK_PATH_RE =
+  /\b([A-Z][A-Za-z0-9]*)\.([A-Za-z_][A-Za-z0-9_]*)\b/;
+
+export function parseCommentFkRef(
+  comment: string,
+): { table: string; field: string } | null {
+  const bare = comment.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const m = bare.match(COMMENT_FK_PATH_RE);
+  if (!m?.[1] || !m[2]) return null;
+  if (!isPlausibleFkTable(m[1])) return null;
+  return { table: m[1], field: m[2] };
+}
+
+/**
+ * Human facet / header label from a DDL comment.
+ * `分类 Category.id` → `分类`; `歌词（LRC 或纯文本）` → `歌词`.
+ */
+export function commentDisplayLabel(comment: string): string {
+  let s = comment.trim();
+  if (!s) return "";
+  s = s.split(/[（(]/)[0]!.trim();
+  s = s.replace(/\s+[A-Z][A-Za-z0-9]*\.[A-Za-z_][A-Za-z0-9_]*.*$/, "").trim();
+  return s;
+}
+
+function commentOf(
+  path: string,
+  comments?: SchemaComments | null,
+): string {
+  return columnCommentOnly(path, comments);
+}
 
 function colName(path: string): string {
   return path.includes(".") ? path.split(".").pop()! : path;
@@ -175,6 +210,10 @@ export function resolveFkTable(
   const self = selfRefFkTable(path);
   if (self) return self;
 
+  const comment = commentOf(path, comments);
+  const commentRef = parseCommentFkRef(comment);
+  if (commentRef) return commentRef.table;
+
   let table: string | null = null;
 
   const idMatch = col.match(/^(.+?)_?[Ii]d$/);
@@ -182,7 +221,6 @@ export function resolveFkTable(
     table = stemToTable(idMatch[1]);
   }
 
-  const comment = comments?.columns?.[path] || "";
   const commentBare = comment.replace(/\s*\([^)]*\)\s*$/, "");
   if (!table) {
     const m =
@@ -218,13 +256,16 @@ export function resolveHighConfidenceFkTable(
   const self = selfRefFkTable(path);
   if (self) return self;
 
+  const comment = commentOf(path, comments);
+  const commentRef = parseCommentFkRef(comment);
+  if (commentRef) return commentRef.table;
+
   const idMatch = col.match(/^(.+?)_?[Ii]d$/);
   if (idMatch?.[1]) {
     const t = knownStemToTable(idMatch[1]);
     if (t) return t;
   }
 
-  const comment = comments?.columns?.[path] || "";
   const commentBare = comment.replace(/\s*\([^)]*\)\s*$/, "");
   const explicit =
     commentBare.match(
@@ -267,6 +308,7 @@ export const FK_DISPLAY_FIELDS: Record<string, string[]> = {
   User: ["name", "tag", "head"],
   Moment: ["content"],
   Comment: ["content"],
+  Category: ["name", "title"],
 };
 
 /**

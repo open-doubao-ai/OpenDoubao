@@ -262,6 +262,15 @@ function inferCommentPost(ctx: ActionBindContext): BindRequestPayload | null {
       "内容",
       "评论",
     ]) || "content";
+  const score = pickColumn(comment, ctx.comments, undefined, [
+    "score",
+    "star",
+    "rating",
+    "rate",
+    "评分",
+    "打分",
+    "星级",
+  ]);
   const body: Record<string, unknown> = { [content]: "" };
   const paramMap: ParamMapEntry[] = [
     { from: "/input/content", to: `/${comment}/${content}` },
@@ -269,6 +278,22 @@ function inferCommentPost(ctx: ActionBindContext): BindRequestPayload | null {
   if (fk) {
     body[fk] = 0;
     paramMap.push({ from: "/record/id", to: `/${comment}/${fk}` });
+  }
+  if (score) {
+    body[score] = 0;
+    paramMap.push({ from: "/input/score", to: `/${comment}/${score}` });
+  }
+  const toId = pickColumn(comment, ctx.comments, undefined, [
+    "toid",
+    "parentid",
+    "replyid",
+    "replytoid",
+    "父评论",
+    "回复评论",
+  ]);
+  if (toId) {
+    body[toId] = 0;
+    paramMap.push({ from: "/input/toId", to: `/${comment}/${toId}` });
   }
   return bindOf("comment", "post", { [comment]: body, tag: comment }, paramMap);
 }
@@ -435,7 +460,7 @@ Use ONLY the project's schema below. Do not assume Demo table or field names
 (Video, Comment, User, praiseUserIdList, contactIdList, …) unless they appear in the schema.
 Return JSON:
 { "method": "get|post|put|delete", "url": ".../get|post|put|delete", "bodyTemplate": {}, "paramMap": [{"from":"/record/id","to":"/Table/id"}], "bindingId": "optional" }
-JSON Pointer sources: /record/id, /record/<column>, /visitor/id, /author/id, /input/content.
+JSON Pointer sources: /record/id, /record/<column>, /visitor/id, /author/id, /input/content, /input/score, /input/toId.
 Do not hardcode sample ids. Writes: omit userId (session injects). Write tag defaults to the table name; use Table:alias / moment_list only if that table Request is taken and unfit.
 Only APIJSON, never SQL.`,
             },

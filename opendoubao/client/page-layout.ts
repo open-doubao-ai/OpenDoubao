@@ -225,6 +225,47 @@ export function isCatalogApp(
   return isNewsLikeApp(app) || isArticleLikeApp(app) || isLocalLikeApp(app);
 }
 
+/** toC record pages that can show a comment list + composer dock. */
+export function isCommentableApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  if (!app || app === "data" || app === "chat" || app === "cart" || app === "order") {
+    return false;
+  }
+  return true;
+}
+
+/** Bought goods / booked services — reviews with stars. Everything else is plain comments. */
+export function isRateableApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return isPurchasableApp(app);
+}
+
+/** Paid goods / tickets / booked services — review only after a purchase. */
+export function isPurchasableApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return (
+    app === "commerce" ||
+    app === "travel" ||
+    app === "lifestyle" ||
+    app === "beauty" ||
+    app === "auto"
+  );
+}
+
+export function reviewRequiresPurchase(opts: {
+  app?: LayoutApp | LayoutKind | null;
+  price?: number | null;
+  hasBuy?: boolean;
+}): boolean {
+  if (isPurchasableApp(opts.app)) return true;
+  return Boolean(
+    opts.hasBuy && opts.price != null && Number.isFinite(opts.price) && opts.price > 0,
+  );
+}
+
 /** Spreadsheet / list / grid / charts — not a record form. */
 export const DATA_LIST_VIEW_PAGES = [
   "table",
@@ -1976,14 +2017,14 @@ export function isCatalogListPage(page: LayoutPage | null | undefined): boolean 
   );
 }
 
-/** toC content lists (home / list / feed / 分类 / 排行 / 搜索…) — not users / orders / address. */
+/** toC content lists (home / list / feed / 分类 / 排行 / 搜索…). */
 export function isConsumerCreateListPage(
   page: LayoutPage | null | undefined,
 ): boolean {
   return page === "home" || page === "list" || page === "feed" || isExploreListPage(page);
 }
 
-/** Scan-row 新增: toC catalog lists that have an app compose page. */
+/** Scan-row 新增: toC list/grid pages that have an app compose page. */
 export function shouldShowListCreate(
   app: LayoutApp | undefined,
   page: LayoutPage | undefined,
@@ -1994,6 +2035,45 @@ export function shouldShowListCreate(
   if (!LAYOUT_PAGES_BY_APP[app].includes("create")) return false;
   if (!page) return true;
   return isConsumerCreateListPage(page);
+}
+
+function composePageForApp(app: LayoutApp): LayoutSpec {
+  const a = canonicalLayoutApp(app);
+  if (a === "data" || !LAYOUT_PAGES_BY_APP[a].includes("create")) {
+    return { app: "data", page: "form" };
+  }
+  return { app: a, page: "create" };
+}
+
+/**
+ * Create/compose target for a list/grid: infer the app from the bound table
+ * (Video → video upload, Article → article editor, Moment → 想法…).
+ * Weak inference keeps the open list's app — never nav.host.
+ */
+export function createSpecForListData(opts: {
+  currentApp?: LayoutApp | null;
+  currentPage?: LayoutPage | null;
+  table?: string | null;
+  columns?: string[] | null;
+  comments?: SchemaComments | null;
+}): LayoutSpec {
+  const current = opts.currentApp
+    ? canonicalLayoutApp(opts.currentApp)
+    : undefined;
+  if (opts.currentPage === "address") {
+    return { app: current && current !== "data" ? current : "commerce", page: "addressDetail" };
+  }
+  const inferred = inferLayoutSpec({
+    table: opts.table,
+    columns: opts.columns,
+    comments: opts.comments,
+    pageKind: "create",
+  });
+  const fromData =
+    inferred.app !== "data" ? canonicalLayoutApp(inferred.app) : null;
+  const app = fromData ?? current;
+  if (!app) return { app: "data", page: "form" };
+  return composePageForApp(app);
 }
 
 const TITLE_COLS = [

@@ -39,7 +39,7 @@ export const TABLE_FK_EDGES: Record<string, FkEdge[]> = {
   Music: [USER_FK],
   Product: [USER_FK],
   Cart: [USER_FK, { column: "productId", target: "Product" }],
-  ShopOrder: [USER_FK],
+  ShopOrder: [USER_FK, { column: "productId", target: "Product" }],
 };
 
 /**
@@ -85,7 +85,23 @@ export const FK_OPTIONAL_COLUMNS: Record<string, string[]> = {
     "praiseUserIdList",
     "pictureList",
   ],
-  Comment: ["id", "content", "userId", "momentId", "videoId", "articleId", "blogId", "toId", "date"],
+  Comment: [
+    "id",
+    "content",
+    "userId",
+    "momentId",
+    "videoId",
+    "articleId",
+    "blogId",
+    "productId",
+    "courseId",
+    "musicId",
+    "newsId",
+    "activityId",
+    "score",
+    "toId",
+    "date",
+  ],
   Employee: ["id", "name", "dept", "title", "sex", "salary", "status", "head"],
   Activity: ["id", "title", "cover", "status", "startTime", "endTime"],
   Message: ["id", "content", "author", "head", "toUserId", "date"],
@@ -97,7 +113,7 @@ export const FK_OPTIONAL_COLUMNS: Record<string, string[]> = {
   Music: ["id", "title", "cover", "artist", "audioUrl", "playCount"],
   Product: ["id", "name", "cover", "price", "stock", "status"],
   Cart: ["id", "title", "cover", "price", "qty", "productId"],
-  ShopOrder: ["id", "consignee", "phone", "address", "total", "status"],
+  ShopOrder: ["id", "consignee", "phone", "address", "total", "status", "productId"],
 };
 
 export function defaultFkColumns(table: string): string[] {

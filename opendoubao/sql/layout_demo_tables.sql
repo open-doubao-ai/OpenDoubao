@@ -232,9 +232,12 @@ CREATE TABLE `ShopOrder` (
   `remark` varchar(200) DEFAULT NULL COMMENT '备注',
   `total` decimal(10,2) NOT NULL DEFAULT 0 COMMENT '订单金额',
   `status` varchar(20) NOT NULL DEFAULT 'pending' COMMENT '状态：pending/paid/shipped/done',
+  `productId` bigint DEFAULT NULL COMMENT '商品 Product.id',
+  `items` json DEFAULT NULL COMMENT '订单行 [{table,id,qty}]',
   `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下单时间',
   PRIMARY KEY (`id`),
   KEY `userId` (`userId`),
+  KEY `productId` (`productId`),
   KEY `index_date` (`date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='电商订单';
 
@@ -534,11 +537,11 @@ INSERT INTO `Cart` (`id`,`userId`,`productId`,`title`,`cover`,`price`,`qty`,`dat
 (1103, 38710, 1003, '机械键盘套件', '/media/covers/119.svg', 459.00, 1, '2026-08-22 08:30:00'),
 (1104, 82002, 1006, '香薰蜡烛礼盒', '/media/covers/1080.svg', 138.00, 3, '2026-08-19 21:00:00');
 
-INSERT INTO `ShopOrder` (`id`,`userId`,`consignee`,`phone`,`address`,`remark`,`total`,`status`,`date`) VALUES
-(1201, 82001, '林晓', '13800001001', '上海市静安区南京西路 100 号 8 楼', '工作日白天可收', 367.00, 'paid', '2026-08-12 11:20:00'),
-(1202, 38710, '陈舟', '13800001002', '深圳市南山区科技园路 1 号', '放前台', 459.00, 'shipped', '2026-08-10 16:05:00'),
-(1203, 82002, '苏晚', '13800001003', '杭州市西湖区文三路 200 号', NULL, 414.00, 'done', '2026-07-28 09:48:00'),
-(1204, 82003, '周衡', '13800001004', '北京市朝阳区工体北路 8 号', '不要电话营销', 799.00, 'pending', '2026-08-22 19:01:00');
+INSERT INTO `ShopOrder` (`id`,`userId`,`consignee`,`phone`,`address`,`remark`,`total`,`status`,`productId`,`items`,`date`) VALUES
+(1201, 82001, '林晓', '13800001001', '上海市静安区南京西路 100 号 8 楼', '工作日白天可收', 367.00, 'paid', 1001, CAST('[{"table":"Product","id":1001,"qty":1},{"table":"Product","id":1005,"qty":1}]' AS JSON), '2026-08-12 11:20:00'),
+(1202, 38710, '陈舟', '13800001002', '深圳市南山区科技园路 1 号', '放前台', 459.00, 'shipped', 1003, CAST('[{"table":"Product","id":1003,"qty":1}]' AS JSON), '2026-08-10 16:05:00'),
+(1203, 82002, '苏晚', '13800001003', '杭州市西湖区文三路 200 号', NULL, 414.00, 'done', 1006, CAST('[{"table":"Product","id":1006,"qty":3}]' AS JSON), '2026-07-28 09:48:00'),
+(1204, 82003, '周衡', '13800001004', '北京市朝阳区工体北路 8 号', '不要电话营销', 799.00, 'pending', 1007, CAST('[{"table":"Product","id":1007,"qty":1}]' AS JSON), '2026-08-22 19:01:00');
 
 INSERT INTO `Category` (`id`,`userId`,`app`,`name`,`cover`,`sort`,`date`) VALUES
 (1301, 82001, 'commerce', '电器', '/media/covers/201.svg', 1, '2026-08-01 10:00:00'),
@@ -629,6 +632,101 @@ SET @sql := (
   )
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='productId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `productId` bigint DEFAULT NULL COMMENT ''商品 Product.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='courseId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `courseId` bigint DEFAULT NULL COMMENT ''课程 Course.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='musicId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `musicId` bigint DEFAULT NULL COMMENT ''音乐 Music.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='newsId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `newsId` bigint DEFAULT NULL COMMENT ''新闻 News.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='activityId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `activityId` bigint DEFAULT NULL COMMENT ''活动 Activity.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='bookId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `bookId` bigint DEFAULT NULL COMMENT ''图书 Book.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='recipeId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `recipeId` bigint DEFAULT NULL COMMENT ''菜谱 Recipe.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='jobId'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `jobId` bigint DEFAULT NULL COMMENT ''职位 Job.id'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='Comment' AND COLUMN_NAME='score'),
+    'SELECT 1',
+    'ALTER TABLE `Comment` ADD COLUMN `score` tinyint DEFAULT NULL COMMENT ''评分 1-5，可空'''
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='ShopOrder')
+    AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='ShopOrder' AND COLUMN_NAME='productId'),
+    'ALTER TABLE `ShopOrder` ADD COLUMN `productId` bigint DEFAULT NULL COMMENT ''商品 Product.id''',
+    'SELECT 1'
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+SET @sql := (
+  SELECT IF(
+    EXISTS(SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA=@db AND TABLE_NAME='ShopOrder')
+    AND NOT EXISTS(SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=@db AND TABLE_NAME='ShopOrder' AND COLUMN_NAME='items'),
+    'ALTER TABLE `ShopOrder` ADD COLUMN `items` json DEFAULT NULL COMMENT ''订单行 [{table,id,qty}]''',
+    'SELECT 1'
+  )
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+UPDATE `ShopOrder` SET `productId` = 1001, `items` = CAST('[{"table":"Product","id":1001,"qty":1},{"table":"Product","id":1005,"qty":1}]' AS JSON) WHERE `id` = 1201 AND (`productId` IS NULL OR `items` IS NULL);
+UPDATE `ShopOrder` SET `productId` = 1003, `items` = CAST('[{"table":"Product","id":1003,"qty":1}]' AS JSON) WHERE `id` = 1202 AND (`productId` IS NULL OR `items` IS NULL);
+UPDATE `ShopOrder` SET `productId` = 1006, `items` = CAST('[{"table":"Product","id":1006,"qty":3}]' AS JSON) WHERE `id` = 1203 AND (`productId` IS NULL OR `items` IS NULL);
+UPDATE `ShopOrder` SET `productId` = 1007, `items` = CAST('[{"table":"Product","id":1007,"qty":1}]' AS JSON) WHERE `id` = 1204 AND (`productId` IS NULL OR `items` IS NULL);
 
 SET @sql := (
   SELECT IF(
@@ -649,7 +747,7 @@ UPDATE `Product` SET `pictureList` = CAST('["/media/covers/201.svg","/media/cove
 
 UPDATE `Request`
 SET `structure` = CAST('{"MUST":"content","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON),
-    `detail` = 'Create Comment (momentId / videoId / articleId / blogId optional)'
+    `detail` = 'Create Comment (owner FK + optional score)'
 WHERE `tag` = 'Comment' AND `method` = 'POST';
 
 DELETE FROM `Comment` WHERE `id` BETWEEN 91001 AND 91012;
@@ -661,6 +759,45 @@ INSERT INTO `Comment` (`id`,`userId`,`toId`,`momentId`,`videoId`,`articleId`,`bl
 (91005, 82002, 0, NULL, NULL, 701, NULL, '2026-08-16 14:05:00', '评论和点赞也必须走绑定后的 /apijson，而不是假按钮。'),
 (91006, 38710, 0, NULL, NULL, 703, NULL, '2026-08-05 10:00:00', '外键跳转作者详情就是这里该接的。'),
 (91007, 82001, 0, NULL, NULL, NULL, 601, '2026-08-15 16:40:00', '绑定一次，后面筛选分页直接 HTTP。');
+
+DELETE FROM `Comment` WHERE `id` BETWEEN 91013 AND 91060;
+INSERT INTO `Comment` (`id`,`userId`,`toId`,`momentId`,`videoId`,`articleId`,`blogId`,`productId`,`courseId`,`musicId`,`newsId`,`activityId`,`bookId`,`recipeId`,`jobId`,`score`,`date`,`content`) VALUES
+(91013, 38710, 0, 12, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-03 09:10:00', '这条动态的配图很干净。'),
+(91014, 82002, 0, 15, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-03 10:40:00', '评论列表应该跟在正文后面。'),
+(91015, 82001, 0, NULL, NULL, NULL, NULL, 1001, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 5, '2026-08-04 11:00:00', '滤杯做工细，出水均匀。'),
+(91016, 38710, 0, NULL, NULL, NULL, NULL, 1001, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 4, '2026-08-04 15:20:00', '分享壶略小，两人刚好。'),
+(91017, 82003, 0, NULL, NULL, NULL, NULL, 1003, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 5, '2026-08-05 08:30:00', '热插拔手感对得上价格。'),
+(91018, 82002, 0, NULL, NULL, NULL, NULL, NULL, 1601, NULL, NULL, NULL, NULL, NULL, NULL, 5, '2026-08-06 09:00:00', '每天一课，跟练压力不大。'),
+(91019, 70793, 0, NULL, NULL, NULL, NULL, NULL, 1602, NULL, NULL, NULL, NULL, NULL, NULL, 4, '2026-08-06 14:10:00', '作业讲解清楚，希望再补测验。'),
+(91020, 82001, 0, NULL, NULL, NULL, NULL, NULL, NULL, 901, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-07 12:00:00', '前奏适合当背景循环。'),
+(91021, 38710, 0, NULL, NULL, NULL, NULL, NULL, NULL, 901, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-07 18:40:00', '歌词页和评论不要抢播放条。'),
+(91022, 82002, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 401, NULL, NULL, NULL, NULL, NULL, '2026-08-08 08:10:00', '首日准点率这组数字有用。'),
+(91023, 82001, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 202, NULL, NULL, NULL, NULL, '2026-08-08 16:00:00', '内测名额希望能看到进度。'),
+(91024, 82001, 91001, NULL, 801, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-02 12:05:00', '片头那几秒就能当封面循环。'),
+(91025, 70793, 91002, NULL, 801, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-02 13:10:00', '相关视频列表我已经按这个做了。'),
+(91026, 82002, 91003, NULL, 803, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-07-03 10:40:00', '横屏测试刚好，竖屏再补一条。'),
+(91027, 38710, 91004, NULL, NULL, 701, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-16 13:20:00', '稳态不走模型这点要写进文档。'),
+(91028, 70793, 91005, NULL, NULL, 701, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-16 15:00:00', '假按钮我这边已经改成 bind 了。'),
+(91029, 82001, 91006, NULL, NULL, 703, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-05 11:15:00', '作者详情跳转测过了。'),
+(91030, 82002, 91007, NULL, NULL, NULL, 601, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-15 17:20:00', '筛选分页确实不该再问模型。'),
+(91031, 82001, 91013, 12, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-03 09:40:00', '第二张光比第一张更好。'),
+(91032, 82002, 91031, 12, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-03 10:05:00', '同意，后期也干净。'),
+(91033, 38710, 91014, 15, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-03 11:10:00', '详情页评论区就该这样。'),
+(91034, 82002, 91015, NULL, NULL, NULL, NULL, 1001, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-04 12:10:00', '滤纸尺寸也对得上。'),
+(91035, 82003, 91016, NULL, NULL, NULL, NULL, 1001, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-04 16:00:00', '分享壶两人刚好，三人就紧。'),
+(91036, 38710, 91017, NULL, NULL, NULL, NULL, 1003, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-05 09:20:00', '轴体手感对得上这个价。'),
+(91037, 82001, 91018, NULL, NULL, NULL, NULL, NULL, 1601, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-06 10:30:00', '跟练打卡我坚持了两周。'),
+(91038, 82002, 91019, NULL, NULL, NULL, NULL, NULL, 1602, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-06 15:40:00', '测验如果有选择题就更好。'),
+(91039, 82002, 91020, NULL, NULL, NULL, NULL, NULL, NULL, 901, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-07 13:20:00', '循环听了一下午。'),
+(91040, 70793, 91021, NULL, NULL, NULL, NULL, NULL, NULL, 901, NULL, NULL, NULL, NULL, NULL, NULL, '2026-08-07 19:10:00', '歌词别挡住进度条。'),
+(91041, 38710, 91022, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 401, NULL, NULL, NULL, NULL, NULL, '2026-08-08 09:00:00', '分流数字比预告还高一点。'),
+(91042, 82002, 91023, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 202, NULL, NULL, NULL, NULL, '2026-08-08 16:40:00', '进度条能看到就好报名。'),
+(91043, 82001, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1701, NULL, NULL, 5, '2026-08-09 09:00:00', '开头的海风写得很慢，适合睡前。'),
+(91044, 38710, 91043, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1701, NULL, NULL, NULL, '2026-08-09 10:20:00', '第三章转折有点陡，但收得住。'),
+(91045, 82002, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2001, NULL, 5, '2026-08-09 11:00:00', '先炒蛋再烩番茄，不会出水。'),
+(91046, 82001, 91045, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2001, NULL, NULL, '2026-08-09 11:40:00', '糖要少放，番茄酸就够了。'),
+(91047, 38710, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2601, NULL, '2026-08-09 14:00:00', '组件化这点写进 JD 里很清楚。'),
+(91048, 82002, 91047, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 2601, NULL, '2026-08-09 14:30:00', '希望能看到技术栈版本要求。');
 
 -- categoryId on content tables (idempotent). Standalone: layout_demo_categories.sql
 SET @db := DATABASE();

@@ -12,7 +12,9 @@ import {
 } from "./layout-category.js";
 import { visitorId } from "./layout-social.js";
 import {
+  canonicalLayoutApp,
   getSkillHints,
+  inferLayoutSpec,
   isNewsLikeApp,
   mediaSrc,
   type LayoutApp,
@@ -330,11 +332,20 @@ function resolveTable(
   draftTable?: string,
 ): string | null {
   if (draftTable) return draftTable;
-  return (
-    inferItemTableForApp(app, comments) ||
-    skillTable(app) ||
-    primary
-  );
+  if (primary) {
+    const spec = inferLayoutSpec({
+      table: primary,
+      comments,
+      pageKind: "create",
+    });
+    if (
+      spec.app === "data" ||
+      canonicalLayoutApp(spec.app) === canonicalLayoutApp(app)
+    ) {
+      return primary;
+    }
+  }
+  return inferItemTableForApp(app, comments) || skillTable(app) || primary;
 }
 
 function field(

@@ -120,6 +120,7 @@ import { pageTitleForTable } from "./saved-pages.js";
 import {
   clearCart,
   inferLayoutSpec,
+  createSpecForListData,
   isCartOrOrder,
   isCatalogListPage,
   isDataFormPage,
@@ -151,6 +152,10 @@ import {
   inferPeerIdField,
 } from "./layout-category.js";
 import { visitorId } from "./layout-social.js";
+import {
+  orderWriteFields,
+  resolveCheckoutOrderTable,
+} from "./layout-purchase.js";
 import { beginComposeEdit } from "./layout-compose.js";
 import {
   addRowToCart,
@@ -159,6 +164,7 @@ import {
   renderLayoutList,
   shouldHideDetailForm,
   shouldReplaceList,
+  type LayoutCheckoutInfo,
 } from "./layout-views.js";
 import {
   mountAppSearchChrome,
@@ -247,6 +253,27 @@ function showMapFromMetas(
 let listCreateAction: (() => void) | null = null;
 let pendingOpenScan: (() => void) | null = null;
 
+function openCreateFromListChrome(
+  spec: LayoutSpec | undefined,
+  handlers: {
+    onSelectLayoutSpec?: (spec: LayoutSpec) => void;
+    onSelectAppPage?: (page: LayoutPage) => void;
+    primaryTable?: string | null;
+    columns?: string[];
+    comments?: SchemaComments | null;
+  },
+) {
+  const target = createSpecForListData({
+    currentApp: spec?.app,
+    currentPage: spec?.page,
+    table: handlers.primaryTable,
+    columns: handlers.columns,
+    comments: handlers.comments,
+  });
+  if (handlers.onSelectLayoutSpec) handlers.onSelectLayoutSpec(target);
+  else handlers.onSelectAppPage?.(target.page);
+}
+
 function appendResultSearchChrome(
   host: HTMLElement,
   spec: LayoutSpec | undefined,
@@ -256,6 +283,10 @@ function appendResultSearchChrome(
     onOpenAppSearch?: (q: string) => void;
     onOpenAppScan?: () => void;
     onSelectAppPage?: (page: LayoutPage) => void;
+    onSelectLayoutSpec?: (spec: LayoutSpec) => void;
+    primaryTable?: string | null;
+    columns?: string[];
+    comments?: SchemaComments | null;
     onOpenFilter?: (anchor: HTMLElement) => void;
     filterActive?: boolean;
     catalogStyle?: CatalogStyle;
@@ -280,9 +311,10 @@ function appendResultSearchChrome(
       onSearch: search,
       onOpenSearch: open,
       onOpenScan: handlers.onOpenAppScan ?? pendingOpenScan ?? undefined,
-      onOpenCreate: handlers.onSelectAppPage
-        ? () => handlers.onSelectAppPage!("create")
-        : undefined,
+      onOpenCreate:
+        handlers.onSelectLayoutSpec || handlers.onSelectAppPage
+          ? () => openCreateFromListChrome(spec, handlers)
+          : undefined,
       onOpenFilter: handlers.onOpenFilter,
       filterActive: handlers.filterActive,
       catalogStyle: handlers.catalogStyle,
@@ -1310,6 +1342,8 @@ export function renderResultView(
           rows: parsed.rows,
           filters,
           onApply: opts.onReplaceFilters!,
+          apijsonBase,
+          app: layoutSpec.app,
         });
       }
     : undefined;
@@ -1385,32 +1419,19 @@ export function renderResultView(
       addRowToCart(table, row, pres);
       opts.onRequestLayoutKind?.("order");
     },
-    onCheckout: (info: {
-      name: string;
-      phone: string;
-      address: string;
-      remark: string;
-      lines: { title: string; qty: number; price: number }[];
-      total: number;
-    }) => {
-      const orderTable =
-        table && /order/i.test(table) ? table : "Order";
+    onCheckout: (info: LayoutCheckoutInfo) => {
+      const orderTable = resolveCheckoutOrderTable(table, comments);
       if (write) {
         void write({
           method: "post",
           table: orderTable,
           body: {
-            [orderTable]: {
-              name: info.name,
-              phone: info.phone,
-              address: info.address,
-              remark: info.remark,
-              total: info.total,
-              items: JSON.stringify(info.lines),
-            },
+            [orderTable]: orderWriteFields(info),
             tag: orderTable,
           },
         });
+      } else {
+        orderWriteFields(info);
       }
       clearCart();
       flashLayoutNote(t("layout.orderPlaced"));
@@ -1613,6 +1634,9 @@ export function renderResultView(
     if (!shouldReplaceList(layoutKind, layoutSpec)) {
       appendResultSearchChrome(container, layoutSpec, "list", {
         ...opts,
+        primaryTable,
+        columns: parsed.columns,
+        comments,
         onOpenFilter: openLayoutFilter,
         filterActive,
         ...listSearchExtras,
@@ -1634,7 +1658,13 @@ export function renderResultView(
           layoutSpec.app !== "data" &&
           LAYOUT_PAGES_BY_APP[layoutSpec.app]?.includes("create")
         ) {
-          opts.onSelectAppPage?.("create");
+          openCreateFromListChrome(layoutSpec, {
+            onSelectLayoutSpec: opts.onSelectLayoutSpec,
+            onSelectAppPage: opts.onSelectAppPage,
+            primaryTable,
+            columns: parsed.columns,
+            comments,
+          });
           return;
         }
         const fromParent = opts.onOpenDetail?.({
@@ -1691,7 +1721,7 @@ export function renderResultView(
         onSearch: opts.onAppSearch,
         onOpenSearch: opts.onOpenAppSearch,
         onOpenScan: opts.onOpenAppScan,
-        onOpenCreate: () => opts.onSelectAppPage?.("create"),
+        onSelectLayoutSpec: opts.onSelectLayoutSpec,
         onOpenFilter: openLayoutFilter,
         filterActive,
         catalogStyle,
@@ -1786,6 +1816,9 @@ export function renderResultView(
   // Table | Grid | Charts (configured combo) | specific type (that type only)
   appendResultSearchChrome(container, layoutSpec, "list", {
     ...opts,
+    primaryTable,
+    columns: parsed.columns,
+    comments,
     onOpenFilter: openLayoutFilter,
     filterActive,
     ...listSearchExtras,
@@ -7216,23 +7249,18 @@ async function openFkDetail(
         opts.onRequestLayoutKind?.("order");
       },
       onLayoutCheckout: (info) => {
-        const orderTable = /order/i.test(opts.table) ? opts.table : "Order";
+        const orderTable = resolveCheckoutOrderTable(opts.table, opts.comments);
         if (opts.onWrite) {
           void opts.onWrite({
             method: "post",
             table: orderTable,
             body: {
-              [orderTable]: {
-                name: info.name,
-                phone: info.phone,
-                address: info.address,
-                remark: info.remark,
-                total: info.total,
-                items: JSON.stringify(info.lines),
-              },
+              [orderTable]: orderWriteFields(info),
               tag: orderTable,
             },
           });
+        } else {
+          orderWriteFields(info);
         }
         clearCart();
         flashLayoutNote(t("layout.orderPlaced"));
@@ -7347,14 +7375,7 @@ function renderDetailForm(
     filterActive?: boolean;
     onLayoutAddToCart?: () => void;
     onLayoutBuyNow?: () => void;
-    onLayoutCheckout?: (info: {
-      name: string;
-      phone: string;
-      address: string;
-      remark: string;
-      lines: { title: string; qty: number; price: number }[];
-      total: number;
-    }) => void;
+    onLayoutCheckout?: (info: LayoutCheckoutInfo) => void;
     onSelectAppPage?: (page: LayoutPage) => void;
   },
 ) {

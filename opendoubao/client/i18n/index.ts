@@ -88,7 +88,9 @@ void i18next.init({
   returnNull: false,
 });
 
-document.documentElement.lang = lng === "zh-CN" ? "zh-CN" : "en";
+if (typeof document !== "undefined") {
+  document.documentElement.lang = lng === "zh-CN" ? "zh-CN" : "en";
+}
 
 export const t = i18next.t.bind(i18next) as (
   key: MsgKey,

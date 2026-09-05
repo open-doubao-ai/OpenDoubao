@@ -22,16 +22,29 @@ import { renderMeSurface } from "./layout-me.js";
 import { fillChatBubble, mountChatComposer } from "./layout-chat.js";
 import { downloadOneMedia } from "./layout-media-library.js";
 import {
+  fetchRecordComments,
+  flattenComments,
   parseCommentsFromResponse,
+  resolveCommentQuery,
   type ActionRunContext,
   type ActionSlotResult,
+  type SocialComment,
 } from "./layout-actions.js";
+import {
+  FEED_COMMENT_PREVIEW_MAX,
+  mountCommentChrome,
+  paintRatingSummary,
+  renderCommentItems,
+  renderFeedCommentPreview,
+  shouldShowCommentRating,
+  type CommentChrome,
+} from "./layout-comments.js";
 import { isAddressTable, isOrderTable } from "./layout-entities.js";
 import {
-  idInList,
-  visitorId,
-  type SocialComment,
-} from "./layout-social.js";
+  hasLocalPurchase,
+  visitorHasPurchased,
+} from "./layout-purchase.js";
+import { idInList, visitorId } from "./layout-social.js";
 import { renderComposePage } from "./layout-compose.js";
 import type { WritePayload } from "./result-view.js";
 import type { ActionBinding, ActionSlot, LayoutNav, LayoutNavTab } from "./page-layout.js";
@@ -45,15 +58,20 @@ import {
   formatPrice,
   getCartLines,
   appFromKind,
+  createSpecForListData,
   isAddressPage,
   isArticleLikeApp,
   isCartOrOrder,
+  isCommentableApp,
   isDataLayout,
   isCheckoutPage,
   isExploreLayoutPage,
   isLocalLikeApp,
   isNewsLikeApp,
   isOrdersPage,
+  isPurchasableApp,
+  isRateableApp,
+  reviewRequiresPurchase,
   isMeHubPage,
   isProducerStudioPage,
   isSettingsPage,
@@ -95,6 +113,7 @@ export type LayoutListHandlers = {
   pager?: ListPagerOpts;
   onSelectPage?: (page: LayoutPage) => void;
   onSelectApp?: (app: LayoutApp) => void;
+  onSelectLayoutSpec?: (spec: LayoutSpec) => void;
   onRemapTab?: (slot: LayoutPage, spec: LayoutSpec) => void;
   onOpenProfile?: () => void;
   onOpenAuthor?: (userId: string | number) => void;
@@ -441,6 +460,25 @@ function listApp(opts: { kind: LayoutKind; spec?: LayoutSpec }): LayoutApp {
   return opts.spec?.app ?? appFromKind(opts.kind);
 }
 
+function openListCreate(opts: ListOpts) {
+  const spec = createSpecForListData({
+    currentApp: listApp(opts),
+    currentPage: opts.spec?.page,
+    table: opts.primaryTable,
+    columns: opts.columns,
+    comments: opts.comments,
+  });
+  if (opts.handlers.onSelectLayoutSpec) {
+    opts.handlers.onSelectLayoutSpec(spec);
+    return;
+  }
+  if (opts.handlers.onOpenCreate) {
+    opts.handlers.onOpenCreate();
+    return;
+  }
+  opts.handlers.onSelectPage?.(spec.page);
+}
+
 const TAB_ICON: Partial<Record<LayoutPage, string>> = {
   home: "⌂",
   feed: "☰",
@@ -630,9 +668,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onSearch: search,
         onOpenSearch: open,
         onOpenScan: opts.handlers.onOpenScan,
-        onOpenCreate:
-          opts.handlers.onOpenCreate ??
-          (() => opts.handlers.onSelectPage?.("create")),
+        onOpenCreate: () => openListCreate(opts),
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
         catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
@@ -702,9 +738,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onSearch: opts.handlers.onSearch,
         onOpenSearch: opts.handlers.onOpenSearch,
         onOpenScan: opts.handlers.onOpenScan,
-        onOpenCreate:
-          opts.handlers.onOpenCreate ??
-          (() => opts.handlers.onSelectPage?.("create")),
+        onOpenCreate: () => openListCreate(opts),
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
         catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
@@ -919,9 +953,18 @@ function feedPhotoLayoutClass(count: number): string {
   return "is-3x3";
 }
 
-function mountFeedPhotos(opts: ListOpts, row: FlatRow): HTMLElement | null {
+function mountFeedPhotos(
+  cells: Record<string, unknown>,
+  opts: {
+    primaryTable: string | null;
+    columns: string[];
+    comments?: SchemaComments | null;
+    columnMetas?: Record<string, ColumnMeta> | null;
+    apijsonBase: string;
+  },
+): HTMLElement | null {
   const urls = collectRowFeedPhotos(
-    row.cells,
+    cells,
     opts.primaryTable,
     opts.columns,
     opts.comments,
@@ -945,13 +988,50 @@ function mountFeedPhotos(opts: ListOpts, row: FlatRow): HTMLElement | null {
   return grid;
 }
 
+function attachFeedCommentPreview(
+  opts: ListOpts,
+  row: FlatRow,
+  card: HTMLElement,
+) {
+  const spec = resolveCommentQuery(opts.primaryTable, opts.comments);
+  const recordId = opts.recordId(row) ?? row.key;
+  if (!spec || recordId == null || !opts.apijsonBase) return;
+  void fetchRecordComments({
+    base: opts.apijsonBase,
+    spec,
+    recordId,
+    count: FEED_COMMENT_PREVIEW_MAX + 1,
+  }).then((items) => {
+    const hasMore = items.length > FEED_COMMENT_PREVIEW_MAX;
+    const shown = items.slice(0, FEED_COMMENT_PREVIEW_MAX);
+    if (!shown.length && !hasMore) return;
+    const host = el("div", "layout-feed-cmt-host");
+    renderFeedCommentPreview({
+      host,
+      items: shown,
+      hasMore,
+      onMore: () => opts.handlers.onOpenRow(row.key),
+      onOpenAuthor: opts.handlers.onOpenAuthor,
+    });
+    card.appendChild(host);
+  });
+}
+
 function renderSocialFeed(opts: ListOpts): HTMLElement {
   const feed = el("div", "layout-feed");
   for (const row of opts.rows) {
     const pres = rowPres(opts, row);
-    const card = el("button", "layout-feed-card");
-    card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    const card = el("div", "layout-feed-card");
+    card.setAttribute("role", "button");
+    card.tabIndex = 0;
+    const open = () => opts.handlers.onOpenRow(row.key);
+    card.onclick = open;
+    card.onkeydown = (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        open();
+      }
+    };
     const head = el("div", "layout-feed-head");
     head.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "layout-avatar", ""));
     const who = el("div", "layout-feed-who");
@@ -963,8 +1043,9 @@ function renderSocialFeed(opts: ListOpts): HTMLElement {
     card.appendChild(head);
     const text = pres.body || (pres.author ? pres.title : "");
     if (text) card.appendChild(el("div", "layout-feed-text", text));
-    const photos = mountFeedPhotos(opts, row);
+    const photos = mountFeedPhotos(row.cells, opts);
     if (photos) card.appendChild(photos);
+    attachFeedCommentPreview(opts, row, card);
     feed.appendChild(card);
   }
   return feed;
@@ -1213,11 +1294,17 @@ export function renderLayoutDetailHero(
   }
 
   const app = el("div", `layout-app app-${opts.kind}`);
+  if (isCommentableApp(opts.kind) || isCommentableApp(specApp)) {
+    app.classList.add("has-comment-dock");
+  }
   if (opts.kind === "video") renderYoutubeWatch(app, pres, related, opts);
   else if (opts.kind === "music") renderSpotifyPlayer(app, pres, related, opts);
   else if (opts.kind === "commerce") renderAmazonPdp(app, pres, related, opts);
   else if (opts.kind === "chat") renderWechatThread(app, pres, related, opts);
-  else if (opts.kind === "social") renderTikTokStage(app, pres, opts);
+  else if (opts.kind === "social") {
+    if (pres.videoUrl) renderTikTokStage(app, pres, opts);
+    else renderMomentDetail(app, pres, opts);
+  }
   else if (isNewsLikeApp(specApp) || isNewsLikeApp(opts.kind)) {
     renderNewsArticle(app, pres, related, opts);
   } else if (isArticleLikeApp(specApp) || isArticleLikeApp(opts.kind)) {
@@ -1305,37 +1392,137 @@ function askText(title: string, placeholder: string): Promise<string | null> {
   });
 }
 
-function renderCommentItems(
-  host: HTMLElement,
-  items: SocialComment[],
-  apijsonBase: string,
-  onOpenAuthor?: (id: string | number) => void,
+function detailApp(opts: { kind?: LayoutKind; spec?: LayoutSpec }): LayoutApp {
+  return opts.spec?.app ?? appFromKind(opts.kind ?? "data");
+}
+
+function detailRateable(opts: {
+  kind?: LayoutKind;
+  spec?: LayoutSpec;
+  comments?: SchemaComments | null;
+  price?: number | null;
+  hasBuy?: boolean;
+}): boolean {
+  const app = detailApp(opts);
+  if (shouldShowCommentRating(isRateableApp(app), opts.comments)) return true;
+  return Boolean(
+    opts.hasBuy &&
+      opts.price != null &&
+      Number.isFinite(opts.price) &&
+      opts.price > 0,
+  );
+}
+
+function bindPurchaseGate(
+  chrome: CommentChrome,
+  opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
+    table: string | null;
+    recordId: string | number | null;
+    price?: number | null;
+    hasBuy?: boolean;
+    apijsonBase: string;
+  },
 ) {
-  host.innerHTML = "";
-  if (!items.length) {
-    host.appendChild(el("div", "layout-meta", t("layout.commentsEmpty")));
+  const required = reviewRequiresPurchase({
+    app: detailApp(opts),
+    price: opts.price,
+    hasBuy: opts.hasBuy,
+  });
+  if (!required) {
+    chrome.setPurchaseLocked(false);
     return;
   }
-  for (const item of items) {
-    const row = el("div", "yt-c-item");
-    const av = thumb(item.head, apijsonBase, "yt-avatar", "");
-    av.classList.add("author-link");
-    if (item.userId != null) {
-      av.style.cursor = "pointer";
-      av.onclick = () => onOpenAuthor?.(item.userId!);
-    }
-    const body = el("div", "yt-c-body");
-    const name = el("button", "yt-c-name", item.name || t("layout.authorCard"));
-    name.type = "button";
-    if (item.userId != null) {
-      name.onclick = () => onOpenAuthor?.(item.userId!);
-    }
-    body.appendChild(name);
-    body.appendChild(el("div", "yt-c-text", item.content));
-    if (item.date) body.appendChild(el("div", "layout-meta", item.date));
-    row.append(av, body);
-    host.appendChild(row);
+  if (!opts.table || opts.recordId == null) {
+    chrome.setPurchaseLocked(true);
+    return;
   }
+  chrome.setPurchaseLocked(!hasLocalPurchase(opts.table, opts.recordId));
+  void visitorHasPurchased({
+    apijsonBase: opts.apijsonBase,
+    comments: opts.comments,
+    itemTable: opts.table,
+    itemId: opts.recordId,
+  }).then((ok) => chrome.setPurchaseLocked(!ok));
+}
+
+function makeCommentChrome(
+  host: HTMLElement,
+  view: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
+    apijsonBase: string;
+    primaryTable?: string | null;
+    recordId?: string | number | null;
+    handlers?: LayoutDetailHandlers;
+  },
+  extra?: {
+    insertBefore?: HTMLElement | null;
+    price?: number | null;
+    hasBuy?: boolean;
+    recordId?: string | number | null;
+  },
+): CommentChrome {
+  const hasBuy = extra?.hasBuy === true;
+  const required = reviewRequiresPurchase({
+    app: detailApp(view),
+    price: extra?.price,
+    hasBuy,
+  });
+  const onBuy = () => view.handlers?.onBuyNow?.();
+  const chrome = mountCommentChrome({
+    host,
+    apijsonBase: view.apijsonBase,
+    rateable: detailRateable({
+      ...view,
+      price: extra?.price,
+      hasBuy: extra?.hasBuy,
+    }),
+    insertBefore: extra?.insertBefore,
+    purchaseRequired: required,
+    onNeedPurchase: required ? onBuy : undefined,
+  });
+  bindPurchaseGate(chrome, {
+    kind: view.kind,
+    spec: view.spec,
+    comments: view.comments,
+    table: view.primaryTable ?? null,
+    recordId: extra?.recordId ?? view.recordId ?? null,
+    price: extra?.price,
+    hasBuy,
+    apijsonBase: view.apijsonBase,
+  });
+  return chrome;
+}
+
+function commentActionFields(
+  chrome: CommentChrome,
+  onBlocked?: () => void,
+) {
+  return {
+    commentList: chrome.list,
+    commentInput: chrome.input,
+    commentSend: chrome.send,
+    commentScore: chrome.getScore,
+    getReplyTo: () => chrome.getReplyTarget()?.id ?? null,
+    onReplyComment: (item: SocialComment) => {
+      if (item.id == null || item.id === "") return;
+      chrome.setReplyTarget({
+        id: item.id,
+        name: item.name || t("layout.authorCard"),
+      });
+    },
+    onCommentPosted: () => {
+      chrome.setScore(null);
+      chrome.setReplyTarget(null);
+    },
+    canComment: chrome.canComment,
+    onCommentBlocked: onBlocked,
+    showCommentScore: chrome.rateable,
+  };
 }
 
 function bindAuthorClicks(
@@ -1382,9 +1569,18 @@ type SocialMount = {
   commentList?: HTMLElement;
   commentInput?: HTMLInputElement | HTMLTextAreaElement;
   commentSend?: HTMLButtonElement;
+  commentScore?: () => number | null;
+  getReplyTo?: () => string | number | null;
+  onReplyComment?: (item: SocialComment) => void;
+  canComment?: () => boolean;
+  onCommentBlocked?: () => void;
+  onCommentPosted?: () => void;
+  onCommentsLoaded?: (items: SocialComment[]) => void;
   likeCountEl?: HTMLElement;
   collectCountEl?: HTMLElement;
   commentCountEl?: HTMLElement;
+  ratingSummaryEl?: HTMLElement;
+  showCommentScore?: boolean;
 };
 
 const PRAISE_LIST_FIELDS = [
@@ -1657,24 +1853,46 @@ function mountSocialActions(ctx: SocialMount) {
       items,
       ctx.apijsonBase,
       ctx.handlers.onOpenAuthor,
+      (item) => {
+        if (ctx.canComment && !ctx.canComment()) {
+          flashLayoutNote(t("layout.reviewNeedPurchase"));
+          ctx.onCommentBlocked?.();
+          return;
+        }
+        ctx.onReplyComment?.(item);
+      },
+      ctx.showCommentScore === true,
     );
     if (ctx.commentCountEl) {
-      ctx.commentCountEl.textContent = formatCount(items.length) || "0";
+      ctx.commentCountEl.textContent =
+        formatCount(flattenComments(items).length) || "0";
     }
+    if (ctx.showCommentScore) paintRatingSummary(ctx.ratingSummaryEl, items);
+    ctx.onCommentsLoaded?.(items);
   };
 
   if (ctx.commentSend && ctx.commentInput) {
     const send = async () => {
       const text = ctx.commentInput!.value.trim();
       if (!text) return;
+      if (ctx.canComment && !ctx.canComment()) {
+        flashLayoutNote(t("layout.reviewNeedPurchase"));
+        ctx.onCommentBlocked?.();
+        return;
+      }
       if (needVisitor() == null || ctx.recordId == null) return;
       const result = await runActionSlot(
         ctx.handlers,
         "comment",
-        recordContext(ctx, { input: text }),
+        recordContext(ctx, {
+          input: text,
+          score: ctx.commentScore?.() ?? undefined,
+          toId: ctx.getReplyTo?.() ?? undefined,
+        }),
       );
       if (!result.ok) return;
       ctx.commentInput!.value = "";
+      ctx.onCommentPosted?.();
       flashLayoutNote(t("layout.commentPosted"));
       await reloadComments(true);
     };
@@ -1727,6 +1945,9 @@ function renderYoutubeWatch(
   pres: RowPresentation,
   related: Array<{ pres: RowPresentation; id: string | number }>,
   opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
     apijsonBase: string;
     handlers: LayoutDetailHandlers;
     primaryTable?: string | null;
@@ -1809,20 +2030,9 @@ function renderYoutubeWatch(
   if (pres.body) desc.appendChild(el("div", "yt-desc-body", pres.body));
   main.appendChild(desc);
 
-  const comments = el("div", "yt-comments");
-  comments.appendChild(el("h3", "yt-h", t("layout.comments")));
-  const cRow = el("div", "yt-c-row");
-  cRow.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "yt-avatar", ""));
-  const cIn = document.createElement("input");
-  cIn.className = "yt-c-input";
-  cIn.placeholder = t("layout.commentHint");
-  const cSend = el("button", "yt-c-send", t("layout.sendComment"));
-  cSend.type = "button";
-  cRow.append(cIn, cSend);
-  comments.appendChild(cRow);
-  const cList = el("div", "yt-c-list");
-  comments.appendChild(cList);
-  main.appendChild(comments);
+  const chrome = makeCommentChrome(main, opts, {
+    recordId: opts.recordId ?? pres.id,
+  });
   mountSocialActions({
     pres,
     cells: opts.row?.cells,
@@ -1836,9 +2046,7 @@ function renderYoutubeWatch(
     dislikeBtn,
     followBtns: [subBtn],
     authorNodes: [avatar, authorName],
-    commentList: cList,
-    commentInput: cIn,
-    commentSend: cSend,
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
   });
   page.appendChild(main);
 
@@ -1872,6 +2080,9 @@ function renderSpotifyPlayer(
   pres: RowPresentation,
   related: Array<{ pres: RowPresentation; id: string | number; row?: FlatRow }>,
   opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
     apijsonBase: string;
     handlers: LayoutDetailHandlers;
     primaryTable?: string | null;
@@ -2195,6 +2406,10 @@ function renderSpotifyPlayer(
   barMid.append(ctrls, seekRow);
   bar.append(barLeft, barMid, lyricFsBtn, audio);
   page.appendChild(bar);
+  const chrome = makeCommentChrome(page, opts, {
+    insertBefore: bar,
+    recordId: opts.recordId ?? pres.id,
+  });
   app.appendChild(page);
   mountSocialActions({
     pres,
@@ -2207,6 +2422,7 @@ function renderSpotifyPlayer(
     collectBtns: [barHeart],
     followBtns: [],
     authorNodes: [],
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
   });
 }
 
@@ -2215,6 +2431,8 @@ function renderAmazonPdp(
   pres: RowPresentation,
   related: Array<{ pres: RowPresentation; id: string | number }>,
   opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
     apijsonBase: string;
     handlers: LayoutDetailHandlers;
     row?: FlatRow;
@@ -2222,6 +2440,7 @@ function renderAmazonPdp(
     comments?: SchemaComments | null;
     columnMetas?: Record<string, ColumnMeta> | null;
     primaryTable?: string | null;
+    recordId?: string | number | null;
   },
 ) {
   const page = el("div", "az-pdp");
@@ -2308,7 +2527,8 @@ function renderAmazonPdp(
   if (pres.author) {
     info.appendChild(el("div", "az-by", `${t("layout.authorCard")}: ${pres.author}`));
   }
-  info.appendChild(el("div", "az-stars", "★★★★☆"));
+  const starEl = el("div", "az-stars", t("layout.reviews"));
+  info.appendChild(starEl);
   const price = formatPrice(pres.price);
   if (price) info.appendChild(el("div", "az-price", price));
   const stockN = Number(pres.stock);
@@ -2375,7 +2595,24 @@ function renderAmazonPdp(
     tabs.appendChild(rec);
   }
   page.appendChild(tabs);
+  const chrome = makeCommentChrome(page, opts, {
+    price: pres.price,
+    hasBuy: true,
+    recordId: opts.recordId ?? pres.id,
+  });
   app.appendChild(page);
+  mountSocialActions({
+    pres,
+    cells: opts.row?.cells,
+    table: opts.primaryTable ?? null,
+    recordId: opts.recordId ?? pres.id,
+    apijsonBase: opts.apijsonBase,
+    handlers: opts.handlers,
+    followBtns: [],
+    authorNodes: [],
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
+    ratingSummaryEl: starEl,
+  });
 }
 
 function renderWechatThread(
@@ -2470,10 +2707,72 @@ function renderWechatThread(
   app.appendChild(page);
 }
 
+function renderMomentDetail(
+  app: HTMLElement,
+  pres: RowPresentation,
+  opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
+    columnMetas?: Record<string, ColumnMeta> | null;
+    columns?: string[];
+    apijsonBase: string;
+    handlers: LayoutDetailHandlers;
+    primaryTable?: string | null;
+    recordId?: string | number | null;
+    row?: FlatRow;
+  },
+) {
+  const page = el("div", "moment-detail");
+  const head = el("div", "layout-feed-head");
+  const avatar = thumb(pres.coverUrl, opts.apijsonBase, "layout-avatar", "");
+  head.appendChild(avatar);
+  const who = el("div", "layout-feed-who");
+  const authorName = el(
+    "div",
+    "layout-title",
+    pres.author || pres.title || (pres.id != null ? `#${pres.id}` : ""),
+  );
+  who.appendChild(authorName);
+  if (pres.date) who.appendChild(el("div", "layout-meta", pres.date));
+  head.appendChild(who);
+  page.appendChild(head);
+  const text = pres.body || (pres.author ? pres.title : "");
+  if (text) page.appendChild(el("div", "layout-feed-text", text));
+  const photos = opts.row
+    ? mountFeedPhotos(opts.row.cells, {
+        primaryTable: opts.primaryTable ?? null,
+        columns: opts.columns ?? Object.keys(opts.row.cells),
+        comments: opts.comments,
+        columnMetas: opts.columnMetas,
+        apijsonBase: opts.apijsonBase,
+      })
+    : null;
+  if (photos) page.appendChild(photos);
+  app.appendChild(page);
+  const chrome = makeCommentChrome(app, opts, {
+    recordId: opts.recordId ?? pres.id,
+  });
+  mountSocialActions({
+    pres,
+    cells: opts.row?.cells,
+    table: opts.primaryTable ?? null,
+    recordId: opts.recordId ?? pres.id,
+    apijsonBase: opts.apijsonBase,
+    handlers: opts.handlers,
+    followBtns: [],
+    authorNodes: [avatar, authorName],
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
+  });
+}
+
 function renderTikTokStage(
   app: HTMLElement,
   pres: RowPresentation,
   opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
     apijsonBase: string;
     handlers: LayoutDetailHandlers;
     primaryTable?: string | null;
@@ -2530,6 +2829,13 @@ function renderTikTokStage(
   rail.addEventListener("click", (ev) => ev.stopPropagation());
   stage.appendChild(rail);
   app.appendChild(stage);
+  const chrome = makeCommentChrome(app, opts, {
+    recordId: opts.recordId ?? pres.id,
+  });
+  commentAct.btn.onclick = () => {
+    chrome.section.scrollIntoView({ behavior: "smooth", block: "start" });
+    chrome.focus();
+  };
   mountSocialActions({
     pres,
     cells: opts.row?.cells,
@@ -2542,6 +2848,7 @@ function renderTikTokStage(
     shareBtn: shareAct.btn,
     followBtns: [avatar],
     authorNodes: [avatar],
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
     likeCountEl: likeAct.count,
     collectCountEl: saveAct.count,
     commentCountEl: commentAct.count,
@@ -2552,7 +2859,16 @@ function renderNewsArticle(
   app: HTMLElement,
   pres: RowPresentation,
   related: Array<{ pres: RowPresentation; id: string | number }>,
-  opts: { apijsonBase: string; handlers: LayoutDetailHandlers },
+  opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
+    apijsonBase: string;
+    handlers: LayoutDetailHandlers;
+    primaryTable?: string | null;
+    recordId?: string | number | null;
+    row?: FlatRow;
+  },
 ) {
   const page = el("div", "news-read");
   const main = el("div", "news-read-main");
@@ -2583,6 +2899,9 @@ function renderNewsArticle(
   const body = el("div", "news-body");
   fillRichBody(body, pres.body || pres.headline || "");
   main.appendChild(body);
+  const chrome = makeCommentChrome(main, opts, {
+    recordId: opts.recordId ?? pres.id,
+  });
   page.appendChild(main);
 
   const side = el("div", "news-side");
@@ -2602,6 +2921,17 @@ function renderNewsArticle(
   }
   page.appendChild(side);
   app.appendChild(page);
+  mountSocialActions({
+    pres,
+    cells: opts.row?.cells,
+    table: opts.primaryTable ?? null,
+    recordId: opts.recordId ?? pres.id,
+    apijsonBase: opts.apijsonBase,
+    handlers: opts.handlers,
+    followBtns: [],
+    authorNodes: [],
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
+  });
 }
 
 function renderJuejinArticle(
@@ -2609,6 +2939,9 @@ function renderJuejinArticle(
   pres: RowPresentation,
   related: Array<{ pres: RowPresentation; id: string | number }>,
   opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
     apijsonBase: string;
     handlers: LayoutDetailHandlers;
     primaryTable?: string | null;
@@ -2662,20 +2995,9 @@ function renderJuejinArticle(
   const body = el("div", "jj-body");
   fillRichBody(body, pres.body || pres.headline || "");
   article.appendChild(body);
-  const comments = el("div", "jj-comments");
-  comments.appendChild(el("h3", "jj-card-h", t("layout.comments")));
-  const cRow = el("div", "yt-c-row");
-  const cIn = document.createElement("textarea");
-  cIn.className = "yt-c-input jj-c-input";
-  cIn.placeholder = t("layout.commentHint");
-  cIn.rows = 3;
-  const cSend = el("button", "yt-c-send", t("layout.sendComment"));
-  cSend.type = "button";
-  cRow.append(cIn, cSend);
-  comments.appendChild(cRow);
-  const cList = el("div", "yt-c-list");
-  comments.appendChild(cList);
-  article.appendChild(comments);
+  const chrome = makeCommentChrome(article, opts, {
+    recordId: opts.recordId ?? pres.id,
+  });
   page.appendChild(article);
 
   const side = el("div", "jj-side");
@@ -2729,8 +3051,8 @@ function renderJuejinArticle(
   page.appendChild(side);
   app.appendChild(page);
   commentAct.btn.onclick = () => {
-    comments.scrollIntoView({ behavior: "smooth", block: "start" });
-    cIn.focus();
+    chrome.section.scrollIntoView({ behavior: "smooth", block: "start" });
+    chrome.focus();
   };
   mountSocialActions({
     pres,
@@ -2745,9 +3067,7 @@ function renderJuejinArticle(
     followBtns: [followTop, follow],
     messageBtns: [msg],
     authorNodes: [avatar, authorName, sideAv, sideName],
-    commentList: cList,
-    commentInput: cIn,
-    commentSend: cSend,
+    ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
     likeCountEl: likeAct.count,
     collectCountEl: starAct.count,
     commentCountEl: commentAct.count,
@@ -2757,7 +3077,16 @@ function renderJuejinArticle(
 function renderCampaignLanding(
   app: HTMLElement,
   pres: RowPresentation,
-  opts: { apijsonBase: string },
+  opts: {
+    kind?: LayoutKind;
+    spec?: LayoutSpec;
+    comments?: SchemaComments | null;
+    apijsonBase: string;
+    handlers?: LayoutDetailHandlers;
+    primaryTable?: string | null;
+    recordId?: string | number | null;
+    row?: FlatRow;
+  },
 ) {
   const page = el("div", "camp-page");
   page.appendChild(
@@ -2774,11 +3103,39 @@ function renderCampaignLanding(
     fillRichBody(box, pres.body);
     body.appendChild(box);
   }
-  const cta = el("button", "camp-cta", t("layout.signup"));
+  const purchasable = reviewRequiresPurchase({
+    app: detailApp(opts),
+    price: pres.price,
+    hasBuy: isPurchasableApp(detailApp(opts)),
+  });
+  const cta = el(
+    "button",
+    "camp-cta",
+    purchasable ? t("layout.buyNow") : t("layout.signup"),
+  );
   cta.type = "button";
+  cta.onclick = () => opts.handlers?.onBuyNow?.();
   body.appendChild(cta);
   page.appendChild(body);
+  const chrome = makeCommentChrome(page, opts, {
+    price: pres.price,
+    hasBuy: isPurchasableApp(detailApp(opts)),
+    recordId: opts.recordId ?? pres.id,
+  });
   app.appendChild(page);
+  if (opts.handlers) {
+    mountSocialActions({
+      pres,
+      cells: opts.row?.cells,
+      table: opts.primaryTable ?? null,
+      recordId: opts.recordId ?? pres.id,
+      apijsonBase: opts.apijsonBase,
+      handlers: opts.handlers,
+      followBtns: [],
+      authorNodes: [],
+      ...commentActionFields(chrome, () => opts.handlers?.onBuyNow?.()),
+    });
+  }
 }
 
 function cartOptsFromList(opts: ListOpts) {
