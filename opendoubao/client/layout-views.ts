@@ -39,6 +39,22 @@ import {
   shouldShowCommentRating,
   type CommentChrome,
 } from "./layout-comments.js";
+import {
+  beginAddressPick,
+  bindAddressSuggest,
+  bindConsigneeSuggest,
+  checkoutAddressFromRow,
+  clearAddressPick,
+  formatAddressLine,
+  getCheckoutAddress,
+  isAddressPickMode,
+  openMapAddressPicker,
+  parseShippingText,
+  preferConsigneeParty,
+  setCheckoutAddress,
+  type CheckoutAddress,
+  type ParsedShippingParty,
+} from "./layout-address.js";
 import { isAddressTable, isOrderTable } from "./layout-entities.js";
 import {
   hasLocalPurchase,
@@ -59,7 +75,6 @@ import {
   getCartLines,
   appFromKind,
   createSpecForListData,
-  isAddressPage,
   isArticleLikeApp,
   isCartOrOrder,
   isCommentableApp,
@@ -139,6 +154,7 @@ export type LayoutDetailHandlers = {
   onBuyNow?: () => void;
   onCheckout?: (info: LayoutCheckoutInfo) => void;
   onOpenCheckout?: () => void;
+  onSelectPage?: (page: LayoutPage) => void;
   onOpenRelated?: (id: string | number, table?: string) => void;
   onOpenChat?: (userId: string | number) => void;
   onOpenFkList?: (info: {
@@ -758,6 +774,30 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
     wrap.appendChild(renderOrderList(opts));
     return finishLayoutList(container, wrap, opts);
   }
+  if (page === "addressDetail") {
+    const known = opts.rows.map((row) =>
+      checkoutAddressFromRow(row.cells, opts.primaryTable, opts.recordId(row)),
+    );
+    wrap.appendChild(
+      renderAddressEditor({
+        mode: "create",
+        table: opts.primaryTable,
+        comments: opts.comments,
+        knownAddresses: known,
+        onWrite: opts.handlers.onWrite,
+        onDone: (toCheckout) => {
+          if (toCheckout) {
+            opts.handlers.onOpenCheckout?.();
+            opts.handlers.onSelectPage?.("order");
+            return;
+          }
+          opts.handlers.onSelectPage?.("address");
+        },
+        onSelectPage: opts.handlers.onSelectPage,
+      }),
+    );
+    return finishLayoutList(container, wrap, opts);
+  }
   if (page === "address" || isAddressTable(opts.primaryTable, opts.comments)) {
     wrap.appendChild(renderAddressList(opts));
     return finishLayoutList(container, wrap, opts);
@@ -777,6 +817,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
       renderOrderPanel({
         ...cartOptsFromList(opts),
         checkoutHandler: (info) => opts.handlers.onCheckout?.(info),
+        onSelectPage: opts.handlers.onSelectPage,
       }),
     );
     return finishLayoutList(container, wrap, opts);
@@ -1271,10 +1312,39 @@ export function renderLayoutDetailHero(
     return;
   }
   if (
-    isAddressPage(specPage) ||
+    specPage === "addressDetail" ||
     isAddressTable(opts.primaryTable, opts.comments)
   ) {
-    host.appendChild(renderAddressDetail(opts));
+    const known = (relatedPack?.rows || []).map((row) =>
+      checkoutAddressFromRow(
+        row.cells,
+        relatedPack?.table ?? opts.primaryTable,
+        relatedPack?.recordId(row) ?? null,
+      ),
+    );
+    host.appendChild(
+      renderAddressEditor({
+        mode: "edit",
+        table: opts.primaryTable,
+        row: opts.row,
+        columns: opts.columns,
+        comments: opts.comments,
+        columnMetas: opts.columnMetas,
+        recordId: opts.recordId,
+        knownAddresses: known,
+        onWrite: opts.handlers.onWrite,
+        onDone: (toCheckout) => {
+          if (toCheckout) {
+            opts.handlers.onOpenCheckout?.();
+            opts.handlers.onSelectPage?.("order");
+            return;
+          }
+          opts.handlers.onSelectPage?.("address");
+          opts.handlers.onBack?.();
+        },
+        onSelectPage: opts.handlers.onSelectPage,
+      }),
+    );
     return;
   }
   if (opts.kind === "order" || isCheckoutPage(specPage)) {
@@ -1288,6 +1358,7 @@ export function renderLayoutDetailHero(
         apijsonBase: opts.apijsonBase,
         recordId: () => opts.recordId ?? null,
         checkoutHandler: opts.handlers.onCheckout,
+        onSelectPage: opts.handlers.onSelectPage,
       }),
     );
     return;
@@ -3223,11 +3294,32 @@ function renderOrderList(opts: ListOpts): HTMLElement {
 
 function renderAddressList(opts: ListOpts): HTMLElement {
   const page = el("div", "ex-page az-addresses");
-  page.appendChild(el("h2", "ex-title", t("layout.page.address")));
+  const headBar = el("div", "az-addr-toolbar");
+  headBar.appendChild(el("h2", "ex-title", t("layout.consigneeBook")));
+  const add = el("button", "az-btn az-btn-buy", t("layout.addressAdd"));
+  add.type = "button";
+  add.onclick = () => {
+    if (opts.handlers.onSelectLayoutSpec) {
+      opts.handlers.onSelectLayoutSpec({
+        app: listApp(opts),
+        page: "addressDetail",
+      });
+    } else {
+      opts.handlers.onSelectPage?.("addressDetail");
+    }
+  };
+  headBar.appendChild(add);
+  page.appendChild(headBar);
+
+  if (isAddressPickMode()) {
+    page.appendChild(el("div", "layout-meta", t("layout.addressPickHint")));
+  }
+
   if (!opts.rows.length) {
     page.appendChild(el("div", "result-empty", t("layout.addressEmpty")));
     return page;
   }
+
   const list = el("div", "az-addr-list");
   for (const row of opts.rows) {
     const pres = present(row, {
@@ -3237,27 +3329,79 @@ function renderAddressList(opts: ListOpts): HTMLElement {
       metas: opts.columnMetas,
       recordId: opts.recordId(row),
     });
-    const def = String(
-      row.cells[`${opts.primaryTable}.isDefault`] ?? row.cells.isDefault ?? "",
+    const addr = checkoutAddressFromRow(
+      row.cells,
+      opts.primaryTable,
+      opts.recordId(row),
     );
-    const card = el("button", "az-addr-card");
-    card.type = "button";
-    card.onclick = () => {
+    const card = el("div", "az-addr-card");
+    const main = el("button", "az-addr-main");
+    main.type = "button";
+    main.onclick = () => {
+      if (isAddressPickMode()) {
+        setCheckoutAddress(addr);
+        clearAddressPick();
+        opts.handlers.onOpenCheckout?.();
+        opts.handlers.onSelectPage?.("order");
+        return;
+      }
       opts.handlers.onSelectPage?.("addressDetail");
       opts.handlers.onOpenRow(row.key);
     };
-    const head = el("div", "az-addr-head");
-    head.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
-    if (pres.phone) head.appendChild(el("div", "layout-meta", pres.phone));
-    if (def === "1" || def === "true") {
-      head.appendChild(el("span", "az-addr-default", t("layout.defaultAddress")));
+    const top = el("div", "az-addr-head");
+    top.appendChild(
+      el("div", "layout-title", addr.consignee || pres.title || `#${row.key}`),
+    );
+    if (addr.phone) top.appendChild(el("div", "layout-meta", addr.phone));
+    if (addr.isDefault) {
+      top.appendChild(el("span", "az-addr-default", t("layout.defaultAddress")));
     }
-    card.appendChild(head);
-    const region = String(
-      row.cells[`${opts.primaryTable}.region`] ?? row.cells.region ?? "",
-    ).trim();
-    const line = [region, pres.body].filter(Boolean).join(" ");
-    if (line) card.appendChild(el("div", "layout-meta", line));
+    if (addr.tag) top.appendChild(el("span", "az-addr-tag", addr.tag));
+    main.appendChild(top);
+    const line = formatAddressLine(addr);
+    if (line) main.appendChild(el("div", "layout-meta", line));
+    card.appendChild(main);
+
+    const tools = el("div", "az-addr-tools");
+    const edit = el("button", "layout-btn", t("common.edit"));
+    edit.type = "button";
+    edit.onclick = () => {
+      opts.handlers.onSelectPage?.("addressDetail");
+      opts.handlers.onOpenRow(row.key);
+    };
+    tools.appendChild(edit);
+    const del = el("button", "layout-btn layout-btn-danger", t("common.delete"));
+    del.type = "button";
+    del.onclick = () => {
+      const id = opts.recordId(row);
+      const table = (opts.primaryTable || "Address").trim() || "Address";
+      if (id == null || !opts.handlers.onWrite) return;
+      if (!confirm(t("layout.compose.confirmDelete"))) return;
+      void Promise.resolve(
+        opts.handlers.onWrite({
+          method: "delete",
+          table,
+          body: { [table]: { id }, tag: table },
+        }),
+      ).then((ok) => {
+        if (ok === false) return;
+        flashLayoutNote(t("layout.addressDeleted"));
+        card.remove();
+      });
+    };
+    tools.appendChild(del);
+    if (isAddressPickMode()) {
+      const use = el("button", "az-btn az-btn-buy", t("layout.addressUse"));
+      use.type = "button";
+      use.onclick = () => {
+        setCheckoutAddress(addr);
+        clearAddressPick();
+        opts.handlers.onOpenCheckout?.();
+        opts.handlers.onSelectPage?.("order");
+      };
+      tools.appendChild(use);
+    }
+    card.appendChild(tools);
     list.appendChild(card);
   }
   page.appendChild(list);
@@ -3295,29 +3439,272 @@ function renderOrderReceipt(opts: {
   return page;
 }
 
-function renderAddressDetail(opts: {
-  row: FlatRow;
-  columns: string[];
-  primaryTable: string | null;
+function roleTag(party: ParsedShippingParty): string {
+  if (party.role === "sender") return t("layout.shippingRole.sender");
+  if (party.role === "courier") return t("layout.shippingRole.courier");
+  if (party.role === "pickup") return t("layout.shippingRole.pickup");
+  if (party.role === "consignee") return t("layout.shippingRole.consignee");
+  return party.roleLabel || "";
+}
+
+function renderAddressEditor(opts: {
+  mode: "create" | "edit";
+  table: string | null;
+  row?: FlatRow;
+  columns?: string[];
   comments?: SchemaComments | null;
   columnMetas?: Record<string, ColumnMeta> | null;
   recordId?: string | number | null;
+  knownAddresses?: CheckoutAddress[];
+  onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
+  onDone?: (toCheckout?: boolean) => void;
+  onSelectPage?: (page: LayoutPage) => void;
 }): HTMLElement {
-  const pres = present(opts.row, {
-    table: opts.primaryTable,
-    columns: opts.columns,
-    comments: opts.comments,
-    metas: opts.columnMetas,
-    recordId: opts.recordId,
+  const table = (opts.table || "Address").trim() || "Address";
+  const initial: CheckoutAddress = opts.row
+    ? checkoutAddressFromRow(opts.row.cells, table, opts.recordId)
+    : { consignee: "", phone: "", region: "", address: "" };
+  const known = opts.knownAddresses?.length
+    ? opts.knownAddresses
+    : initial.consignee
+      ? [initial]
+      : [];
+
+  const page = el("div", "ex-page az-addr-edit");
+  page.appendChild(
+    el(
+      "h2",
+      "ex-title",
+      opts.mode === "create" ? t("layout.addressAdd") : t("layout.page.addressDetail"),
+    ),
+  );
+
+  const form = el("div", "layout-order-form az-addr-form");
+
+  const pasteLab = el("label", "layout-field az-addr-paste");
+  pasteLab.appendChild(el("span", "", t("layout.addressPaste")));
+  const paste = document.createElement("textarea");
+  paste.className = "layout-input";
+  paste.rows = 3;
+  paste.placeholder = t("layout.addressPasteHint");
+  pasteLab.appendChild(paste);
+  const parseRow = el("div", "az-addr-parse-row");
+  const parseBtn = el("button", "az-btn az-btn-buy", t("layout.addressParse"));
+  parseBtn.type = "button";
+  parseRow.appendChild(parseBtn);
+  const partyHost = el("div", "az-addr-parties");
+  parseRow.appendChild(partyHost);
+  pasteLab.appendChild(parseRow);
+  form.appendChild(pasteLab);
+
+  const field = (
+    key: string,
+    label: string,
+    value: string,
+    multiline = false,
+  ) => {
+    const lab = el("label", "layout-field");
+    lab.appendChild(el("span", "", label));
+    const input = multiline
+      ? document.createElement("textarea")
+      : document.createElement("input");
+    input.className = "layout-input";
+    if (!multiline) (input as HTMLInputElement).type = "text";
+    input.dataset.key = key;
+    input.value = value;
+    lab.appendChild(input);
+    form.appendChild(lab);
+    return input;
+  };
+
+  const name = field("consignee", t("layout.consignee"), initial.consignee);
+  const phone = field("phone", t("layout.phone"), initial.phone);
+  const region = field("region", t("layout.addressRegion"), initial.region);
+  const address = field("address", t("layout.address"), initial.address, true);
+  const tag = field("tag", t("layout.addressTag"), initial.tag || "");
+
+  const applyParty = (party: ParsedShippingParty) => {
+    if (party.consignee) (name as HTMLInputElement).value = party.consignee;
+    if (party.phone) (phone as HTMLInputElement).value = party.phone;
+    if (party.region) (region as HTMLInputElement).value = party.region;
+    if (party.address) (address as HTMLTextAreaElement).value = party.address;
+    const role = roleTag(party);
+    if (role) (tag as HTMLInputElement).value = role;
+  };
+
+  const paintParties = (parties: ParsedShippingParty[]) => {
+    partyHost.innerHTML = "";
+    if (parties.length <= 1) return;
+    for (const party of parties) {
+      const label =
+        roleTag(party) ||
+        party.consignee ||
+        party.phone ||
+        t("layout.shippingRole.unknown");
+      const btn = el(
+        "button",
+        "az-addr-party",
+        `${label}${party.consignee ? ` · ${party.consignee}` : ""}`,
+      );
+      btn.type = "button";
+      btn.onclick = () => applyParty(party);
+      partyHost.appendChild(btn);
+    }
+  };
+
+  parseBtn.onclick = () => {
+    const parties = parseShippingText(paste.value);
+    if (!parties.length) {
+      flashLayoutNote(t("layout.addressParseEmpty"));
+      return;
+    }
+    const preferred = preferConsigneeParty(parties)!;
+    applyParty(preferred);
+    paintParties(parties);
+    flashLayoutNote(
+      t("layout.addressParseOk", { n: String(parties.length) }),
+    );
+  };
+
+  const defLab = el("label", "layout-field az-addr-default-row");
+  const def = document.createElement("input");
+  def.type = "checkbox";
+  def.checked = !!initial.isDefault;
+  defLab.append(def, document.createTextNode(` ${t("layout.defaultAddress")}`));
+  form.appendChild(defLab);
+
+  bindConsigneeSuggest(name as HTMLInputElement, {
+    known,
+    onPick: (addr) => {
+      (name as HTMLInputElement).value = addr.consignee;
+      if (addr.phone) (phone as HTMLInputElement).value = addr.phone;
+      if (addr.region) (region as HTMLInputElement).value = addr.region;
+      if (addr.address) (address as HTMLTextAreaElement).value = addr.address;
+      if (addr.tag) (tag as HTMLInputElement).value = addr.tag;
+    },
   });
-  const page = el("div", "ex-page az-addr-detail");
-  page.appendChild(el("h2", "ex-title", t("layout.page.addressDetail")));
-  const card = el("div", "az-addr-card is-static");
-  card.appendChild(el("div", "layout-title", pres.title || t("layout.page.address")));
-  if (pres.phone) card.appendChild(el("div", "layout-meta", pres.phone));
-  const line = [pres.headline || "", pres.body].filter(Boolean).join(" ");
-  if (line) card.appendChild(el("div", "layout-meta", line));
-  page.appendChild(card);
+
+  const addrWrap = address.parentElement;
+  if (addrWrap) addrWrap.classList.add("az-addr-suggest-host");
+  bindAddressSuggest(address, {
+    regionInput: region,
+    onPick: (place) => {
+      if (place.region) region.value = place.region;
+      address.value = place.address || place.label;
+    },
+  });
+
+  const mapBtn = el("button", "layout-btn", t("layout.addressMapPick"));
+  mapBtn.type = "button";
+  mapBtn.onclick = () => {
+    openMapAddressPicker({
+      initialQuery:
+        [region.value, address.value].filter(Boolean).join(" ") || address.value,
+      onPick: (place) => {
+        if (place.region) region.value = place.region;
+        address.value = place.address || place.label;
+      },
+    });
+  };
+  form.appendChild(mapBtn);
+
+  const save = el("button", "az-btn az-btn-buy", t("layout.compose.save"));
+  save.type = "button";
+  save.onclick = () => {
+    const consignee = (name as HTMLInputElement).value.trim();
+    const phoneVal = (phone as HTMLInputElement).value.trim();
+    const regionVal = (region as HTMLInputElement).value.trim();
+    const addressVal = (address as HTMLTextAreaElement).value.trim();
+    if (!consignee || !phoneVal || !addressVal) {
+      flashLayoutNote(t("layout.addressNeedFields"));
+      return;
+    }
+    const fields: Record<string, unknown> = {
+      consignee,
+      phone: phoneVal,
+      region: regionVal,
+      address: addressVal,
+      tag: (tag as HTMLInputElement).value.trim() || null,
+      isDefault: def.checked ? 1 : 0,
+    };
+    const me = visitorId();
+    if (opts.mode === "create" && me != null) fields.userId = me;
+
+    const recordId = opts.recordId ?? initial.id;
+    const method = opts.mode === "edit" && recordId != null ? "put" : "post";
+    if (method === "put") fields.id = recordId;
+
+    const done = (toCheckout: boolean) => {
+      const picked: CheckoutAddress = {
+        id: recordId,
+        consignee,
+        phone: phoneVal,
+        region: regionVal,
+        address: addressVal,
+        tag: (tag as HTMLInputElement).value.trim() || undefined,
+        isDefault: def.checked,
+      };
+      if (toCheckout) {
+        setCheckoutAddress(picked);
+        clearAddressPick();
+      } else if (opts.mode === "create") {
+        setCheckoutAddress(picked);
+      }
+      flashLayoutNote(
+        opts.mode === "create"
+          ? t("layout.addressSaved")
+          : t("layout.compose.saved"),
+      );
+      opts.onDone?.(toCheckout);
+    };
+
+    const toCheckout = isAddressPickMode();
+    if (!opts.onWrite) {
+      done(toCheckout);
+      return;
+    }
+    void Promise.resolve(
+      opts.onWrite({
+        method,
+        table,
+        body: { [table]: fields, tag: table },
+      }),
+    ).then((ok) => {
+      if (ok === false) return;
+      done(toCheckout);
+    });
+  };
+  form.appendChild(save);
+
+  if (opts.mode === "edit" && (opts.recordId ?? initial.id) != null) {
+    const del = el("button", "layout-btn layout-btn-danger", t("common.delete"));
+    del.type = "button";
+    del.onclick = () => {
+      const id = opts.recordId ?? initial.id;
+      if (id == null || !opts.onWrite) return;
+      if (!confirm(t("layout.compose.confirmDelete"))) return;
+      void Promise.resolve(
+        opts.onWrite({
+          method: "delete",
+          table,
+          body: { [table]: { id }, tag: table },
+        }),
+      ).then((ok) => {
+        if (ok === false) return;
+        flashLayoutNote(t("layout.addressDeleted"));
+        opts.onSelectPage?.("address");
+        opts.onDone?.(false);
+      });
+    };
+    form.appendChild(del);
+  }
+
+  const back = el("button", "layout-btn", t("common.back"));
+  back.type = "button";
+  back.onclick = () => opts.onSelectPage?.("address");
+  form.appendChild(back);
+
+  page.appendChild(form);
   return page;
 }
 
@@ -3395,6 +3782,7 @@ function renderOrderPanel(opts: {
   apijsonBase: string;
   recordId: (row: FlatRow) => string | number | null;
   checkoutHandler?: (info: LayoutCheckoutInfo) => void;
+  onSelectPage?: (page: LayoutPage) => void;
 }): HTMLElement {
   const panel = el("div", "layout-order az-order");
   panel.appendChild(el("h2", "layout-title", t("layout.order")));
@@ -3416,23 +3804,47 @@ function renderOrderPanel(opts: {
   panel.appendChild(summary);
 
   const form = el("div", "layout-order-form");
-  const field = (key: string, label: string, multiline = false) => {
-    const lab = el("label", "layout-field");
-    lab.appendChild(el("span", "", label));
-    const input = multiline
-      ? document.createElement("textarea")
-      : document.createElement("input");
-    input.className = "layout-input";
-    if (!multiline) (input as HTMLInputElement).type = "text";
-    input.dataset.key = key;
-    lab.appendChild(input);
-    form.appendChild(lab);
-    return input;
+  const selected = getCheckoutAddress();
+
+  const addrLab = el("label", "layout-field");
+  addrLab.appendChild(el("span", "", t("layout.consignee")));
+  const addrBtn = el("button", "az-addr-pick");
+  addrBtn.type = "button";
+  const paintAddr = () => {
+    const cur = getCheckoutAddress();
+    addrBtn.innerHTML = "";
+    if (!cur) {
+      addrBtn.appendChild(
+        el("div", "az-addr-pick-empty", t("layout.addressSelect")),
+      );
+      return;
+    }
+    addrBtn.appendChild(
+      el(
+        "div",
+        "layout-title",
+        [cur.consignee, cur.phone].filter(Boolean).join(" · "),
+      ),
+    );
+    const line = formatAddressLine(cur);
+    if (line) addrBtn.appendChild(el("div", "layout-meta", line));
+    if (cur.tag) addrBtn.appendChild(el("span", "az-addr-tag", cur.tag));
   };
-  const name = field("name", t("layout.consignee"));
-  const phone = field("phone", t("layout.phone"));
-  const address = field("address", t("layout.address"), true);
-  const remark = field("remark", t("layout.remark"), true);
+  paintAddr();
+  addrBtn.onclick = () => {
+    beginAddressPick();
+    opts.onSelectPage?.("address");
+  };
+  addrLab.appendChild(addrBtn);
+  form.appendChild(addrLab);
+
+  const remarkLab = el("label", "layout-field");
+  remarkLab.appendChild(el("span", "", t("layout.remark")));
+  const remark = document.createElement("textarea");
+  remark.className = "layout-input";
+  remark.dataset.key = "remark";
+  remarkLab.appendChild(remark);
+  form.appendChild(remarkLab);
 
   const total = getCartLines().length
     ? cartTotal()
@@ -3442,11 +3854,18 @@ function renderOrderPanel(opts: {
   const submit = el("button", "az-btn az-btn-buy", t("layout.placeOrder"));
   submit.type = "button";
   submit.onclick = () => {
+    const cur = getCheckoutAddress() || selected;
+    if (!cur?.consignee || !cur.phone || !cur.address) {
+      flashLayoutNote(t("layout.addressSelectFirst"));
+      beginAddressPick();
+      opts.onSelectPage?.("address");
+      return;
+    }
     opts.checkoutHandler?.({
-      name: (name as HTMLInputElement).value.trim(),
-      phone: (phone as HTMLInputElement).value.trim(),
-      address: (address as HTMLTextAreaElement).value.trim(),
-      remark: (remark as HTMLTextAreaElement).value.trim(),
+      name: cur.consignee,
+      phone: cur.phone,
+      address: formatAddressLine(cur) || cur.address,
+      remark: remark.value.trim(),
       lines,
       total,
     });

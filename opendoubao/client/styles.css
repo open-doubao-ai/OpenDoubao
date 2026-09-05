@@ -8985,6 +8985,50 @@ button.up-wx-cell:hover .up-wx-cell-go {
   gap: 10px;
 }
 
+.az-addr-paste textarea.layout-input {
+  min-height: 72px;
+}
+
+.az-addr-parse-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.az-addr-parties {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.az-addr-party {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.az-addr-party:hover {
+  border-color: var(--accent);
+}
+
+.az-addr-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.az-addr-toolbar .ex-title {
+  margin: 0;
+}
+
 .az-order-card,
 .az-addr-card {
   display: flex;
@@ -8998,6 +9042,154 @@ button.up-wx-cell:hover .up-wx-cell-go {
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.az-addr-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.az-addr-tools {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.az-addr-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.az-addr-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.az-addr-pick-empty {
+  color: var(--muted);
+}
+
+.az-addr-suggest-host {
+  position: relative;
+}
+
+.az-geo-suggest {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 12%, transparent);
+}
+
+.az-geo-suggest-item,
+.az-map-pick-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+
+.az-geo-suggest-item:hover,
+.az-map-pick-item:hover,
+.az-map-pick-item.is-on {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.az-map-pick {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+
+.az-map-pick-panel {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.az-map-pick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.az-map-pick-title {
+  font-weight: 600;
+}
+
+.az-map-pick-search {
+  display: flex;
+  gap: 8px;
+}
+
+.az-map-pick-frame {
+  width: 100%;
+  height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-2) 80%, #ddd);
+}
+
+.az-map-pick-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.az-addr-form .az-btn,
+.az-addr-form .layout-btn {
+  margin-top: 4px;
 }
 
 .az-order-card:hover,

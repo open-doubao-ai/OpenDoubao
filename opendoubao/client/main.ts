@@ -4484,7 +4484,11 @@ function layoutReusesCurrentRows(page: LayoutPage): boolean {
     isUserLayoutPage(page) ||
     page === "cart" ||
     page === "order" ||
-    page === "create"
+    page === "create" ||
+    page === "orders" ||
+    page === "orderDetail" ||
+    page === "address" ||
+    page === "addressDetail"
   );
 }
 

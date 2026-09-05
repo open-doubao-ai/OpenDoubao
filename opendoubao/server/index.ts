@@ -379,6 +379,36 @@ app.post("/api/ensure-layout-address", async (c) => {
   }
 });
 
+app.get("/api/geo/search", async (c) => {
+  try {
+    const { searchPlaces } = await import("./geo.js");
+    const q = String(c.req.query("q") || "");
+    const limit = Number(c.req.query("limit") || 6);
+    const places = await searchPlaces(q, Number.isFinite(limit) ? limit : 6);
+    return c.json({ ok: true, places });
+  } catch (e) {
+    return c.json(
+      { ok: false, places: [], error: e instanceof Error ? e.message : String(e) },
+      500,
+    );
+  }
+});
+
+app.get("/api/geo/reverse", async (c) => {
+  try {
+    const { reversePlace } = await import("./geo.js");
+    const lat = Number(c.req.query("lat"));
+    const lng = Number(c.req.query("lng"));
+    const place = await reversePlace(lat, lng);
+    return c.json({ ok: true, place });
+  } catch (e) {
+    return c.json(
+      { ok: false, place: null, error: e instanceof Error ? e.message : String(e) },
+      500,
+    );
+  }
+});
+
 app.post("/api/ensure-layout-pages", async (c) => {
   try {
     const result = await ensureLayoutPages(orch.client);

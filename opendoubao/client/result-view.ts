@@ -1589,6 +1589,7 @@ export function renderResultView(
         onRequestLayoutKind: opts.onRequestLayoutKind,
         onAppSearch: opts.onAppSearch,
         onOpenAppSearch: opts.onOpenAppSearch,
+        onSelectAppPage: opts.onSelectAppPage,
         fkExpand: opts.fkExpand,
       });
     }
@@ -7490,7 +7491,8 @@ function renderDetailForm(
         onAddToCart: opts.onLayoutAddToCart,
         onBuyNow: opts.onLayoutBuyNow,
         onCheckout: opts.onLayoutCheckout,
-        onOpenCheckout: opts.onLayoutBuyNow,
+        onOpenCheckout: () => opts.onSelectAppPage?.("order"),
+        onSelectPage: opts.onSelectAppPage,
         onWrite: writeFn,
         onEditRecord: (info) => {
           beginComposeEdit({
