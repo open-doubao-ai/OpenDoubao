@@ -1,6 +1,6 @@
 /**
  * List/grid toggle, PC pager, and mobile pull-to-refresh / load-more
- * for catalog pages (left of search: filter · toggle · scan · pager).
+ * for catalog pages (left of search: filter · toggle · scan · create · pager).
  */
 
 import { t } from "./i18n/index.js";

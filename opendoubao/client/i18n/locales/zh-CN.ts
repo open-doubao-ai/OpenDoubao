@@ -543,6 +543,7 @@ export const zhCN: TranslationSchema = {
       max: "最高",
     },
     catalog: {
+      add: "新增",
       toList: "切换为列表",
       toGrid: "切换为网格",
     },
@@ -751,6 +752,7 @@ export const zhCN: TranslationSchema = {
       uploadFailed: "上传失败",
       pickCover: "封面图",
       pickImages: "添加图片",
+      photoCount: "{{n}} / {{max}}",
       pickPages: "上传分页",
       pickVideo: "上传视频",
       pickAudio: "上传音频",

@@ -1976,6 +1976,26 @@ export function isCatalogListPage(page: LayoutPage | null | undefined): boolean 
   );
 }
 
+/** toC content lists (home / list / feed / 分类 / 排行 / 搜索…) — not users / orders / address. */
+export function isConsumerCreateListPage(
+  page: LayoutPage | null | undefined,
+): boolean {
+  return page === "home" || page === "list" || page === "feed" || isExploreListPage(page);
+}
+
+/** Scan-row 新增: toC catalog lists that have an app compose page. */
+export function shouldShowListCreate(
+  app: LayoutApp | undefined,
+  page: LayoutPage | undefined,
+  surface: "list" | "detail" = "list",
+): boolean {
+  if (surface !== "list") return false;
+  if (!app || app === "data") return false;
+  if (!LAYOUT_PAGES_BY_APP[app].includes("create")) return false;
+  if (!page) return true;
+  return isConsumerCreateListPage(page);
+}
+
 const TITLE_COLS = [
   "title",
   "name",

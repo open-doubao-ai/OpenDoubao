@@ -13,7 +13,10 @@ import {
 } from "./layout-explore.js";
 import type { CatalogStyle, ListPagerOpts } from "./layout-list-chrome.js";
 import { mountHomeChrome, shouldShowHomeChrome } from "./layout-home.js";
-import { collectRowImageUrls } from "./smart-image-fields.js";
+import {
+  collectRowFeedPhotos,
+  collectRowImageUrls,
+} from "./smart-image-fields.js";
 import { renderUserList, renderUserProfile } from "./layout-users.js";
 import { renderMeSurface } from "./layout-me.js";
 import { fillChatBubble, mountChatComposer } from "./layout-chat.js";
@@ -84,6 +87,7 @@ export type LayoutListHandlers = {
   onSearch?: (q: string) => void;
   onOpenSearch?: (q: string) => void;
   onOpenScan?: () => void;
+  onOpenCreate?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
   catalogStyle?: CatalogStyle;
@@ -626,6 +630,9 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onSearch: search,
         onOpenSearch: open,
         onOpenScan: opts.handlers.onOpenScan,
+        onOpenCreate:
+          opts.handlers.onOpenCreate ??
+          (() => opts.handlers.onSelectPage?.("create")),
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
         catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
@@ -695,6 +702,9 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         onSearch: opts.handlers.onSearch,
         onOpenSearch: opts.handlers.onOpenSearch,
         onOpenScan: opts.handlers.onOpenScan,
+        onOpenCreate:
+          opts.handlers.onOpenCreate ??
+          (() => opts.handlers.onSelectPage?.("create")),
         onOpenFilter: opts.handlers.onOpenFilter,
         filterActive: opts.handlers.filterActive,
         catalogStyle: opts.catalogStyle ?? opts.handlers.catalogStyle,
@@ -902,6 +912,39 @@ function renderArticleList(opts: ListOpts): HTMLElement {
   return list;
 }
 
+function feedPhotoLayoutClass(count: number): string {
+  if (count <= 0) return "";
+  if (count === 1) return "is-1";
+  if (count <= 4) return "is-2x2";
+  return "is-3x3";
+}
+
+function mountFeedPhotos(opts: ListOpts, row: FlatRow): HTMLElement | null {
+  const urls = collectRowFeedPhotos(
+    row.cells,
+    opts.primaryTable,
+    opts.columns,
+    opts.comments,
+    showMap(opts.columnMetas),
+  );
+  if (!urls.length) return null;
+  const grid = el(
+    "div",
+    `layout-feed-photos ${feedPhotoLayoutClass(urls.length)}`,
+  );
+  const srcs = urls.map((u) => mediaSrc(u, opts.apijsonBase));
+  urls.forEach((url, i) => {
+    const shot = thumb(url, opts.apijsonBase, "layout-social-photo", "");
+    shot.title = t("layout.previewImage");
+    shot.onclick = (ev) => {
+      stop(ev);
+      openImageLightbox(() => srcs, i);
+    };
+    grid.appendChild(shot);
+  });
+  return grid;
+}
+
 function renderSocialFeed(opts: ListOpts): HTMLElement {
   const feed = el("div", "layout-feed");
   for (const row of opts.rows) {
@@ -920,11 +963,8 @@ function renderSocialFeed(opts: ListOpts): HTMLElement {
     card.appendChild(head);
     const text = pres.body || (pres.author ? pres.title : "");
     if (text) card.appendChild(el("div", "layout-feed-text", text));
-    if (pres.coverUrl) {
-      card.appendChild(
-        thumb(pres.coverUrl, opts.apijsonBase, "layout-social-photo", ""),
-      );
-    }
+    const photos = mountFeedPhotos(opts, row);
+    if (photos) card.appendChild(photos);
     feed.appendChild(card);
   }
   return feed;

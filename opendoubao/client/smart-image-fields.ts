@@ -489,6 +489,74 @@ export function collectRowImageUrls(
   return out;
 }
 
+/** Profile avatar columns — never treat as moment / feed photos. */
+function isProfileAvatarPath(path: string): boolean {
+  const col = fieldColName(path).toLowerCase();
+  return col === "head" || col === "avatar" || /avatar$/.test(col);
+}
+
+function pathOnPrimaryTable(path: string, primaryTable: string | null): boolean {
+  if (!primaryTable || !path.includes(".")) return true;
+  return path.startsWith(`${primaryTable}.`);
+}
+
+/** Moments-style photos: pictureList first, skip avatars, at most 9. */
+export const FEED_PHOTO_MAX = 9;
+
+export function collectRowFeedPhotos(
+  cells: Record<string, unknown>,
+  primaryTable: string | null,
+  columns: string[],
+  comments?: ImageFieldComments,
+  showByPath?: Record<string, ImageShowMode | undefined> | null,
+): string[] {
+  const paths = [...new Set([...columns, ...Object.keys(cells)])];
+  const listPaths = paths
+    .filter((path) => {
+      if (isProfileAvatarPath(path) || !pathOnPrimaryTable(path, primaryTable)) {
+        return false;
+      }
+      return (
+        fieldSuggestsImageList(path, comments) ||
+        isImageListField(path, cells[path], comments)
+      );
+    })
+    .map((path) => ({
+      path,
+      score: scoreImageFieldPath(path, primaryTable, cells[path], comments),
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const { path } of listPaths) {
+    const show = showByPath?.[path] ?? "auto";
+    if (show === "text" || show === "file") continue;
+    const { urls } = resolveSmartImageField(path, cells[path], comments, show);
+    for (const url of urls) {
+      const key = url.trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+      if (out.length >= FEED_PHOTO_MAX) return out;
+    }
+    if (out.length) return out;
+  }
+
+  for (const path of paths) {
+    if (isProfileAvatarPath(path) || !pathOnPrimaryTable(path, primaryTable)) {
+      continue;
+    }
+    if (fieldSuggestsImageList(path, comments)) continue;
+    const show = showByPath?.[path] ?? "auto";
+    if (show === "text" || show === "file") continue;
+    const url = resolveSmartImageField(path, cells[path], comments, show).urls[0]
+      ?.trim();
+    if (url) return [url];
+  }
+  return [];
+}
+
 /** Best thumbnail URL from a row (grid cards). */
 export function pickBestImageUrl(
   cells: Record<string, unknown>,

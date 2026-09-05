@@ -546,6 +546,7 @@ export const en = {
       max: "Max",
     },
     catalog: {
+      add: "Add",
       toList: "Switch to list",
       toGrid: "Switch to grid",
     },
@@ -756,6 +757,7 @@ export const en = {
       uploadFailed: "Upload failed",
       pickCover: "Cover image",
       pickImages: "Add photos",
+      photoCount: "{{n}} / {{max}}",
       pickPages: "Upload pages",
       pickVideo: "Upload video",
       pickAudio: "Upload audio",

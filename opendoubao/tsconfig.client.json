@@ -8,5 +8,6 @@
     "moduleResolution": "Bundler",
     "noEmit": true
   },
-  "include": ["client/**/*"]
+  "include": ["client/**/*"],
+  "exclude": ["client/**/*.test.ts"]
 }

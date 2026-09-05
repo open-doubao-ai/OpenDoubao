@@ -20,6 +20,7 @@ import {
 } from "./page-layout.js";
 import type { WritePayload } from "./result-view.js";
 import type { SchemaComments } from "./schema-types.js";
+import { FEED_PHOTO_MAX } from "./smart-image-fields.js";
 import { uploadFile } from "./upload.js";
 
 type FlatRow = { key: string; cells: Record<string, unknown> };
@@ -661,6 +662,71 @@ function mountUrlList(opts: {
   return wrap;
 }
 
+/** Moment compose: always 3×3 squares + in-grid add, max 9. Not the feed layout. */
+function mountMomentPhotoGrid(opts: {
+  urls: string[];
+  base: string;
+  onChange: (urls: string[]) => void;
+}): HTMLElement {
+  const max = FEED_PHOTO_MAX;
+  let urls = [...opts.urls].slice(0, max);
+  const wrap = el("div", "compose-photo-grid-wrap");
+  const grid = el("div", "compose-photo-grid");
+  const hint = el("div", "compose-photo-hint");
+  const paintHint = () => {
+    hint.textContent = t("layout.compose.photoCount", { n: urls.length, max });
+  };
+  const addPhotos = async (btn: HTMLButtonElement) => {
+    const files = await pickFiles("image/*", true);
+    if (!files.length) return;
+    const room = Math.max(0, max - urls.length);
+    btn.disabled = true;
+    btn.title = t("layout.compose.uploading");
+    for (const file of files.slice(0, room)) {
+      const url = await uploadOne(opts.base, file);
+      if (url) urls.push(url);
+    }
+    btn.disabled = false;
+    btn.title = t("layout.compose.pickImages");
+    opts.onChange(urls);
+    paint();
+  };
+  const paint = () => {
+    grid.innerHTML = "";
+    for (let i = 0; i < urls.length; i++) {
+      const cell = el("div", "compose-photo-cell");
+      const img = document.createElement("img");
+      img.src = mediaSrc(urls[i]!, opts.base);
+      img.alt = "";
+      img.loading = "lazy";
+      const rm = el("button", "compose-gallery-rm", "×");
+      rm.type = "button";
+      rm.setAttribute("aria-label", t("common.delete"));
+      rm.onclick = () => {
+        urls = urls.filter((_, j) => j !== i);
+        opts.onChange(urls);
+        paint();
+      };
+      cell.append(img, rm);
+      grid.appendChild(cell);
+    }
+    if (urls.length < max) {
+      const add = el("button", "compose-photo-add", "+");
+      add.type = "button";
+      add.title = t("layout.compose.pickImages");
+      add.setAttribute("aria-label", t("layout.compose.pickImages"));
+      add.onclick = () => {
+        void addPhotos(add);
+      };
+      grid.appendChild(add);
+    }
+    paintHint();
+  };
+  paint();
+  wrap.append(grid, hint);
+  return wrap;
+}
+
 type SubmitOpts = {
   asDraft?: boolean;
   localId?: string;
@@ -884,11 +950,9 @@ export function renderComposePage(opts: ComposeOpts): HTMLElement {
       formHost.appendChild(bodyIn);
       if (picsF) {
         formHost.appendChild(
-          mountUrlList({
+          mountMomentPhotoGrid({
             urls: pics,
             base: opts.apijsonBase,
-            addLabel: t("layout.compose.pickImages"),
-            accept: "image/*",
             onChange: (next) => {
               pics = next;
             },

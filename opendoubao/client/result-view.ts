@@ -255,6 +255,7 @@ function appendResultSearchChrome(
     onAppSearch?: (q: string) => void;
     onOpenAppSearch?: (q: string) => void;
     onOpenAppScan?: () => void;
+    onSelectAppPage?: (page: LayoutPage) => void;
     onOpenFilter?: (anchor: HTMLElement) => void;
     filterActive?: boolean;
     catalogStyle?: CatalogStyle;
@@ -279,6 +280,9 @@ function appendResultSearchChrome(
       onSearch: search,
       onOpenSearch: open,
       onOpenScan: handlers.onOpenAppScan ?? pendingOpenScan ?? undefined,
+      onOpenCreate: handlers.onSelectAppPage
+        ? () => handlers.onSelectAppPage!("create")
+        : undefined,
       onOpenFilter: handlers.onOpenFilter,
       filterActive: handlers.filterActive,
       catalogStyle: handlers.catalogStyle,
@@ -1687,6 +1691,7 @@ export function renderResultView(
         onSearch: opts.onAppSearch,
         onOpenSearch: opts.onOpenAppSearch,
         onOpenScan: opts.onOpenAppScan,
+        onOpenCreate: () => opts.onSelectAppPage?.("create"),
         onOpenFilter: openLayoutFilter,
         filterActive,
         catalogStyle,

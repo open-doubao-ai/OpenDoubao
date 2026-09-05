@@ -12,6 +12,7 @@ import {
   isDataListViewPage,
   mediaSrc,
   pickRowPresentation,
+  shouldShowListCreate,
   type LayoutApp,
   type LayoutPage,
   type RowPresentation,
@@ -48,6 +49,7 @@ export type ExploreOpts = {
   onSearch?: (q: string) => void;
   onOpenSearch?: (q: string) => void;
   onOpenScan?: () => void;
+  onOpenCreate?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
   catalogStyle?: CatalogStyle;
@@ -237,6 +239,7 @@ export type SearchChromeOpts = {
   onSearch: (q: string) => void;
   onOpenSearch: (q: string) => void;
   onOpenScan?: () => void;
+  onOpenCreate?: () => void;
   onOpenFilter?: (anchor: HTMLElement) => void;
   filterActive?: boolean;
   catalogStyle?: CatalogStyle;
@@ -253,6 +256,33 @@ export function mountScanButton(onOpen?: () => void): HTMLButtonElement {
     '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8 8h8v8H8z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
   btn.onclick = () => onOpen?.();
   return btn;
+}
+
+export function mountCreateButton(onOpen?: () => void): HTMLButtonElement {
+  const btn = el("button", "app-search-create");
+  btn.type = "button";
+  btn.title = t("layout.catalog.add");
+  btn.setAttribute("aria-label", t("layout.catalog.add"));
+  btn.innerHTML =
+    '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+  btn.onclick = () => onOpen?.();
+  return btn;
+}
+
+function appendScanAndCreate(
+  host: HTMLElement,
+  opts: {
+    app: LayoutApp;
+    page: LayoutPage;
+    surface: "list" | "detail";
+    onOpenScan?: () => void;
+    onOpenCreate?: () => void;
+  },
+) {
+  host.appendChild(mountScanButton(opts.onOpenScan));
+  if (shouldShowListCreate(opts.app, opts.page, opts.surface)) {
+    host.appendChild(mountCreateButton(opts.onOpenCreate));
+  }
 }
 
 export function mountAppSearchChrome(opts: SearchChromeOpts): HTMLElement {
@@ -292,7 +322,7 @@ export function mountAppSearchChrome(opts: SearchChromeOpts): HTMLElement {
       }),
     );
   }
-  wrap.append(mountScanButton(opts.onOpenScan));
+  appendScanAndCreate(wrap, opts);
   if (opts.surface === "list" && opts.pager && shouldPageCatalog(opts.page)) {
     wrap.appendChild(mountListPager(opts.pager));
   }
@@ -452,7 +482,13 @@ function renderSearchLanding(opts: ExploreOpts): HTMLElement {
       }),
     );
   }
-  bar.append(mountScanButton(opts.onOpenScan));
+  appendScanAndCreate(bar, {
+    app: opts.app,
+    page: opts.page,
+    surface: "list",
+    onOpenScan: opts.onOpenScan,
+    onOpenCreate: opts.onOpenCreate,
+  });
   if (opts.pager) bar.appendChild(mountListPager(opts.pager));
   bar.append(input, go);
   page.appendChild(bar);
