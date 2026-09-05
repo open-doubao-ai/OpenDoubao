@@ -11,3 +11,4 @@ description: 视频目录、播放、频道。
 - 主表 Video，分类 Category.app=video
 - 播放页用 videoUrl；字幕 subtitleList、清晰度 qualityList；排行 playCount-
 - 推流/转码不要写进接口
+- 上传页：视频文件 + 封面 + 标题

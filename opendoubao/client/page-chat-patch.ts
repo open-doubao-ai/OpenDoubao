@@ -4,6 +4,11 @@
  * falls back to an explain dump.
  */
 
+import {
+  specFromUserPhrase,
+  type LayoutApp,
+} from "./page-layout.js";
+
 export type ChatPagePatch = {
   displayKind?: string;
   catalogStyle?: "grid" | "list" | null;
@@ -13,7 +18,58 @@ export type ChatPagePatch = {
   hideColumns?: string[];
   showColumns?: string[];
   columnOrder?: string[];
+  navTab?: { slot: string; app: string; page: string };
+  navJump?: { slot: string; app: string; page: string };
 };
+
+function destPhrase(text: string): string | null {
+  const m = text.match(
+    /(?:改成|换成|改用|变成|改为|跳转到|跳到)\s*(.+)$/,
+  );
+  const raw = (m?.[1] || "").replace(/[。.!！]+$/, "").trim();
+  return raw || null;
+}
+
+function matchTabSlot(text: string): string | null {
+  if (!/改|换|用|成/.test(text)) return null;
+  if (/首页|主页|\bhome\b/i.test(text)) return "home";
+  if (/分类|类目/.test(text) && /tab|标签|页/.test(text)) return "category";
+  if (/排行|热榜/.test(text) && /tab|标签/.test(text)) return "rank";
+  if (/我的(?:\s*tab)?/.test(text) && /tab|标签/.test(text)) return "user";
+  if (/购物车(?:\s*tab)?/.test(text)) return "cart";
+  return null;
+}
+
+function matchJumpSlot(text: string): string | null {
+  if (/点进去|点击跳转|打开条目|点商品|点视频|条目跳转/.test(text)) {
+    return "openRow";
+  }
+  if (/跳转/.test(text) && /播放|详情|明细/.test(text)) return "openRow";
+  if (/搜索/.test(text) && /改成|换成|跳转/.test(text) && !/tab/.test(text)) {
+    return "openSearch";
+  }
+  if (/扫码/.test(text) && /改成|换成/.test(text)) return "openScan";
+  if (/(结算|下单)/.test(text) && /改成|跳转/.test(text)) return "openCheckout";
+  return null;
+}
+
+function navPatchFromMessage(
+  text: string,
+  ctx?: { app?: string | null },
+): ChatPagePatch | null {
+  if (/布局|隐藏.+列/.test(text) && !/tab|跳转|点进去|首页/.test(text)) {
+    return null;
+  }
+  const jump = matchJumpSlot(text);
+  const tab = matchTabSlot(text);
+  if (!jump && !tab) return null;
+  const dest = destPhrase(text) || text;
+  const fallback = (ctx?.app || "data") as LayoutApp;
+  const spec = specFromUserPhrase(dest, fallback);
+  if (jump) return { navJump: { slot: jump, app: spec.app, page: spec.page } };
+  if (tab) return { navTab: { slot: tab, app: spec.app, page: spec.page } };
+  return null;
+}
 
 function columnHints(text: string, re: RegExp): string[] {
   const out: string[] = [];
@@ -55,9 +111,11 @@ function targetsList(text: string): boolean {
  */
 export function chatPagePatchFromMessage(
   message: string,
-  _ctx?: { app?: string | null },
+  ctx?: { app?: string | null },
 ): ChatPagePatch | null {
   const text = message.trim();
+  const nav = navPatchFromMessage(text, ctx);
+  if (nav) return nav;
   const ui: ChatPagePatch = {};
 
   if (/联系人|通讯录|address\s*book|\bcontacts?\b/i.test(text)) {

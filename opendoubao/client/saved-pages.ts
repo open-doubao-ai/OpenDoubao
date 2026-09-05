@@ -23,6 +23,7 @@ import {
   type ActionSlot,
   type LayoutApp,
   type LayoutKind,
+  type LayoutNav,
   type LayoutPage,
 } from "./page-layout.js";
 import type { ColumnFilter, ColumnSort } from "./table-query.js";
@@ -233,6 +234,7 @@ export type SavedPageSnapshot = {
   layoutKind?: LayoutKind;
   layoutApp?: LayoutApp;
   layoutPage?: LayoutPage;
+  layoutNav?: LayoutNav;
   /** True when the user picked a layout in the toolbar. */
   layoutKindManual?: boolean;
   /** A2API bindRequest per UI slot (like / comment / …). */

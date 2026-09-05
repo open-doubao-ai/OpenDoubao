@@ -27,6 +27,30 @@ CREATE TABLE IF NOT EXISTS `Course` (
   KEY `categoryId` (`categoryId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='教育学习-课程';
 
+CREATE TABLE IF NOT EXISTS `Teacher` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `userId` bigint NOT NULL COMMENT '关联 User.id',
+  `name` varchar(80) NOT NULL COMMENT '姓名',
+  `title` varchar(80) DEFAULT NULL COMMENT '职称',
+  `head` varchar(400) DEFAULT NULL COMMENT '头像',
+  `intro` text COMMENT '简介',
+  `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入职日期',
+  PRIMARY KEY (`id`),
+  KEY `userId` (`userId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='教育学习-老师';
+
+CREATE TABLE IF NOT EXISTS `Student` (
+  `id` bigint NOT NULL COMMENT '主键',
+  `userId` bigint NOT NULL COMMENT '关联 User.id',
+  `name` varchar(80) NOT NULL COMMENT '姓名',
+  `grade` varchar(40) DEFAULT NULL COMMENT '年级',
+  `head` varchar(400) DEFAULT NULL COMMENT '头像',
+  `intro` text COMMENT '简介',
+  `date` timestamp NULL DEFAULT CURRENT_TIMESTAMP COMMENT '入学日期',
+  PRIMARY KEY (`id`),
+  KEY `userId` (`userId`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='教育学习-学生';
+
 CREATE TABLE IF NOT EXISTS `Book` (
   `id` bigint NOT NULL COMMENT '主键',
   `userId` bigint NOT NULL COMMENT '录入人 User.id',
@@ -50,6 +74,7 @@ CREATE TABLE IF NOT EXISTS `Comic` (
   `title` varchar(160) NOT NULL COMMENT '漫画名',
   `author` varchar(80) DEFAULT NULL COMMENT '作者',
   `cover` varchar(400) DEFAULT NULL COMMENT '封面图',
+  `pictureList` json DEFAULT NULL COMMENT '分页图 URL 列表',
   `content` text COMMENT '简介',
   `chapterCount` int NOT NULL DEFAULT 0 COMMENT '话数',
   `viewCount` int NOT NULL DEFAULT 0 COMMENT '阅读数',
@@ -58,6 +83,18 @@ CREATE TABLE IF NOT EXISTS `Comic` (
   KEY `userId` (`userId`),
   KEY `categoryId` (`categoryId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='漫画阅读-作品';
+
+SET @odb := DATABASE();
+SET @comic_pic := (
+  SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @odb AND TABLE_NAME = 'Comic' AND COLUMN_NAME = 'pictureList'
+);
+SET @comic_sql := IF(@comic_pic = 0,
+  'ALTER TABLE `Comic` ADD COLUMN `pictureList` json DEFAULT NULL COMMENT ''分页图 URL 列表'' AFTER `cover`',
+  'SELECT 1');
+PREPARE comic_pic_stmt FROM @comic_sql;
+EXECUTE comic_pic_stmt;
+DEALLOCATE PREPARE comic_pic_stmt;
 
 CREATE TABLE IF NOT EXISTS `Local` (
   `id` bigint NOT NULL COMMENT '主键',
@@ -513,11 +550,11 @@ INSERT INTO `Note` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`content
 ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `cover`=VALUES(`cover`), `categoryId`=VALUES(`categoryId`);
 
 -- ---------------------------------------------------------------------------
--- Access 101–115  Request 9105201–9105245
+-- Access 101–117  Request 9105201–9105251
 -- ---------------------------------------------------------------------------
 
-DELETE FROM `Access` WHERE `id` BETWEEN 101 AND 115
-  OR `alias` IN ('Course','Book','Comic','Local','Recipe','Trip','Sport','Baby','Workout','Vehicle','Job','House','Beauty','Photo','Note');
+DELETE FROM `Access` WHERE `id` BETWEEN 101 AND 117
+  OR `alias` IN ('Course','Book','Comic','Local','Recipe','Trip','Sport','Baby','Workout','Vehicle','Job','House','Beauty','Photo','Note','Teacher','Student');
 
 INSERT INTO `Access` (`id`, `debug`, `schema`, `name`, `alias`, `get`, `head`, `gets`, `heads`, `post`, `put`, `delete`, `date`, `detail`)
 VALUES
@@ -625,10 +662,24 @@ VALUES
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
  '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
- NOW(), '办公效率-笔记');
+ NOW(), '办公效率-笔记'),
+(116, 0, NULL, 'Teacher', 'Teacher',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ NOW(), '教育学习-老师'),
+(117, 0, NULL, 'Student', 'Student',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["UNKNOWN", "LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["LOGIN", "CONTACT", "CIRCLE", "OWNER", "ADMIN"]',
+ '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]', '["OWNER", "ADMIN"]',
+ NOW(), '教育学习-学生');
 
-DELETE FROM `Request` WHERE `id` BETWEEN 9105201 AND 9105245
-  OR (`tag` IN ('Course','Book','Comic','Local','Recipe','Trip','Sport','Baby','Workout','Vehicle','Job','House','Beauty','Photo','Note') AND `method` IN ('POST','PUT','DELETE'));
+DELETE FROM `Request` WHERE `id` BETWEEN 9105201 AND 9105251
+  OR (`tag` IN ('Course','Book','Comic','Local','Recipe','Trip','Sport','Baby','Workout','Vehicle','Job','House','Beauty','Photo','Note','Teacher','Student') AND `method` IN ('POST','PUT','DELETE'));
 
 INSERT INTO `Request` (`id`, `debug`, `version`, `method`, `tag`, `structure`, `detail`, `date`) VALUES
 (9105201, 0, 1, 'POST', 'Course', CAST('{"MUST":"title","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Course', NOW()),
@@ -675,4 +726,10 @@ INSERT INTO `Request` (`id`, `debug`, `version`, `method`, `tag`, `structure`, `
 (9105242, 0, 1, 'DELETE', 'Photo', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Photo', NOW()),
 (9105243, 0, 1, 'POST', 'Note', CAST('{"MUST":"title","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Note', NOW()),
 (9105244, 0, 1, 'PUT', 'Note', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update Note', NOW()),
-(9105245, 0, 1, 'DELETE', 'Note', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Note', NOW());
+(9105245, 0, 1, 'DELETE', 'Note', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Note', NOW()),
+(9105246, 0, 1, 'POST', 'Teacher', CAST('{"MUST":"name","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Teacher', NOW()),
+(9105247, 0, 1, 'PUT', 'Teacher', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update Teacher', NOW()),
+(9105248, 0, 1, 'DELETE', 'Teacher', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Teacher', NOW()),
+(9105249, 0, 1, 'POST', 'Student', CAST('{"MUST":"name","REFUSE":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Create Student', NOW()),
+(9105250, 0, 1, 'PUT', 'Student', CAST('{"MUST":"id","REFUSE":"userId,date","INSERT":{"@role":"OWNER"}}' AS JSON), 'Update Student', NOW()),
+(9105251, 0, 1, 'DELETE', 'Student', CAST('{"MUST":"id","INSERT":{"@role":"OWNER"}}' AS JSON), 'Delete Student', NOW());

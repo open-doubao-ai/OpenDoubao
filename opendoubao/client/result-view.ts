@@ -126,15 +126,19 @@ import {
   layoutPageLabel,
   isLayoutKind,
   legacyKindFromSpec,
+  LAYOUT_PAGES_BY_APP,
   pickRowPresentation,
   specFromLegacy,
   specsEqual,
   isUserLayoutPage,
   contactLayoutFor,
+  isRecordLayoutPage,
+  defaultRecordPage,
   type ActionBinding,
   type ActionSlot,
   type LayoutApp,
   type LayoutKind,
+  type LayoutNav,
   type LayoutPage,
   type LayoutSpec,
 } from "./page-layout.js";
@@ -147,6 +151,7 @@ import {
   inferPeerIdField,
 } from "./layout-category.js";
 import { visitorId } from "./layout-social.js";
+import { beginComposeEdit } from "./layout-compose.js";
 import {
   addRowToCart,
   flashLayoutNote,
@@ -1176,6 +1181,12 @@ export function renderResultView(
     layoutPrompt?: string;
     onSelectAppPage?: (page: LayoutPage) => void;
     onSelectLayoutApp?: (app: LayoutApp) => void;
+    onSelectLayoutSpec?: (spec: LayoutSpec) => void;
+    onRemapTab?: (slot: LayoutPage, spec: LayoutSpec) => void;
+    layoutNav?: LayoutNav | null;
+    navTabSlot?: LayoutPage | null;
+    rowJumpSpec?: LayoutSpec;
+    authorJumpSpec?: LayoutSpec;
     onOpenAppScan?: () => void;
     onOpenCategory?: (id: string | number) => void;
     onComments?: (comments: SchemaComments) => void;
@@ -1489,6 +1500,7 @@ export function renderResultView(
       onOpenAppScan: opts.onOpenAppScan,
       onOpenFilter: openLayoutFilter,
       filterActive,
+      onSelectAppPage: opts.onSelectAppPage,
     });
     return state;
   }
@@ -1513,6 +1525,21 @@ export function renderResultView(
     const detailPageTitle = table
       ? pageTitleForTable(table, "detail", id)
       : opts.pageTitle;
+    const jump = opts.rowJumpSpec;
+    if (
+      jump &&
+      !isRecordLayoutPage(jump.page) &&
+      jump.page !== layoutSpec.page
+    ) {
+      opts.onSelectLayoutSpec?.(jump);
+      return;
+    }
+    const detailSpec =
+      jump && isRecordLayoutPage(jump.page)
+        ? jump
+        : jump
+          ? { app: jump.app, page: defaultRecordPage(jump.app) }
+          : layoutSpec;
     if (apijsonBase && table && String(id) !== "") {
       void openFkDetail(container, {
         table,
@@ -1523,8 +1550,8 @@ export function renderResultView(
         mode,
         pageTitle: detailPageTitle,
         initialSlots: navSlots,
-        layoutKind,
-        layoutSpec,
+        layoutKind: legacyKindFromSpec(detailSpec),
+        layoutSpec: detailSpec,
         actionBindings: opts.actionBindings,
         onActionSlot: opts.onActionSlot,
         onBack: opts.onBackToList,
@@ -1575,7 +1602,7 @@ export function renderResultView(
         });
       };
     }
-    if (opts.response == null) {
+    if (opts.response == null && layoutSpec?.page !== "create" && layoutSpec?.page !== "published" && layoutSpec?.page !== "drafts") {
       mountWorkspaceGuide(container);
       return state;
     }
@@ -1598,6 +1625,14 @@ export function renderResultView(
   if (shouldReplaceList(layoutKind, layoutSpec)) {
     if (primaryTable && write) {
       listCreateAction = () => {
+        if (
+          layoutSpec &&
+          layoutSpec.app !== "data" &&
+          LAYOUT_PAGES_BY_APP[layoutSpec.app]?.includes("create")
+        ) {
+          opts.onSelectAppPage?.("create");
+          return;
+        }
         const fromParent = opts.onOpenDetail?.({
           table: primaryTable,
           create: true,
@@ -1627,6 +1662,8 @@ export function renderResultView(
     renderLayoutList(container, {
       kind: layoutKind,
       spec: layoutSpec,
+      nav: opts.layoutNav,
+      navTabSlot: opts.navTabSlot,
       rows: parsed.rows,
       columns: parsed.columns,
       primaryTable,
@@ -1657,6 +1694,7 @@ export function renderResultView(
         pager: listPager,
         onSelectPage: opts.onSelectAppPage,
         onSelectApp: opts.onSelectLayoutApp,
+        onRemapTab: opts.onRemapTab,
         onOpenProfile: () => {
           const table = inferPersonTable(comments) || primaryTable;
           const id = visitorId();
@@ -1704,6 +1742,7 @@ export function renderResultView(
             return;
           }
           const contact = contactLayoutFor({ layoutKind, layoutSpec });
+          const authorSpec = opts.authorJumpSpec ?? contact.layoutSpec;
           void openFkDetail(container, {
             table: personTable,
             id: userId,
@@ -1720,8 +1759,8 @@ export function renderResultView(
             onPageTitleChange: opts.onPageTitleChange,
             onDetailSlotsChange: opts.onDetailSlotsChange,
             onOpenFkList: opts.onOpenFkList,
-            layoutKind: contact.layoutKind,
-            layoutSpec: contact.layoutSpec,
+            layoutKind: legacyKindFromSpec(authorSpec),
+            layoutSpec: authorSpec,
             onRequestLayoutKind: opts.onRequestLayoutKind,
             actionBindings: opts.actionBindings,
             onActionSlot: opts.onActionSlot,
@@ -7079,6 +7118,7 @@ async function openFkDetail(
     onRequestLayoutKind?: (kind: LayoutKind) => void;
     onAppSearch?: (q: string) => void;
     onOpenAppSearch?: (q: string) => void;
+    onSelectAppPage?: (page: LayoutPage) => void;
     actionBindings?: Partial<Record<ActionSlot, ActionBinding>>;
     onActionSlot?: (
       slot: ActionSlot,
@@ -7156,6 +7196,7 @@ async function openFkDetail(
       onActionSlot: opts.onActionSlot,
       onAppSearch: opts.onAppSearch,
       onOpenAppSearch: opts.onOpenAppSearch,
+      onSelectAppPage: opts.onSelectAppPage,
       onRelateSync: opts.onRelateSync,
       onColumnMetasChange: opts.onColumnMetasChange,
       onPageTitleChange: opts.onPageTitleChange,
@@ -7309,6 +7350,7 @@ function renderDetailForm(
       lines: { title: string; qty: number; price: number }[];
       total: number;
     }) => void;
+    onSelectAppPage?: (page: LayoutPage) => void;
   },
 ) {
   let comments = opts.comments;
@@ -7424,6 +7466,14 @@ function renderDetailForm(
         onCheckout: opts.onLayoutCheckout,
         onOpenCheckout: opts.onLayoutBuyNow,
         onWrite: writeFn,
+        onEditRecord: (info) => {
+          beginComposeEdit({
+            table: info.table,
+            recordId: info.id,
+            cells: info.cells,
+          });
+          opts.onSelectAppPage?.("create");
+        },
         onOpenFkList: opts.onOpenFkList,
         onOpenChat: (userId) => {
           void (async () => {

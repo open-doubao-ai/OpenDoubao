@@ -39,7 +39,7 @@ function bgColor(): string {
   const v = getComputedStyle(document.documentElement)
     .getPropertyValue("--bg")
     .trim();
-  return v || "#0f1419";
+  return v || "#ffffff";
 }
 
 function isInlineOrSameOrigin(src: string): boolean {

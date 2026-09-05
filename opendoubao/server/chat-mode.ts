@@ -57,6 +57,8 @@ export type PageUiPatch = {
   hideColumns?: string[];
   showColumns?: string[];
   columnOrder?: string[];
+  navTab?: { slot: string; app: string; page: string };
+  navJump?: { slot: string; app: string; page: string };
 };
 
 export type ModifyPageResult = {
@@ -117,6 +119,8 @@ const ENTITY_HINTS: Array<{
   { re: /员工|花名册|\bemployees?\b|\bstaff\b/, tables: ["Employee"], apps: ["data"] },
   { re: /动态|朋友圈|\bmoments?\b/, tables: ["Moment"], apps: ["social"] },
   { re: /教育学习|课程|网课|\bcourses?\b|\blessons?\b/, tables: ["Course"], apps: ["education"] },
+  { re: /老师|讲师|\bteachers?\b|\binstructors?\b/, tables: ["Teacher"], apps: ["education"] },
+  { re: /学生|学员|\bstudents?\b/, tables: ["Student"], apps: ["education"] },
   { re: /小说|图书阅读|电子书|\bbooks?\b|\bnovels?\b|\bebooks?\b/, tables: ["Book"], apps: ["books"] },
   { re: /漫画阅读|漫画|\bcomics?\b|\bmanga\b/, tables: ["Comic"], apps: ["comics"] },
   { re: /本地生活|到家|到店|\blocals?\b/, tables: ["Local"], apps: ["lifestyle"] },
@@ -595,12 +599,94 @@ function columnHints(text: string, re: RegExp): string[] {
   return out;
 }
 
+function destPhrase(text: string): string | null {
+  const m = text.match(/(?:改成|换成|改用|变成|改为|跳转到|跳到)\s*(.+)$/);
+  const raw = (m?.[1] || "").replace(/[。.!！]+$/, "").trim();
+  return raw || null;
+}
+
+function matchNavTabSlot(text: string): string | null {
+  if (!/改|换|用|成/.test(text)) return null;
+  if (/首页|主页|\bhome\b/i.test(text)) return "home";
+  if (/分类|类目/.test(text) && /tab|标签|页/.test(text)) return "category";
+  if (/排行|热榜/.test(text) && /tab|标签/.test(text)) return "rank";
+  if (/我的(?:\s*tab)?/.test(text) && /tab|标签/.test(text)) return "user";
+  if (/购物车(?:\s*tab)?/.test(text)) return "cart";
+  return null;
+}
+
+function matchNavJumpSlot(text: string): string | null {
+  if (/点进去|点击跳转|打开条目|点商品|点视频|条目跳转/.test(text)) {
+    return "openRow";
+  }
+  if (/跳转/.test(text) && /播放|详情|明细/.test(text)) return "openRow";
+  if (/搜索/.test(text) && /改成|换成|跳转/.test(text) && !/tab/.test(text)) {
+    return "openSearch";
+  }
+  if (/扫码/.test(text) && /改成|换成/.test(text)) return "openScan";
+  if (/(结算|下单)/.test(text) && /改成|跳转/.test(text)) return "openCheckout";
+  return null;
+}
+
+const PAGE_HINTS: Array<{ re: RegExp; page: string }> = [
+  { re: /播放/, page: "player" },
+  { re: /详情|明细/, page: "detail" },
+  { re: /排行|热榜/, page: "rank" },
+  { re: /分类|类目/, page: "category" },
+  { re: /首页|主页/, page: "home" },
+  { re: /搜索/, page: "search" },
+  { re: /购物车/, page: "cart" },
+  { re: /结算|下单/, page: "order" },
+  { re: /动态|信息流|feed/i, page: "feed" },
+];
+
+function specFromNavPhrase(
+  phrase: string,
+  fallbackApp: string,
+): { app: string; page: string } {
+  const hay = phrase.trim();
+  let app = fallbackApp || "data";
+  for (const hint of ENTITY_HINTS) {
+    if (hint.apps[0] && hint.re.test(hay)) {
+      app = hint.apps[0];
+      break;
+    }
+  }
+  let page = "home";
+  for (const hint of PAGE_HINTS) {
+    if (hint.re.test(hay)) {
+      page = hint.page;
+      break;
+    }
+  }
+  return { app, page };
+}
+
+function navUiPatchFromMessage(
+  text: string,
+  ctx?: PageChatContext | null,
+): PageUiPatch | null {
+  if (/布局|隐藏.+列/.test(text) && !/tab|跳转|点进去|首页/.test(text)) {
+    return null;
+  }
+  const jump = matchNavJumpSlot(text);
+  const tab = matchNavTabSlot(text);
+  if (!jump && !tab) return null;
+  const dest = destPhrase(text) || text;
+  const spec = specFromNavPhrase(dest, ctx?.app || ctx?.targetApp || "data");
+  if (jump) return { navJump: { slot: jump, app: spec.app, page: spec.page } };
+  if (tab) return { navTab: { slot: tab, app: spec.app, page: spec.page } };
+  return null;
+}
+
 /** Deterministic layout/column tweaks from chat text (no LLM). */
 export function pageUiPatchFromMessage(
   message: string,
   ctx?: PageChatContext | null,
 ): PageUiPatch | null {
   const text = message.trim();
+  const nav = navUiPatchFromMessage(text, ctx);
+  if (nav) return nav;
   const ui: PageUiPatch = {};
   if (/联系人|通讯录|address\s*book|\bcontacts?\b/i.test(text)) {
     ui.layoutApp = /社交|朋友圈/.test(text) ? "social" : "chat";
@@ -662,6 +748,12 @@ export function pageUiPatchFromMessage(
 }
 
 function patchMessage(ui: PageUiPatch): string {
+  if (ui.navTab) {
+    return `Updated the ${ui.navTab.slot} tab to ${ui.navTab.app}/${ui.navTab.page}.`;
+  }
+  if (ui.navJump) {
+    return `Updated the ${ui.navJump.slot} jump to ${ui.navJump.app}/${ui.navJump.page}.`;
+  }
   if (ui.layoutPage === "users") {
     return "Updated this page to a contacts list layout. Same data, no new page.";
   }

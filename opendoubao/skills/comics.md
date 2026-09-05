@@ -10,3 +10,4 @@ description: 漫画作品与话次。
 # 漫画阅读
 - 主表 Comic，分类 Category.app=comics
 - 目录层 CRUD，阅读器另做
+- 上传页：封面 + 分页图 pictureList，标题与简介

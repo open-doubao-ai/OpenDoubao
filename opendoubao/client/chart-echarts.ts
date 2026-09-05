@@ -88,8 +88,9 @@ export function renderEcharts(
   }
 
   const chart = ensureChart(host);
-  const textColor = "#c8cdd6";
-  const lineColor = "#3a4150";
+  const css = getComputedStyle(document.documentElement);
+  const textColor = css.getPropertyValue("--text").trim() || "#1a1d21";
+  const lineColor = css.getPropertyValue("--line").trim() || "#e6e8eb";
 
   if (kind === "pie" || kind === "doughnut") {
     const n = series.length;

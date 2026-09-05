@@ -5,10 +5,20 @@
 import { t } from "./i18n/index.js";
 import { loadAccount } from "./account.js";
 import { fetchBoundGet, inferPersonTable } from "./layout-actions.js";
+import { inferAuthorIdField } from "./layout-category.js";
+import {
+  beginComposeEdit,
+  beginComposeFromLocal,
+  isDraftStatusValue,
+  listLocalDrafts,
+  recToCells,
+  removeLocalDraft,
+} from "./layout-compose.js";
 import { visitorId } from "./layout-social.js";
 import {
   isCatalogApp,
   isSettingsPage,
+  layoutTabLabel,
   mediaSrc,
   pickRowPresentation,
   type LayoutApp,
@@ -198,20 +208,17 @@ function shortcutLinks(app: LayoutApp): MeLink[] {
       return [
         { page: "history", icon: "▶", label: t("layout.me.play") },
         { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
-        { page: "create", icon: "✎", label: t("layout.me.publish") },
       ];
     case "music":
       return [
         { page: "player", icon: "▶", label: t("layout.me.play") },
         { page: "history", icon: "👁", label: t("layout.me.browse") },
         { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
-        { page: "create", icon: "✎", label: t("layout.me.publish") },
       ];
     case "social":
       return [
         { page: "feed", icon: "☰", label: t("layout.page.feed") },
         { page: "history", icon: "👁", label: t("layout.me.browse") },
-        { page: "create", icon: "✎", label: t("layout.me.publish") },
       ];
     case "chat":
       return [
@@ -223,7 +230,6 @@ function shortcutLinks(app: LayoutApp): MeLink[] {
       if (isCatalogApp(app)) {
         return [
           { page: "history", icon: "👁", label: t("layout.me.browse") },
-          { page: "create", icon: "✎", label: t("layout.me.publish") },
           { page: "favorite", icon: "♡", label: t("layout.me.favorite") },
         ];
       }
@@ -232,6 +238,15 @@ function shortcutLinks(app: LayoutApp): MeLink[] {
         { page: "settings", icon: "⚙", label: t("layout.me.settings") },
       ];
   }
+}
+
+function producerLinks(app: LayoutApp): MeLink[] | null {
+  if (app === "data") return null;
+  return [
+    { page: "create", icon: "✎", label: layoutTabLabel("create", app) },
+    { page: "published", icon: "☰", label: t("layout.me.published") },
+    { page: "drafts", icon: "▤", label: t("layout.me.drafts") },
+  ];
 }
 
 function menuLinks(app: LayoutApp): MeLink[] {
@@ -314,6 +329,9 @@ function goPage(opts: MeOpts, page: LayoutPage) {
 export function renderMeSurface(opts: MeOpts): HTMLElement {
   if (opts.page === "profile") return renderProfilePage(opts);
   if (opts.page === "settings") return renderSettingsHome(opts);
+  if (opts.page === "published" || opts.page === "drafts") {
+    return renderStudioList(opts);
+  }
   if (isSettingsPage(opts.page)) return renderSettingsSection(opts);
   return renderMeHub(opts);
 }
@@ -337,6 +355,18 @@ function renderMeHub(opts: MeOpts): HTMLElement {
     const old = page.querySelector(".me-head");
     if (old && next.firstElementChild) old.replaceWith(next.firstElementChild);
   });
+
+  const studio = producerLinks(opts.app);
+  if (studio) {
+    const block = el("div", "me-studio");
+    block.appendChild(el("div", "me-studio-h", t("layout.me.studio")));
+    const studioMenu = el("div", "me-menu");
+    for (const link of studio) {
+      studioMenu.appendChild(mountLink(link, (p) => goPage(opts, p), "row"));
+    }
+    block.appendChild(studioMenu);
+    page.appendChild(block);
+  }
 
   const grid = el("div", "me-grid");
   for (const link of shortcutLinks(opts.app)) {
@@ -401,6 +431,177 @@ function renderProfilePage(opts: MeOpts): HTMLElement {
     };
     page.appendChild(edit);
   });
+  return page;
+}
+
+function isMineRow(opts: MeOpts, row: FlatRow): boolean {
+  const me = visitorId();
+  if (me == null) return false;
+  const pres = presentRow(opts, row);
+  if (pres.authorId != null && String(pres.authorId) === String(me)) return true;
+  const table = opts.primaryTable;
+  if (!table) return false;
+  const field = inferAuthorIdField(table, opts.comments, opts.columns);
+  if (!field) return false;
+  const v = row.cells[`${table}.${field}`] ?? row.cells[field];
+  return v != null && String(v) === String(me);
+}
+
+function openComposeForRow(opts: MeOpts, row: FlatRow) {
+  const table = opts.primaryTable;
+  const id = opts.recordId(row);
+  if (!table || id == null) {
+    goPage(opts, "create");
+    return;
+  }
+  beginComposeEdit({ table, recordId: id, cells: row.cells });
+  goPage(opts, "create");
+}
+
+function deleteServerRow(opts: MeOpts, row: FlatRow) {
+  const table = opts.primaryTable;
+  const id = opts.recordId(row);
+  if (!table || id == null || !opts.handlers.onWrite) return;
+  if (!confirm(t("layout.compose.confirmDelete"))) return;
+  void opts.handlers.onWrite({
+    method: "delete",
+    table,
+    body: { [table]: { id }, tag: table },
+    keepTag: true,
+    skipTemplate: true,
+  });
+}
+
+function mountWorkCard(
+  opts: MeOpts,
+  args: {
+    title: string;
+    cover: string | null;
+    meta?: string;
+    onOpen?: () => void;
+    onEdit: () => void;
+    onDelete: () => void;
+  },
+): HTMLElement {
+  const card = el("div", "me-work");
+  const main = el("button", "me-work-main");
+  main.type = "button";
+  main.onclick = () => (args.onOpen ? args.onOpen() : args.onEdit());
+  main.appendChild(thumb(args.cover, opts.apijsonBase, "me-fav-img"));
+  const copy = el("div", "me-work-copy");
+  copy.appendChild(el("div", "layout-title", args.title));
+  if (args.meta) copy.appendChild(el("div", "layout-meta", args.meta));
+  main.appendChild(copy);
+  card.appendChild(main);
+  const actions = el("div", "me-work-actions");
+  const edit = el("button", "layout-btn", t("common.edit"));
+  edit.type = "button";
+  edit.onclick = (ev) => {
+    ev.stopPropagation();
+    args.onEdit();
+  };
+  const del = el("button", "layout-btn layout-btn-danger", t("common.delete"));
+  del.type = "button";
+  del.onclick = (ev) => {
+    ev.stopPropagation();
+    args.onDelete();
+  };
+  actions.append(edit, del);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderStudioList(opts: MeOpts): HTMLElement {
+  const drafts = opts.page === "drafts";
+  const page = el("div", `me-page me-studio-list app-${opts.app}`);
+  const back = el("button", "me-back", `‹ ${t("layout.tab.me")}`);
+  back.type = "button";
+  back.onclick = () => goPage(opts, "user");
+  page.append(
+    back,
+    el("h2", "ex-title", drafts ? t("layout.page.drafts") : t("layout.page.published")),
+  );
+  const compose = el(
+    "button",
+    "layout-btn layout-btn-primary me-studio-new",
+    layoutTabLabel("create", opts.app),
+  );
+  compose.type = "button";
+  compose.onclick = () => goPage(opts, "create");
+  page.appendChild(compose);
+
+  const me = visitorId();
+  const mine = me == null ? [] : opts.rows.filter((row) => isMineRow(opts, row));
+  const serverRows = drafts
+    ? mine.filter((row) => isDraftStatusValue(presentRow(opts, row).status))
+    : mine.filter((row) => !isDraftStatusValue(presentRow(opts, row).status));
+
+  const locals = drafts ? listLocalDrafts(opts.app) : [];
+  const serverIds = new Set(
+    serverRows
+      .map((row) => opts.recordId(row))
+      .filter((id): id is string | number => id != null)
+      .map((id) => String(id)),
+  );
+  const localOnly = locals.filter((d) => {
+    if (d.recordId == null) return true;
+    return !serverIds.has(String(d.recordId));
+  });
+
+  const list = el("div", "me-works");
+  for (const row of serverRows) {
+    const pres = presentRow(opts, row);
+    list.appendChild(
+      mountWorkCard(opts, {
+        title: pres.title || `#${row.key}`,
+        cover: pres.coverUrl,
+        meta: [pres.status, pres.date].filter(Boolean).join(" · "),
+        onOpen: () => opts.handlers.onOpenRow?.(row.key),
+        onEdit: () => openComposeForRow(opts, row),
+        onDelete: () => deleteServerRow(opts, row),
+      }),
+    );
+  }
+  for (const draft of localOnly) {
+    const cells = recToCells(draft.table, draft.rec);
+    const pres = pickRowPresentation(cells, {
+      primaryTable: draft.table,
+      columns: Object.keys(cells),
+      comments: opts.comments,
+      recordId: draft.recordId,
+    });
+    list.appendChild(
+      mountWorkCard(opts, {
+        title: pres.title || draft.title || t("layout.page.drafts"),
+        cover: pres.coverUrl,
+        meta: new Date(draft.updatedAt).toLocaleString(),
+        onEdit: () => {
+          beginComposeFromLocal(draft);
+          goPage(opts, "create");
+        },
+        onDelete: () => {
+          if (!confirm(t("layout.compose.confirmDelete"))) return;
+          removeLocalDraft(draft.id);
+          goPage(opts, "drafts");
+        },
+      }),
+    );
+  }
+
+  if (!serverRows.length && !localOnly.length) {
+    if (!me) {
+      page.appendChild(el("div", "layout-meta me-hint", t("layout.me.needLogin")));
+    }
+    page.appendChild(
+      el(
+        "div",
+        "result-empty",
+        drafts ? t("layout.me.draftsEmpty") : t("layout.me.publishedEmpty"),
+      ),
+    );
+    return page;
+  }
+  page.appendChild(list);
   return page;
 }
 

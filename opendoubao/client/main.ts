@@ -1,3 +1,4 @@
+import "quill/dist/quill.snow.css";
 import { applyDomI18n, mountLocaleToggle, t } from "./i18n/index.js";
 import {
   inferPrimaryTable,
@@ -37,28 +38,41 @@ import {
   isLayoutPage,
   isMeHubPage,
   isOrdersPage,
+  isProducerStudioPage,
   isSettingsPage,
   isUserLayoutPage,
   getSkillHints,
-  LAYOUT_APPS,
-  LAYOUT_PAGES_BY_APP,
-  layoutAppLabel,
-  layoutPageLabel,
   layoutSpecLabel,
+  layoutTabLabel,
   legacyKindFromSpec,
   parseLayoutSpec,
   pickSearchColumnPath,
   canonicalizeLayoutSpec,
+  canonicalLayoutApp,
   specFromLegacy,
   specsEqual,
+  defaultLayoutNav,
+  parseLayoutNav,
+  sanitizeLayoutNav,
+  layoutNavIsCustom,
+  setNavTab,
+  setNavJump,
+  resolveNavSelect,
+  resolveNavJump,
+  matchingNavTabSlot,
+  jumpSlotLabel,
+  isJumpSlot,
   type ActionBinding,
   type ActionSlot,
+  type JumpSlot,
   type LayoutApp,
   type LayoutKind,
+  type LayoutNav,
   type LayoutPage,
   type LayoutSpec,
 } from "./page-layout.js";
 import { setPendingSearchQuery } from "./layout-explore.js";
+import { onEnterComposePage } from "./layout-compose.js";
 import {
   ensureLayoutCategories,
   inferCategoryIdField,
@@ -74,6 +88,11 @@ import {
   isOrderTable,
 } from "./layout-entities.js";
 import { flashLayoutNote } from "./layout-views.js";
+import {
+  closeLayoutSpecPicker,
+  fillLayoutSpecMenu,
+  prependNavEditor,
+} from "./layout-nav-ui.js";
 import {
   chatPagePatchFromMessage,
   chatPatchLooksLikeDump,
@@ -367,6 +386,8 @@ type SessionUi = {
   layoutKind: LayoutKind;
   layoutSpec: LayoutSpec;
   layoutKindManual: boolean;
+  layoutNav: LayoutNav;
+  navTabSlot: LayoutPage | null;
   actionBindings: Partial<Record<ActionSlot, ActionBinding>>;
   chartLabelPath: string;
   /** @deprecated migrated into chartFieldValues */
@@ -421,6 +442,8 @@ const state: SessionUi = {
   layoutKind: "data",
   layoutSpec: { app: "data", page: "table" },
   layoutKindManual: false,
+  layoutNav: defaultLayoutNav("data"),
+  navTabSlot: null,
   actionBindings: {},
   chartLabelPath: "",
   chartValuePath: "",
@@ -439,6 +462,60 @@ const state: SessionUi = {
   detailSlots: [],
   listPageRef: null,
 };
+
+const LAYOUT_NAV_KEY = "a2api.layoutNav";
+
+function loadSessionNav(fallback: LayoutApp): LayoutNav {
+  try {
+    const raw = localStorage.getItem(LAYOUT_NAV_KEY);
+    if (raw) return parseLayoutNav(JSON.parse(raw), fallback);
+  } catch {
+    /* ignore */
+  }
+  return defaultLayoutNav(fallback);
+}
+
+function saveSessionNav(nav: LayoutNav) {
+  state.layoutNav = sanitizeLayoutNav(nav);
+  try {
+    localStorage.setItem(LAYOUT_NAV_KEY, JSON.stringify(state.layoutNav));
+  } catch {
+    /* ignore */
+  }
+}
+
+function currentNavTabSlot(): LayoutPage | null {
+  return matchingNavTabSlot(
+    state.layoutNav,
+    state.layoutSpec,
+    state.navTabSlot,
+  );
+}
+
+function commitLayoutNav(nav: LayoutNav, opts?: { persist?: boolean }) {
+  saveSessionNav(nav);
+  if (opts?.persist !== false) {
+    persistCurrentPageVersion({ captureThumb: false });
+  }
+  syncLayoutKindControl();
+}
+
+function remapNavTab(slot: LayoutPage, spec: LayoutSpec) {
+  state.navTabSlot = slot;
+  commitLayoutNav(setNavTab(state.layoutNav, slot, spec));
+  void selectLayoutPage(spec.app, spec.page);
+}
+
+function resetNavForApp(app: LayoutApp) {
+  state.navTabSlot = null;
+  saveSessionNav(defaultLayoutNav(app));
+}
+
+function adoptNavForGeneratedApp(app: LayoutApp) {
+  if (!layoutNavIsCustom(state.layoutNav) || state.layoutNav.host === "data") {
+    saveSessionNav(defaultLayoutNav(app));
+  }
+}
 
 function syncCombineExprAfterFilterChange(prevFilters: ColumnFilter[]) {
   const prevDefault = buildDefaultFieldCombine(prevFilters);
@@ -566,6 +643,14 @@ function renderRows(response: unknown, opts?: { append?: boolean }) {
     layoutKind: state.layoutKind,
     layoutSpec: state.layoutSpec,
     layoutKindManual: state.layoutKindManual,
+    layoutNav: state.layoutNav,
+    navTabSlot: currentNavTabSlot(),
+    rowJumpSpec: resolveNavJump(state.layoutNav, "openRow", state.layoutSpec),
+    authorJumpSpec: resolveNavJump(
+      state.layoutNav,
+      "openAuthor",
+      state.layoutSpec,
+    ),
     actionBindings: state.actionBindings,
     onActionSlot: (slot, ctx, opts) => handleActionSlot(slot, ctx, opts),
     onLayoutKindResolved: (kind) => {
@@ -588,6 +673,24 @@ function renderRows(response: unknown, opts?: { append?: boolean }) {
       applyLayoutSpec(spec, { manual: false, rerender: false });
     },
     onRequestLayoutKind: (kind) => {
+      if (kind === "order") {
+        const spec = resolveNavJump(
+          state.layoutNav,
+          "openCheckout",
+          state.layoutSpec,
+        );
+        void selectLayoutPage(spec.app, spec.page);
+        return;
+      }
+      if (kind === "cart") {
+        const spec = resolveNavJump(
+          state.layoutNav,
+          "openCart",
+          state.layoutSpec,
+        );
+        void selectLayoutPage(spec.app, spec.page);
+        return;
+      }
       applyLayoutKind(kind, { manual: true, rerender: true });
     },
     onAppSearch: (q) => applyInPlaceAppSearch(q),
@@ -596,11 +699,21 @@ function renderRows(response: unknown, opts?: { append?: boolean }) {
     },
     layoutPrompt: state.lastUserPrompt,
     onSelectAppPage: (page) => selectAppPage(page),
+    onSelectLayoutSpec: (spec) => {
+      void selectLayoutPage(spec.app, spec.page);
+    },
+    onRemapTab: (slot, spec) => remapNavTab(slot, spec),
     onSelectLayoutApp: (app) => {
+      resetNavForApp(app);
       void selectLayoutPage(app, contentLandingPage(app));
     },
     onOpenAppScan: () => openAppScanPage(),
     onOpenCategory: (id) => {
+      if (state.layoutNav.jumps.openCategory) {
+        const spec = state.layoutNav.jumps.openCategory;
+        void selectLayoutPage(spec.app, spec.page);
+        return;
+      }
       void openCategoryItems(id);
     },
     onReplaceFilters: (filters) => {
@@ -1099,7 +1212,9 @@ function tableForPageSync(app: LayoutApp, page: LayoutPage): string | null | und
     return inferPersonTable(state.comments);
   }
   if (isSettingsPage(page) && page !== "favorite") return undefined;
-  if (page === "favorite") return itemTableForApp(app);
+  if (page === "favorite" || page === "published" || page === "drafts") {
+    return itemTableForApp(app);
+  }
   if (page === "feed") return itemTableForApp(app);
   if (isDataListViewPage(page) || isDataFormPage(page)) {
     return itemTableForApp(app);
@@ -1128,7 +1243,7 @@ async function refreshLayoutComments() {
   }
   try {
     const c = await api<SchemaComments>(
-      "/api/schema-comments?tables=User,Moment,Comment,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee,Course,Book,Comic,Local,Recipe,Trip,Sport,Baby,Workout,Vehicle,Job,House,Beauty,Photo,Note,Skill",
+      "/api/schema-comments?tables=User,Moment,Comment,Category,Product,ShopOrder,Address,Video,Music,News,Notice,Blog,Article,Activity,Message,Employee,Course,Teacher,Student,Book,Comic,Local,Recipe,Trip,Sport,Baby,Workout,Vehicle,Job,House,Beauty,Photo,Note,Skill",
     );
     state.comments = mergeComments(state.comments, c);
   } catch {
@@ -1390,6 +1505,7 @@ function capturePageSnapshot(): Omit<
     layoutKind: state.layoutKind,
     layoutApp: state.layoutSpec.app,
     layoutPage: state.layoutSpec.page,
+    layoutNav: state.layoutNav,
     layoutKindManual: state.layoutKindManual,
     actionBindings: Object.keys(state.actionBindings).length
       ? structuredClone(state.actionBindings)
@@ -1490,11 +1606,14 @@ function applyInPlaceAppSearch(q: string) {
 }
 
 async function openAppSearchPage(q: string) {
-  const app = state.layoutSpec.app;
+  const spec = resolveNavJump(state.layoutNav, "openSearch", state.layoutSpec);
   const trimmed = q.trim();
-  setPendingSearchQuery(app, trimmed);
-  if (state.layoutSpec.page !== "search") {
-    await selectLayoutPage(app, "search");
+  setPendingSearchQuery(spec.app, trimmed);
+  if (
+    state.layoutSpec.app !== spec.app ||
+    state.layoutSpec.page !== spec.page
+  ) {
+    await selectLayoutPage(spec.app, spec.page);
   }
   applyInPlaceAppSearch(trimmed);
 }
@@ -1794,7 +1913,11 @@ function pageKindFromSnapshot(
   return "list";
 }
 
-function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
+function applyPageSnapshot(
+  snap: SavedPageSnapshot,
+  title: string,
+  opts?: { keepNav?: boolean },
+) {
   const kind = pageKindFromSnapshot(snap, state.activePageId || "");
   state.pageKind = kind;
   state.viewMode = kind === "list" ? "list" : "detail";
@@ -1857,6 +1980,20 @@ function applyPageSnapshot(snap: SavedPageSnapshot, title: string) {
     state.hasBind = true;
   }
   state.layoutKindManual = snap.layoutKindManual === true;
+  const keepNav = opts?.keepNav !== false;
+  if (!keepNav) {
+    if (snap.layoutNav) {
+      saveSessionNav(parseLayoutNav(snap.layoutNav, state.layoutSpec.app));
+    } else {
+      saveSessionNav(defaultLayoutNav(state.layoutSpec.app));
+    }
+  } else if (!layoutNavIsCustom(state.layoutNav)) {
+    if (snap.layoutNav) {
+      saveSessionNav(parseLayoutNav(snap.layoutNav, state.layoutSpec.app));
+    } else if (state.layoutNav.host !== canonicalLayoutApp(state.layoutSpec.app)) {
+      saveSessionNav(defaultLayoutNav(state.layoutSpec.app));
+    }
+  }
   state.actionBindings = snap.actionBindings
     ? structuredClone(snap.actionBindings)
     : {};
@@ -1991,7 +2128,7 @@ async function fetchBoundDetail(opts: {
 async function switchToSavedPage(
   pageId: string,
   version?: number,
-  opts?: { search?: boolean; skipPersist?: boolean },
+  opts?: { search?: boolean; skipPersist?: boolean; keepNav?: boolean },
 ) {
   rememberPageBeforeJump(pageId);
   const switchGen = ++pageSwitchGen;
@@ -2019,7 +2156,9 @@ async function switchToSavedPage(
   // Another click already superseded this switch
   if (pageSwitchGen !== switchGen) return;
   state.activePageId = pageId;
-  applyPageSnapshot(snap, page.title);
+  applyPageSnapshot(snap, page.title, {
+    keepNav: opts?.keepNav !== false,
+  });
   if (!state.sessionId) {
     state.sessionId = `local_${pageId}`;
   }
@@ -2206,7 +2345,9 @@ function makePagePickerCard(p: SavedPage): HTMLElement {
   openBtn.onclick = () => {
     // Keep the grid open through leave-page capture so the new thumb paints,
     // then close after the switch settles.
-    void switchToSavedPage(p.id).finally(() => closePageMenus());
+    void switchToSavedPage(p.id, undefined, { keepNav: false }).finally(() =>
+      closePageMenus(),
+    );
   };
 
   const thumb = document.createElement("div");
@@ -2531,6 +2672,7 @@ function saveGeneratedPage(
 }
 
 function closePageMenus() {
+  closeLayoutSpecPicker();
   for (const menu of Array.from(
     document.querySelectorAll<HTMLElement>(".page-menu"),
   )) {
@@ -2709,62 +2851,54 @@ function renderFilters(filters: FilterDef[]) {
   layoutBtn.setAttribute("aria-label", t("workspace.selectLayout"));
   const layoutMenu = document.createElement("div");
   layoutMenu.className = "page-menu page-layout-menu";
-  for (const app of LAYOUT_APPS) {
-    const group = document.createElement("div");
-    group.className =
-      "page-layout-group" +
-      (app === state.layoutSpec.app ? " is-current" : "");
-    const parent = document.createElement("button");
-    parent.type = "button";
-    parent.className =
-      "page-layout-item page-layout-parent" +
-      (app === state.layoutSpec.app ? " active" : "");
-    parent.textContent = layoutAppLabel(app);
-    const sub = document.createElement("div");
-    sub.className = "page-layout-sub";
-    parent.onmousedown = (ev) => ev.stopPropagation();
-    parent.onclick = (ev) => {
-      ev.stopPropagation();
-      for (const g of Array.from(
-        layoutMenu.querySelectorAll(".page-layout-group.is-open"),
-      )) {
-        if (g !== group) g.classList.remove("is-open");
-      }
-      group.classList.toggle("is-open");
-      syncPageLayoutFlyouts(layoutMenu, layoutBtn);
-    };
-    group.addEventListener("pointerenter", () => {
-      syncPageLayoutFlyouts(layoutMenu, layoutBtn);
-    });
-    group.addEventListener("pointerleave", () => {
-      sub.classList.remove("is-placed");
-    });
-    for (const page of LAYOUT_PAGES_BY_APP[app]) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className =
-        "page-layout-item" +
-        (app === state.layoutSpec.app && page === state.layoutSpec.page
-          ? " active"
-          : "");
-      item.textContent = layoutPageLabel(page, app);
-      item.onmousedown = (ev) => ev.stopPropagation();
-      item.onclick = (ev) => {
-        ev.stopPropagation();
-        closePageMenus();
+  prependNavEditor(layoutMenu, {
+    nav: state.layoutNav,
+    current: state.layoutSpec,
+    onNav: (nav) => {
+      closePageMenus();
+      const prev = state.layoutNav;
+      const slot = currentNavTabSlot();
+      commitLayoutNav(nav);
+      if (slot) {
+        const nextTab = nav.tabs.find((t) => t.slot === slot);
+        const prevTab = prev.tabs.find((t) => t.slot === slot);
         if (
-          app === state.layoutSpec.app &&
-          page === state.layoutSpec.page
+          nextTab &&
+          (!prevTab || !specsEqual(nextTab.spec, prevTab.spec))
         ) {
+          state.navTabSlot = slot;
+          void selectLayoutPage(nextTab.spec.app, nextTab.spec.page);
           return;
         }
-        void selectLayoutPage(app, page);
-      };
-      sub.appendChild(item);
-    }
-    group.append(parent, sub);
-    layoutMenu.appendChild(group);
-  }
+      }
+      renderFilters(state.filters);
+      if (state.lastResponse != null) renderRows(state.lastResponse);
+    },
+  });
+  fillLayoutSpecMenu(layoutMenu, {
+    current: state.layoutSpec,
+    onSelect: (spec) => {
+      closePageMenus();
+      if (
+        spec.app === state.layoutSpec.app &&
+        spec.page === state.layoutSpec.page
+      ) {
+        return;
+      }
+      const tab = currentNavTabSlot();
+      if (tab && state.layoutNav.tabs.some((t) => t.slot === tab)) {
+        remapNavTab(tab, spec);
+        return;
+      }
+      void selectLayoutPage(spec.app, spec.page);
+    },
+    onPlaced: (menu, group) => {
+      constrainPageLayoutMenu(menu, layoutBtn);
+      const parentBtn = group.querySelector<HTMLElement>(".page-layout-parent");
+      const sub = group.querySelector<HTMLElement>(".page-layout-sub");
+      if (parentBtn && sub) placePageLayoutSubmenu(sub, parentBtn, menu);
+    },
+  });
   bindHoverMenu(layoutBtn, layoutMenu);
   const syncFlyouts = () => syncPageLayoutFlyouts(layoutMenu, layoutBtn);
   layoutWrap.addEventListener("pointerenter", syncFlyouts);
@@ -4221,14 +4355,9 @@ async function handleActionSlot(
 }
 
 function openAppScanPage() {
-  const app = state.layoutSpec.app;
+  const spec = resolveNavJump(state.layoutNav, "openScan", state.layoutSpec);
   const go = () => {
-    if (LAYOUT_PAGES_BY_APP[app].includes("scan")) {
-      applyLayoutSpec(
-        { app, page: "scan" },
-        { manual: true, persist: false, rerender: true },
-      );
-    }
+    applyLayoutSpec(spec, { manual: true, persist: false, rerender: true });
   };
   if (state.pageKind !== "list" || state.viewMode !== "list") {
     void returnToListPage().then(go);
@@ -4314,7 +4443,11 @@ function applyReplacedFilters(filters: ColumnFilter[]) {
 }
 
 function selectAppPage(page: LayoutPage) {
-  void selectLayoutPage(state.layoutSpec.app, page);
+  if (state.layoutNav.tabs.some((t) => t.slot === page)) {
+    state.navTabSlot = page;
+  }
+  const spec = resolveNavSelect(state.layoutNav, page);
+  void selectLayoutPage(spec.app, spec.page);
 }
 
 /** Saved 首页/分类/排行 that were stored as a player/detail must be rebuilt. */
@@ -4338,7 +4471,8 @@ function layoutReusesCurrentRows(page: LayoutPage): boolean {
     isMeHubPage(page) ||
     isUserLayoutPage(page) ||
     page === "cart" ||
-    page === "order"
+    page === "order" ||
+    page === "create"
   );
 }
 
@@ -4400,6 +4534,34 @@ async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
     return;
   }
 
+  if (isProducerStudioPage(page) && app !== "data") {
+    if (page === "create") onEnterComposePage();
+    if (state.pageKind === "detail" || state.viewMode === "detail") {
+      const landing = appLandingPage(app);
+      const listSaved = findSavedPageByLayout(app, landing);
+      if (listSaved && listSaved.id !== state.activePageId) {
+        await switchToSavedPage(listSaved.id);
+      }
+    }
+    paintLayoutPage(app, page);
+    if (page === "published" || page === "drafts") {
+      const table = await resolveTableForPage(app, page);
+      const current = currentPrimaryTable();
+      if (typeof table === "string" && table && table !== current) {
+        await openBoundTableList({
+          table,
+          keepLayout: true,
+          prepare: () => {
+            state.layoutSpec = { app, page };
+            state.layoutKind = legacyKindFromSpec(state.layoutSpec);
+            state.layoutKindManual = true;
+          },
+        });
+      }
+    }
+    return;
+  }
+
   const haveRows = state.lastResponse != null || state.hasBind;
 
   // Same dataset, different chrome (tabs / 数据管理 表格·网格·图表).
@@ -4410,7 +4572,9 @@ async function selectLayoutPage(app: LayoutApp, page: LayoutPage) {
       page === "users" ||
       isOrdersPage(page) ||
       isAddressPage(page) ||
-      page === "favorite";
+      page === "favorite" ||
+      page === "published" ||
+      page === "drafts";
     if (needsOtherTable) {
       const table = await resolveTableForPage(app, page);
       const current = currentPrimaryTable();
@@ -4527,6 +4691,32 @@ function applyChatPagePatch(patch?: ChatPagePatch | null): boolean {
   if (!patch) return false;
   let changed = false;
   if (
+    patch.navTab &&
+    isLayoutPage(patch.navTab.slot) &&
+    isLayoutApp(patch.navTab.app) &&
+    isLayoutPage(patch.navTab.page)
+  ) {
+    remapNavTab(patch.navTab.slot, {
+      app: patch.navTab.app,
+      page: patch.navTab.page,
+    });
+    changed = true;
+  }
+  if (
+    patch.navJump &&
+    isJumpSlot(patch.navJump.slot) &&
+    isLayoutApp(patch.navJump.app) &&
+    isLayoutPage(patch.navJump.page)
+  ) {
+    commitLayoutNav(
+      setNavJump(state.layoutNav, patch.navJump.slot as JumpSlot, {
+        app: patch.navJump.app,
+        page: patch.navJump.page,
+      }),
+    );
+    changed = true;
+  }
+  if (
     patch.layoutApp &&
     isLayoutApp(patch.layoutApp) &&
     patch.layoutPage &&
@@ -4590,6 +4780,24 @@ function applyChatPagePatch(patch?: ChatPagePatch | null): boolean {
 }
 
 function describeChatPatch(patch: ChatPagePatch): string {
+  if (patch.navTab) {
+    return t("chat.patchNavTab", {
+      slot: layoutTabLabel(patch.navTab.slot as LayoutPage),
+      target: layoutSpecLabel({
+        app: patch.navTab.app as LayoutApp,
+        page: patch.navTab.page as LayoutPage,
+      }),
+    });
+  }
+  if (patch.navJump && isJumpSlot(patch.navJump.slot)) {
+    return t("chat.patchNavJump", {
+      slot: jumpSlotLabel(patch.navJump.slot),
+      target: layoutSpecLabel({
+        app: patch.navJump.app as LayoutApp,
+        page: patch.navJump.page as LayoutPage,
+      }),
+    });
+  }
   if (patch.layoutPage === "users") return t("chat.patchContacts");
   if (patch.displayKind === "grid") return t("chat.patchGrid");
   if (patch.displayKind === "table") return t("chat.patchTable");
@@ -4889,6 +5097,7 @@ async function sendChat(
         state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
         state.layoutKind = legacyKindFromSpec(state.layoutSpec);
         state.layoutKindManual = true;
+        adoptNavForGeneratedApp(opts.targetApp);
       }
       activateIndependentPage({
         table: createTable,
@@ -4967,6 +5176,7 @@ async function sendChat(
         state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
         state.layoutKind = legacyKindFromSpec(state.layoutSpec);
         state.layoutKindManual = true;
+        adoptNavForGeneratedApp(opts.targetApp);
       } else {
         state.layoutKindManual = false;
         seedLayoutFromTable(primary);
@@ -5060,6 +5270,7 @@ async function sendChat(
           state.layoutSpec = { app: opts.targetApp, page: opts.targetPage };
           state.layoutKind = legacyKindFromSpec(state.layoutSpec);
           state.layoutKindManual = true;
+          adoptNavForGeneratedApp(opts.targetApp);
         }
         activateIndependentPage({
           table: detailTable,
@@ -5308,7 +5519,7 @@ document.addEventListener("mousedown", (ev) => {
     (t as HTMLElement).closest?.(
       // Layout flyout is position:fixed; closing on mousedown hides it
       // (visibility/display) before click, so page-type switches never fire.
-      ".page-title-control, .page-version-control, .page-layout-control",
+      ".page-title-control, .page-version-control, .page-layout-control, .layout-spec-picker",
     )
   ) {
     return;
@@ -5318,6 +5529,7 @@ document.addEventListener("mousedown", (ev) => {
 
 // Restore last generated page chrome after refresh (Search to reload data)
 {
+  state.layoutNav = loadSessionNav("data");
   const ref = getActivePageRef();
   const page = ref ? getSavedPage(ref.pageId) : null;
   if (ref && page) {

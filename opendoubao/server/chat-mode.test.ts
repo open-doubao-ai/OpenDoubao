@@ -144,4 +144,17 @@ describe("pageUiPatchFromMessage", () => {
     const ui = pageUiPatchFromMessage("隐藏 lyrics 列");
     assert.ok(ui?.hideColumns?.includes("lyrics"));
   });
+
+  it("remaps the home tab to another existing page", () => {
+    const ui = pageUiPatchFromMessage("首页改成视频排行", musicPage);
+    assert.equal(ui?.navTab?.slot, "home");
+    assert.equal(ui?.navTab?.app, "video");
+    assert.equal(ui?.navTab?.page, "rank");
+  });
+
+  it("remaps item tap to a player page", () => {
+    const ui = pageUiPatchFromMessage("点击跳转到播放页", musicPage);
+    assert.equal(ui?.navJump?.slot, "openRow");
+    assert.equal(ui?.navJump?.page, "player");
+  });
 });

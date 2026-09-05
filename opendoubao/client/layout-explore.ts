@@ -200,6 +200,8 @@ export function shouldShowAppSearch(
     page === "cart" ||
     page === "order" ||
     page === "create" ||
+    page === "published" ||
+    page === "drafts" ||
     page === "user" ||
     page === "profile" ||
     page === "settings" ||

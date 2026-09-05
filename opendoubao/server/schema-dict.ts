@@ -19,6 +19,8 @@ Tables (APIJSON-Demo + layout categories):
 - Category: id, userId, app, name, cover, sort, date  (分类/栏目/流派；app=commerce/education/…)
 - Address: id, userId, consignee, phone, region, address, tag, isDefault, date  (收件地址)
 - Course: id, userId, categoryId, title, author, cover, content, lessons, viewCount, date  (教育学习)
+- Teacher: id, userId, name, title, head, intro, date  (教育学习-老师)
+- Student: id, userId, name, grade, head, intro, date  (教育学习-学生)
 - Book: id, userId, categoryId, title, author, cover, content, publisher, viewCount, date  (小说阅读)
 - Comic: id, userId, categoryId, title, author, cover, content, chapterCount, viewCount, date  (漫画阅读)
 - Local: id, userId, categoryId, title, author, cover, content, address, price, viewCount, date  (本地生活)

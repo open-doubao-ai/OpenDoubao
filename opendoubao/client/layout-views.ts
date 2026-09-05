@@ -29,8 +29,9 @@ import {
   visitorId,
   type SocialComment,
 } from "./layout-social.js";
+import { renderComposePage } from "./layout-compose.js";
 import type { WritePayload } from "./result-view.js";
-import type { ActionBinding, ActionSlot } from "./page-layout.js";
+import type { ActionBinding, ActionSlot, LayoutNav, LayoutNavTab } from "./page-layout.js";
 import type { ColumnFilter } from "./table-query.js";
 import {
   addCartLine,
@@ -51,6 +52,7 @@ import {
   isNewsLikeApp,
   isOrdersPage,
   isMeHubPage,
+  isProducerStudioPage,
   isSettingsPage,
   isUserLayoutPage,
   layoutKindLabel,
@@ -59,6 +61,7 @@ import {
   pickRowPresentation,
   setCartQty,
   shouldShowAppTabs,
+  specsEqual,
   type CartLine,
   type LayoutApp,
   type LayoutKind,
@@ -66,6 +69,7 @@ import {
   type LayoutSpec,
   type RowPresentation,
 } from "./page-layout.js";
+import { bindTabRemap } from "./layout-nav-ui.js";
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
 
@@ -87,6 +91,7 @@ export type LayoutListHandlers = {
   pager?: ListPagerOpts;
   onSelectPage?: (page: LayoutPage) => void;
   onSelectApp?: (app: LayoutApp) => void;
+  onRemapTab?: (slot: LayoutPage, spec: LayoutSpec) => void;
   onOpenProfile?: () => void;
   onOpenAuthor?: (userId: string | number) => void;
   onOpenCategory?: (id: string | number) => void;
@@ -119,6 +124,11 @@ export type LayoutDetailHandlers = {
     field?: string;
   }) => void;
   onWrite?: (payload: WritePayload) => void | Promise<boolean | void>;
+  onEditRecord?: (info: {
+    table: string;
+    id: string | number;
+    cells: Record<string, unknown>;
+  }) => void;
   onOpenAuthor?: (userId: string | number) => void;
   onSearch?: (q: string) => void;
   onOpenSearch?: (q: string) => void;
@@ -307,6 +317,82 @@ function parseLyricLines(raw: string): LyricLine[] {
   return out.filter((l) => l.text);
 }
 
+function looksLikeHtml(text: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(text.trim());
+}
+
+function sanitizeHtml(html: string): string {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("script,style,iframe,object,embed,link,meta").forEach((n) => n.remove());
+  for (const node of [...doc.body.querySelectorAll("*")]) {
+    for (const attr of [...node.attributes]) {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.trim();
+      if (name.startsWith("on") || (name === "href" && /^javascript:/i.test(val))) {
+        node.removeAttribute(attr.name);
+      }
+    }
+  }
+  return doc.body.innerHTML;
+}
+
+function fillRichBody(host: HTMLElement, text: string) {
+  const trimmed = (text || "").trim();
+  if (!trimmed) return;
+  if (looksLikeHtml(trimmed)) {
+    host.classList.add("is-html");
+    host.innerHTML = sanitizeHtml(trimmed);
+    return;
+  }
+  for (const p of paras(trimmed)) {
+    if (p.length <= 24 && !p.endsWith("。")) host.appendChild(el("h2", "jj-h2", p));
+    else host.appendChild(el("p", "", p));
+  }
+}
+
+function mountOwnerWriteBar(
+  host: HTMLElement,
+  opts: {
+    table: string | null;
+    recordId: string | number | null;
+    authorId: string | number | null;
+    cells: Record<string, unknown>;
+    handlers: LayoutDetailHandlers;
+  },
+) {
+  const table = opts.table?.trim();
+  const id = opts.recordId;
+  if (!table || id == null) return;
+  if (!opts.handlers.onEditRecord && !opts.handlers.onWrite) return;
+  const me = visitorId();
+  if (me == null) return;
+  if (opts.authorId != null && String(opts.authorId) !== String(me)) return;
+  const bar = el("div", "layout-owner-bar");
+  if (opts.handlers.onEditRecord) {
+    const edit = el("button", "layout-btn", t("common.edit"));
+    edit.type = "button";
+    edit.onclick = () =>
+      opts.handlers.onEditRecord?.({ table, id, cells: opts.cells });
+    bar.appendChild(edit);
+  }
+  if (opts.handlers.onWrite) {
+    const del = el("button", "layout-btn layout-btn-danger", t("common.delete"));
+    del.type = "button";
+    del.onclick = () => {
+      if (!confirm(t("layout.compose.confirmDelete"))) return;
+      void opts.handlers.onWrite?.({
+        method: "delete",
+        table,
+        body: { [table]: { id }, tag: table },
+        keepTag: true,
+        skipTemplate: true,
+      });
+    };
+    bar.appendChild(del);
+  }
+  host.prepend(bar);
+}
+
 function paras(text: string): string[] {
   const blocks = text
     .split(/\n{2,}|\r\n|\n/)
@@ -343,6 +429,8 @@ type ListOpts = {
   recordId: (row: FlatRow) => string | number | null;
   handlers: LayoutListHandlers;
   catalogStyle?: CatalogStyle;
+  nav?: LayoutNav | null;
+  navTabSlot?: LayoutPage | null;
 };
 
 function listApp(opts: { kind: LayoutKind; spec?: LayoutSpec }): LayoutApp {
@@ -368,17 +456,44 @@ const TAB_ICON: Partial<Record<LayoutPage, string>> = {
 function mountAppTabBar(opts: {
   app: LayoutApp;
   page?: LayoutPage;
+  nav?: LayoutNav | null;
+  navTabSlot?: LayoutPage | null;
+  currentSpec?: LayoutSpec;
   onSelect: (page: LayoutPage) => void;
+  onRemapTab?: (slot: LayoutPage, spec: LayoutSpec) => void;
 }): HTMLElement | null {
-  const pages = APP_TABS_BY_APP[opts.app];
-  if (!pages.length || !shouldShowAppTabs(opts.app, opts.page)) return null;
+  const nav = opts.nav;
+  const tabItems: LayoutNavTab[] = (
+    nav?.tabs?.length
+      ? [...nav.tabs]
+      : APP_TABS_BY_APP[opts.app].map((slot) => ({
+          slot,
+          spec: { app: opts.app, page: slot },
+        }))
+  ).filter(
+    (tab) =>
+      !isProducerStudioPage(tab.slot) && !isProducerStudioPage(tab.spec.page),
+  );
+  if (
+    !tabItems.length ||
+    !shouldShowAppTabs(opts.app, opts.page, nav)
+  ) {
+    return null;
+  }
+  const activeSlot =
+    opts.navTabSlot ||
+    (opts.currentSpec
+      ? tabItems.find((t) => specsEqual(t.spec, opts.currentSpec!))?.slot
+      : null) ||
+    opts.page;
   const bar = el("nav", "app-tabs");
   bar.setAttribute("aria-label", t("layout.tab.bar"));
-  for (const page of pages) {
+  for (const tab of tabItems) {
+    const page = tab.slot;
     const btn = el(
       "button",
       "app-tab" +
-        (page === (opts.page ?? pages[0]) ||
+        (page === activeSlot ||
         (page === "user" && isMeHubPage(opts.page))
           ? " is-active"
           : ""),
@@ -386,9 +501,15 @@ function mountAppTabBar(opts: {
     btn.type = "button";
     btn.append(
       el("span", "app-tab-icon", TAB_ICON[page] || "·"),
-      el("span", "app-tab-label", layoutTabLabel(page, opts.app)),
+      el("span", "app-tab-label", tab.label || layoutTabLabel(page, opts.app)),
     );
     btn.onclick = () => opts.onSelect(page);
+    if (opts.onRemapTab) {
+      bindTabRemap(btn, {
+        spec: tab.spec,
+        onPick: (spec) => opts.onRemapTab!(page, spec),
+      });
+    }
     bar.appendChild(btn);
   }
   return bar;
@@ -405,7 +526,11 @@ function finishLayoutList(
     const bar = mountAppTabBar({
       app,
       page,
+      nav: opts.nav,
+      navTabSlot: opts.navTabSlot,
+      currentSpec: opts.spec,
       onSelect: opts.handlers.onSelectPage,
+      onRemapTab: opts.handlers.onRemapTab,
     });
     if (bar) wrap.appendChild(bar);
   }
@@ -549,7 +674,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
     return finishLayoutList(container, wrap, opts);
   }
 
-  if (page === "user" || page === "profile" || isSettingsPage(page)) {
+  if (page === "user" || page === "profile" || isSettingsPage(page) || page === "published" || page === "drafts") {
     wrap.appendChild(renderMePage(opts, app));
     return finishLayoutList(container, wrap, opts);
   }
@@ -608,6 +733,24 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
       renderOrderPanel({
         ...cartOptsFromList(opts),
         checkoutHandler: (info) => opts.handlers.onCheckout?.(info),
+      }),
+    );
+    return finishLayoutList(container, wrap, opts);
+  }
+
+  if (page === "create") {
+    feedHost.appendChild(
+      renderComposePage({
+        app,
+        rows: opts.rows,
+        columns: opts.columns,
+        primaryTable: opts.primaryTable,
+        comments: opts.comments,
+        apijsonBase: opts.apijsonBase,
+        handlers: {
+          onWrite: opts.handlers.onWrite,
+          onSelectPage: opts.handlers.onSelectPage,
+        },
       }),
     );
     return finishLayoutList(container, wrap, opts);
@@ -1044,6 +1187,13 @@ export function renderLayoutDetailHero(
   } else {
     renderJuejinArticle(app, pres, related, opts);
   }
+  mountOwnerWriteBar(app, {
+    table: opts.primaryTable,
+    recordId: opts.recordId ?? pres.id,
+    authorId: pres.authorId,
+    cells: opts.row.cells,
+    handlers: opts.handlers,
+  });
   host.appendChild(app);
 }
 
@@ -2391,9 +2541,7 @@ function renderNewsArticle(
     );
   }
   const body = el("div", "news-body");
-  for (const p of paras(pres.body || pres.headline || "")) {
-    body.appendChild(el("p", "", p));
-  }
+  fillRichBody(body, pres.body || pres.headline || "");
   main.appendChild(body);
   page.appendChild(main);
 
@@ -2472,10 +2620,7 @@ function renderJuejinArticle(
     );
   }
   const body = el("div", "jj-body");
-  for (const p of paras(pres.body || pres.headline || "")) {
-    if (p.length <= 24 && !p.endsWith("。")) body.appendChild(el("h2", "jj-h2", p));
-    else body.appendChild(el("p", "", p));
-  }
+  fillRichBody(body, pres.body || pres.headline || "");
   article.appendChild(body);
   const comments = el("div", "jj-comments");
   comments.appendChild(el("h3", "jj-card-h", t("layout.comments")));
@@ -2586,7 +2731,7 @@ function renderCampaignLanding(
   );
   if (pres.body) {
     const box = el("div", "camp-copy");
-    for (const p of paras(pres.body)) box.appendChild(el("p", "", p));
+    fillRichBody(box, pres.body);
     body.appendChild(box);
   }
   const cta = el("button", "camp-cta", t("layout.signup"));

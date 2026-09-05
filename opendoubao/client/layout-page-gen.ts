@@ -24,7 +24,6 @@ export function pageNeedsChatGenerate(page: LayoutPage): boolean {
     page === "detail" ||
     page === "form" ||
     page === "player" ||
-    page === "create" ||
     page === "orderDetail" ||
     page === "addressDetail"
   );
@@ -62,6 +61,10 @@ export function generateLayoutPagePrompt(
     hints.push("List the app's item table (favorites).");
   } else if (page === "form") {
     hints.push("Open a record form (edit existing or empty create).");
+  } else if (page === "create") {
+    hints.push(
+      "Open the app compose page (rich text, upload, or entity submit). Bind POST to the item table.",
+    );
   } else if (page === "home" || page === "list" || page === "feed" || isDataListViewPage(page)) {
     hints.push("List many rows (array GET). Do not open a single-record detail.");
   }

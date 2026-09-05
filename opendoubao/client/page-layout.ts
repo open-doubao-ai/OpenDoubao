@@ -71,6 +71,8 @@ export type LayoutPage =
   | "addressDetail"
   | "feed"
   | "create"
+  | "published"
+  | "drafts"
   | "users"
   | "user"
   | "profile"
@@ -163,6 +165,8 @@ const CONTENT_PAGES = [
   "list",
   "detail",
   "create",
+  "published",
+  "drafts",
   "users",
   "user",
   ...APP_ACCOUNT_PAGES,
@@ -292,6 +296,9 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "orderDetail",
     "address",
     "addressDetail",
+    "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -308,6 +315,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "detail",
     "player",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -324,6 +333,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "detail",
     "player",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -339,6 +350,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "list",
     "detail",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -354,6 +367,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "list",
     "detail",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -369,6 +384,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "list",
     "detail",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -384,6 +401,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "list",
     "detail",
     "create",
+    "published",
+    "drafts",
     "users",
     "user",
     ...APP_ACCOUNT_PAGES,
@@ -400,6 +419,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "category",
     "detail",
     "create",
+    "published",
+    "drafts",
     ...APP_ACCOUNT_PAGES,
   ],
   chat: [
@@ -412,6 +433,8 @@ export const LAYOUT_PAGES_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
     "history",
     "category",
     "create",
+    "published",
+    "drafts",
     "detail",
     ...APP_ACCOUNT_PAGES,
   ],
@@ -503,6 +526,8 @@ const PAGE_I18N: Record<LayoutPage, `layout.page.${LayoutPage}`> = {
   addressDetail: "layout.page.addressDetail",
   feed: "layout.page.feed",
   create: "layout.page.create",
+  published: "layout.page.published",
+  drafts: "layout.page.drafts",
   users: "layout.page.users",
   user: "layout.page.user",
   profile: "layout.page.profile",
@@ -593,6 +618,7 @@ export function layoutAppLabel(app: LayoutApp): string {
 }
 
 export function layoutPageLabel(page: LayoutPage, app?: LayoutApp): string {
+  if (page === "create" && app) return layoutTabLabel("create", app);
   if (page === "users" && app) {
     const key = USERS_LIST_I18N[app];
     if (key) return t(key);
@@ -713,8 +739,8 @@ export const APP_TABS_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
   music: ["home", "category", "rank", "history", "user"],
   news: ["home", "category", "rank", "user"],
   info: ["home", "category", "rank", "user"],
-  blog: ["home", "category", "create", "user"],
-  article: ["home", "category", "rank", "create", "user"],
+  blog: ["home", "category", "rank", "user"],
+  article: ["home", "category", "rank", "user"],
   social: ["list", "users", "feed", "user"],
   chat: ["list", "users", "feed", "user"],
   campaign: CONTENT_TABS,
@@ -738,13 +764,404 @@ export const APP_TABS_BY_APP: Record<LayoutApp, readonly LayoutPage[]> = {
 export function shouldShowAppTabs(
   app: LayoutApp,
   page?: LayoutPage,
+  nav?: LayoutNav | null,
 ): boolean {
-  const tabs = APP_TABS_BY_APP[app];
+  const tabs = (nav?.tabs?.length
+    ? nav.tabs.map((t) => t.slot)
+    : APP_TABS_BY_APP[app]
+  ).filter((slot) => !isProducerStudioPage(slot));
   if (!tabs.length) return false;
   if (!page) return true;
   if (tabs.includes(page)) return true;
+  if (nav?.tabs.some((t) => t.spec.page === page)) return true;
   if (isMeHubPage(page)) return true;
   return page === "list" || page === "home" || page === "feed";
+}
+
+/** In-app jump buttons (item / search / cart / …) — remap to any existing page. */
+export const JUMP_SLOTS = [
+  "openRow",
+  "openSearch",
+  "openScan",
+  "openCart",
+  "openCheckout",
+  "openProfile",
+  "openAuthor",
+  "openCategory",
+  "openChat",
+  "openRelated",
+  "openCreate",
+  "openOrders",
+  "openAddress",
+] as const;
+
+export type JumpSlot = (typeof JUMP_SLOTS)[number];
+
+export function isJumpSlot(v: unknown): v is JumpSlot {
+  return typeof v === "string" && (JUMP_SLOTS as readonly string[]).includes(v);
+}
+
+/** Tab slots a composed app can add (existing page types only). */
+export const NAV_TAB_CANDIDATES: readonly LayoutPage[] = [
+  "home",
+  "feed",
+  "list",
+  "category",
+  "rank",
+  "history",
+  "recommend",
+  "search",
+  "cart",
+  "orders",
+  "users",
+  "user",
+] as const;
+
+/** One bottom/top tab: chrome slot + destination page (any app.page). */
+export type LayoutNavTab = {
+  slot: LayoutPage;
+  spec: LayoutSpec;
+  label?: string;
+};
+
+/**
+ * Composed app shell: tabs and jumps point at existing LayoutSpecs.
+ * Only the home tab is typically unique; everything else reuses a known page.
+ */
+export type LayoutNav = {
+  host: LayoutApp;
+  tabs: LayoutNavTab[];
+  jumps: Partial<Record<JumpSlot, LayoutSpec>>;
+  pages?: Partial<Record<LayoutPage, LayoutSpec>>;
+};
+
+export function isRecordLayoutPage(page: LayoutPage | null | undefined): boolean {
+  return (
+    page === "detail" ||
+    page === "player" ||
+    page === "form" ||
+    page === "orderDetail" ||
+    page === "addressDetail" ||
+    page === "profile"
+  );
+}
+
+export function defaultRecordPage(app: LayoutApp): LayoutPage {
+  if (app === "music" || app === "video") return "player";
+  if (app === "data") return "form";
+  const allowed = LAYOUT_PAGES_BY_APP[app];
+  if (allowed.includes("detail")) return "detail";
+  return defaultPageForApp(app, "detail");
+}
+
+export function defaultLayoutNav(app: LayoutApp): LayoutNav {
+  const host = canonicalLayoutApp(app);
+  return {
+    host,
+    tabs: APP_TABS_BY_APP[host].map((slot) => ({
+      slot,
+      spec: { app: host, page: slot },
+    })),
+    jumps: {},
+  };
+}
+
+export function cloneLayoutNav(nav: LayoutNav): LayoutNav {
+  return {
+    host: nav.host,
+    tabs: nav.tabs.map((t) => ({
+      slot: t.slot,
+      spec: { ...t.spec },
+      ...(t.label ? { label: t.label } : {}),
+    })),
+    jumps: { ...nav.jumps },
+    ...(nav.pages ? { pages: { ...nav.pages } } : {}),
+  };
+}
+
+function parseSpecPair(raw: unknown): LayoutSpec | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { app?: unknown; page?: unknown };
+  if (isLayoutApp(o.app) && isLayoutPage(o.page)) {
+    return canonicalizeLayoutSpec({ app: o.app, page: o.page });
+  }
+  return null;
+}
+
+function parseNavTab(raw: unknown, host: LayoutApp): LayoutNavTab | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as { slot?: unknown; spec?: unknown; page?: unknown; app?: unknown; label?: unknown };
+  const spec =
+    parseSpecPair(o.spec) ??
+    (isLayoutApp(o.app) && isLayoutPage(o.page)
+      ? canonicalizeLayoutSpec({ app: o.app, page: o.page })
+      : null);
+  const slot = isLayoutPage(o.slot)
+    ? o.slot
+    : spec
+      ? spec.page
+      : isLayoutPage(o.page)
+        ? o.page
+        : null;
+  if (!slot) return null;
+  const resolved = spec ?? { app: host, page: slot };
+  const label = typeof o.label === "string" && o.label.trim() ? o.label.trim() : undefined;
+  return { slot, spec: resolved, ...(label ? { label } : {}) };
+}
+
+export function parseLayoutNav(raw: unknown, fallbackApp: LayoutApp): LayoutNav {
+  const fallback = defaultLayoutNav(fallbackApp);
+  if (!raw || typeof raw !== "object") return fallback;
+  const o = raw as {
+    host?: unknown;
+    tabs?: unknown;
+    jumps?: unknown;
+    pages?: unknown;
+  };
+  const host = isLayoutApp(o.host) ? canonicalLayoutApp(o.host) : fallback.host;
+  const tabs: LayoutNavTab[] = [];
+  if (Array.isArray(o.tabs)) {
+    for (const item of o.tabs) {
+      const tab = parseNavTab(item, host);
+      if (tab) tabs.push(tab);
+    }
+  }
+  const jumps: Partial<Record<JumpSlot, LayoutSpec>> = {};
+  if (o.jumps && typeof o.jumps === "object" && !Array.isArray(o.jumps)) {
+    for (const [k, v] of Object.entries(o.jumps as Record<string, unknown>)) {
+      if (!isJumpSlot(k)) continue;
+      const spec = parseSpecPair(v);
+      if (spec) jumps[k] = spec;
+    }
+  }
+  const pages: Partial<Record<LayoutPage, LayoutSpec>> = {};
+  if (o.pages && typeof o.pages === "object" && !Array.isArray(o.pages)) {
+    for (const [k, v] of Object.entries(o.pages as Record<string, unknown>)) {
+      if (!isLayoutPage(k)) continue;
+      const spec = parseSpecPair(v);
+      if (spec) pages[k] = spec;
+    }
+  }
+  return sanitizeLayoutNav({
+    host,
+    tabs: tabs.length ? tabs : defaultLayoutNav(host).tabs,
+    jumps,
+    ...(Object.keys(pages).length ? { pages } : {}),
+  });
+}
+
+/** Producer compose lives in Me — never a consumer bottom tab. */
+export function sanitizeLayoutNav(nav: LayoutNav): LayoutNav {
+  const next = cloneLayoutNav(nav);
+  next.tabs = next.tabs.filter(
+    (t) =>
+      !isProducerStudioPage(t.slot) && !isProducerStudioPage(t.spec.page),
+  );
+  if (!next.tabs.length) {
+    const host = canonicalLayoutApp(next.host);
+    next.tabs = APP_TABS_BY_APP[host].map((slot) => ({
+      slot,
+      spec: { app: host, page: slot },
+    }));
+  }
+  return next;
+}
+
+export function layoutNavIsCustom(nav: LayoutNav): boolean {
+  const def = defaultLayoutNav(nav.host);
+  if (nav.tabs.length !== def.tabs.length) return true;
+  for (let i = 0; i < nav.tabs.length; i++) {
+    const a = nav.tabs[i]!;
+    const b = def.tabs[i]!;
+    if (a.slot !== b.slot || !specsEqual(a.spec, b.spec)) return true;
+  }
+  if (Object.keys(nav.jumps).length) return true;
+  if (nav.pages && Object.keys(nav.pages).length) return true;
+  return false;
+}
+
+export function setNavTab(
+  nav: LayoutNav,
+  slot: LayoutPage,
+  spec: LayoutSpec,
+  label?: string,
+): LayoutNav {
+  if (isProducerStudioPage(slot) || isProducerStudioPage(spec.page)) {
+    return cloneLayoutNav(nav);
+  }
+  const next = cloneLayoutNav(nav);
+  const resolved = canonicalizeLayoutSpec(spec);
+  const idx = next.tabs.findIndex((t) => t.slot === slot);
+  const tab: LayoutNavTab = {
+    slot,
+    spec: resolved,
+    ...(label || next.tabs[idx]?.label
+      ? { label: label ?? next.tabs[idx]?.label }
+      : {}),
+  };
+  if (idx >= 0) next.tabs[idx] = tab;
+  else next.tabs.push(tab);
+  return next;
+}
+
+export function addNavTab(
+  nav: LayoutNav,
+  slot: LayoutPage,
+  spec?: LayoutSpec,
+): LayoutNav {
+  if (isProducerStudioPage(slot) || (spec && isProducerStudioPage(spec.page))) {
+    return cloneLayoutNav(nav);
+  }
+  if (nav.tabs.some((t) => t.slot === slot)) {
+    return spec ? setNavTab(nav, slot, spec) : cloneLayoutNav(nav);
+  }
+  const next = cloneLayoutNav(nav);
+  next.tabs.push({
+    slot,
+    spec: spec ?? { app: nav.host, page: slot },
+  });
+  return next;
+}
+
+export function removeNavTab(nav: LayoutNav, slot: LayoutPage): LayoutNav {
+  const next = cloneLayoutNav(nav);
+  const tabs = next.tabs.filter((t) => t.slot !== slot);
+  next.tabs = tabs.length ? tabs : nav.tabs;
+  return next;
+}
+
+export function setNavJump(
+  nav: LayoutNav,
+  slot: JumpSlot,
+  spec: LayoutSpec | null,
+): LayoutNav {
+  const next = cloneLayoutNav(nav);
+  if (!spec) delete next.jumps[slot];
+  else next.jumps[slot] = canonicalizeLayoutSpec(spec);
+  return next;
+}
+
+export function setNavPage(
+  nav: LayoutNav,
+  page: LayoutPage,
+  spec: LayoutSpec | null,
+): LayoutNav {
+  const next = cloneLayoutNav(nav);
+  if (!spec) {
+    if (next.pages) delete next.pages[page];
+    if (next.pages && !Object.keys(next.pages).length) delete next.pages;
+    return next;
+  }
+  next.pages = { ...(next.pages || {}), [page]: canonicalizeLayoutSpec(spec) };
+  return next;
+}
+
+export function resolveNavTab(nav: LayoutNav, slot: LayoutPage): LayoutSpec {
+  const tab = nav.tabs.find((t) => t.slot === slot);
+  return tab?.spec ?? { app: nav.host, page: slot };
+}
+
+export function defaultJumpSpec(current: LayoutSpec, slot: JumpSlot): LayoutSpec {
+  const app = current.app;
+  switch (slot) {
+    case "openRow":
+      return { app, page: defaultRecordPage(app) };
+    case "openSearch":
+      return { app, page: "search" };
+    case "openScan":
+      return { app, page: "scan" };
+    case "openCart":
+      return { app: "commerce", page: "cart" };
+    case "openCheckout":
+      return { app: "commerce", page: "order" };
+    case "openProfile":
+      return { app, page: "profile" };
+    case "openAuthor":
+      return { app, page: "profile" };
+    case "openCategory":
+      return { app, page: "category" };
+    case "openChat":
+      return { app: "chat", page: "list" };
+    case "openRelated":
+      return { app, page: defaultRecordPage(app) };
+    case "openCreate":
+      return { app, page: app === "data" ? "form" : "create" };
+    case "openOrders":
+      return { app: "commerce", page: "orders" };
+    case "openAddress":
+      return { app: "commerce", page: "address" };
+    default:
+      return current;
+  }
+}
+
+export function resolveNavJump(
+  nav: LayoutNav,
+  slot: JumpSlot,
+  current: LayoutSpec,
+): LayoutSpec {
+  return nav.jumps[slot] ?? defaultJumpSpec(current, slot);
+}
+
+export function jumpSlotForPage(page: LayoutPage): JumpSlot | null {
+  if (page === "search") return "openSearch";
+  if (page === "scan") return "openScan";
+  if (page === "cart") return "openCart";
+  if (page === "order") return "openCheckout";
+  if (page === "profile") return "openProfile";
+  if (page === "orders" || page === "orderDetail") return "openOrders";
+  if (page === "address" || page === "addressDetail") return "openAddress";
+  if (page === "category") return "openCategory";
+  if (page === "create") return "openCreate";
+  return null;
+}
+
+/** Tab click / Me-hub / in-app page: tab override, then page map, then jump, then host. */
+export function resolveNavSelect(nav: LayoutNav, page: LayoutPage): LayoutSpec {
+  const tab = nav.tabs.find((t) => t.slot === page);
+  if (tab) return tab.spec;
+  const mapped = nav.pages?.[page];
+  if (mapped) return mapped;
+  const jump = jumpSlotForPage(page);
+  if (jump && nav.jumps[jump]) return nav.jumps[jump]!;
+  return { app: nav.host, page };
+}
+
+export function matchingNavTabSlot(
+  nav: LayoutNav,
+  spec: LayoutSpec,
+  preferred?: LayoutPage | null,
+): LayoutPage | null {
+  if (preferred) {
+    const tab = nav.tabs.find((t) => t.slot === preferred);
+    if (tab && (specsEqual(tab.spec, spec) || tab.spec.page === spec.page)) {
+      return preferred;
+    }
+  }
+  const exact = nav.tabs.find((t) => specsEqual(t.spec, spec));
+  if (exact) return exact.slot;
+  const byPage = nav.tabs.find((t) => t.slot === spec.page);
+  return byPage?.slot ?? null;
+}
+
+const JUMP_I18N: Record<JumpSlot, `layout.nav.jump.${JumpSlot}`> = {
+  openRow: "layout.nav.jump.openRow",
+  openSearch: "layout.nav.jump.openSearch",
+  openScan: "layout.nav.jump.openScan",
+  openCart: "layout.nav.jump.openCart",
+  openCheckout: "layout.nav.jump.openCheckout",
+  openProfile: "layout.nav.jump.openProfile",
+  openAuthor: "layout.nav.jump.openAuthor",
+  openCategory: "layout.nav.jump.openCategory",
+  openChat: "layout.nav.jump.openChat",
+  openRelated: "layout.nav.jump.openRelated",
+  openCreate: "layout.nav.jump.openCreate",
+  openOrders: "layout.nav.jump.openOrders",
+  openAddress: "layout.nav.jump.openAddress",
+};
+
+export function jumpSlotLabel(slot: JumpSlot): string {
+  return t(JUMP_I18N[slot]);
 }
 
 const TAB_I18N: Partial<Record<LayoutPage, `layout.tab.${string}`>> = {
@@ -770,6 +1187,23 @@ export function layoutTabLabel(page: LayoutPage, app?: LayoutApp): string {
     if (page === "list") return t("layout.tab.chats");
     if (page === "users") return t("layout.tab.contacts");
     if (page === "user") return t("layout.tab.me");
+  }
+  if (page === "create" && app) {
+    if (
+      app === "blog" ||
+      app === "article" ||
+      app === "news" ||
+      app === "info" ||
+      app === "office" ||
+      app === "books"
+    ) {
+      return t("layout.tab.write");
+    }
+    if (app === "comics" || app === "video" || app === "music" || app === "photo") {
+      return t("layout.tab.upload");
+    }
+    if (app === "education") return t("layout.tab.submit");
+    if (app === "commerce") return t("layout.tab.sell");
   }
   const key = TAB_I18N[page];
   return key ? t(key as "layout.tab.home") : layoutPageLabel(page, app);
@@ -1269,6 +1703,18 @@ function inferPageFromPrompt(
   if (hayHits(hay, ["history", "recent"], ["历史", "足迹", "最近"])) {
     return pick("history");
   }
+  if (hayHits(hay, ["mydrafts", "drafts", "draftbox"], ["草稿箱", "草稿"])) {
+    return pick("drafts");
+  }
+  if (
+    hayHits(
+      hay,
+      ["mypublished", "published", "myposts", "myworks"],
+      ["已发布", "我的作品", "我的发布"],
+    )
+  ) {
+    return pick("published");
+  }
   if (
     hayHits(
       hay,
@@ -1438,6 +1884,36 @@ export function inferLayoutSpec(opts: InferLayoutInput): LayoutSpec {
   return page ? { app: spec.app, page } : spec;
 }
 
+function inferAppFromPhrase(hay: string): LayoutApp | null {
+  const scores: KindScore = { data: 0 };
+  scoreFieldsAndComments(hay, scores);
+  scoreTableName(hay, scores);
+  if (hayHits(hay, ["shopping", "shop", "taobao"], ["电商购物", "电商", "购物"])) {
+    add(scores, "commerce", 18);
+  }
+  if (hayHits(hay, ["youtube", "tiktok"], ["视频影像", "短视频"])) {
+    add(scores, "video", 18);
+  }
+  const winner = pickWinner(scores, "");
+  if (winner === "cart" || winner === "order") return "commerce";
+  if (winner === "data" || (scores[winner] ?? 0) < 10) return null;
+  return canonicalLayoutApp(winner as LayoutApp);
+}
+
+/** “视频排行 / 电商详情 / 播放页” → an existing app.page (no new page types). */
+export function specFromUserPhrase(
+  phrase: string,
+  fallback: LayoutApp,
+): LayoutSpec {
+  const hay = phrase.trim();
+  const app = inferAppFromPhrase(hay) ?? canonicalLayoutApp(fallback);
+  const page =
+    inferPageFromPrompt(hay, app) ??
+    inferPageFromPrompt(hay, fallback) ??
+    appLandingPage(app);
+  return canonicalizeLayoutSpec({ app, page });
+}
+
 export function isUserLayoutPage(page: LayoutPage | null | undefined): boolean {
   return page === "users" || page === "user";
 }
@@ -1458,8 +1934,20 @@ export function isSettingsPage(page: LayoutPage | null | undefined): boolean {
   );
 }
 
+/** Producer compose / published / drafts — opened from Me, not consumer tabs. */
+export function isProducerStudioPage(
+  page: LayoutPage | null | undefined,
+): boolean {
+  return page === "create" || page === "published" || page === "drafts";
+}
+
 export function isMeHubPage(page: LayoutPage | null | undefined): boolean {
-  return page === "user" || page === "profile" || isSettingsPage(page);
+  return (
+    page === "user" ||
+    page === "profile" ||
+    isSettingsPage(page) ||
+    isProducerStudioPage(page)
+  );
 }
 
 export function isExploreLayoutPage(page: LayoutPage | null | undefined): boolean {

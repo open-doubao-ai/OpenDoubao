@@ -30,6 +30,8 @@ const LAYOUT_TABLES = [
   "Moment",
   "Message",
   "Course",
+  "Teacher",
+  "Student",
   "Book",
   "Comic",
   "Local",
@@ -321,7 +323,8 @@ export async function ensureLayoutCategories(
   }
   const scenesFile = scenesSqlPath();
   const scenesReady = await tableExists(client, SCENE_PROBE);
-  if (!scenesReady && existsSync(scenesFile)) {
+  const teacherReady = await tableExists(client, "Teacher");
+  if ((!scenesReady || !teacherReady) && existsSync(scenesFile)) {
     try {
       await runMysqlFile(scenesFile);
       created = true;
