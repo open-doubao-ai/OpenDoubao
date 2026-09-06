@@ -20,6 +20,7 @@ import {
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
 import { newConditionId, type ColumnFilter } from "./table-query.js";
+import { attachListRow } from "./layout-list-select.js";
 
 type FlatRow = { key: string; cells: Record<string, unknown> };
 
@@ -34,6 +35,7 @@ export type HomeChromeOpts = {
   recordId: (row: FlatRow) => string | number | null;
   filters?: ColumnFilter[];
   onOpenRow: (key: string) => void;
+  selectEnabled?: boolean;
   onReplaceFilters?: (filters: ColumnFilter[]) => void;
   onOpenCategory?: (id: string | number) => void;
   onComments?: (comments: SchemaComments) => void;
@@ -300,7 +302,14 @@ function mountBanner(opts: HomeChromeOpts): HTMLElement | null {
   for (const item of slides) {
     const btn = el("button", "home-banner-slide");
     btn.type = "button";
-    btn.onclick = () => opts.onOpenRow(item.row.key);
+    attachListRow(btn, {
+      key: item.row.key,
+      id: opts.recordId(item.row),
+      label: item.pres.title || `#${item.row.key}`,
+      cells: item.row.cells,
+      onOpen: () => opts.onOpenRow(item.row.key),
+      enabled: opts.selectEnabled !== false && opts.app !== "data",
+    });
     btn.appendChild(thumb(item.pres.coverUrl, opts.apijsonBase, "home-banner-img"));
     const cap = el("div", "home-banner-cap");
     cap.appendChild(el("div", "home-banner-title", item.pres.title || `#${item.row.key}`));

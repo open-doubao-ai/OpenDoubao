@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   collectRowFeedPhotos,
+  collectRowPageImages,
   FEED_PHOTO_MAX,
 } from "./smart-image-fields.js";
 
@@ -46,5 +47,20 @@ describe("collectRowFeedPhotos", () => {
       ["Moment.picture", "User.head"],
     );
     assert.deepEqual(urls, ["https://cdn.example/one.jpg"]);
+  });
+});
+
+describe("collectRowPageImages", () => {
+  it("does not cap comic pages at 9", () => {
+    const pics = Array.from(
+      { length: 12 },
+      (_, i) => `https://cdn.example/p${i}.jpg`,
+    );
+    const urls = collectRowPageImages(
+      { "Comic.pictureList": pics },
+      "Comic",
+      ["Comic.pictureList"],
+    );
+    assert.equal(urls.length, 12);
   });
 });

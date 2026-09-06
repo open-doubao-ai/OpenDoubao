@@ -45,6 +45,7 @@ import {
   bindConsigneeSuggest,
   checkoutAddressFromRow,
   clearAddressPick,
+  CHECKOUT_ADDRESS_PURPOSE,
   formatAddressLine,
   getCheckoutAddress,
   isAddressPickMode,
@@ -55,6 +56,13 @@ import {
   type CheckoutAddress,
   type ParsedShippingParty,
 } from "./layout-address.js";
+import {
+  attachListRow,
+  isListSelectActive,
+  mountListSelectChrome,
+  type ListSelectItem,
+  type ListSelectSession,
+} from "./layout-list-select.js";
 import { isAddressTable, isOrderTable } from "./layout-entities.js";
 import {
   hasLocalPurchase,
@@ -62,6 +70,7 @@ import {
 } from "./layout-purchase.js";
 import { idInList, visitorId } from "./layout-social.js";
 import { renderComposePage } from "./layout-compose.js";
+import { renderBookReader } from "./layout-reader.js";
 import type { WritePayload } from "./result-view.js";
 import type { ActionBinding, ActionSlot, LayoutNav, LayoutNavTab } from "./page-layout.js";
 import type { ColumnFilter } from "./table-query.js";
@@ -76,6 +85,7 @@ import {
   appFromKind,
   createSpecForListData,
   isArticleLikeApp,
+  isBookReaderApp,
   isCartOrOrder,
   isCommentableApp,
   isDataLayout,
@@ -472,6 +482,88 @@ type ListOpts = {
   navTabSlot?: LayoutPage | null;
 };
 
+function listSelectEnabled(opts: { kind: LayoutKind; spec?: LayoutSpec }): boolean {
+  return listApp(opts) !== "data";
+}
+
+function wireListRow(
+  node: HTMLElement,
+  opts: ListOpts,
+  row: FlatRow,
+  onOpen: () => void,
+): void {
+  const pres = rowPres(opts, row);
+  attachListRow(node, {
+    key: row.key,
+    id: opts.recordId(row),
+    label: pres.title || `#${row.key}`,
+    cells: row.cells,
+    onOpen,
+    enabled: listSelectEnabled(opts),
+  });
+}
+
+function applyCheckoutPickResult(result: ListSelectSession, table: string | null): void {
+  const item = result.selected[0];
+  if (!item) return;
+  setCheckoutAddress(
+    checkoutAddressFromRow(item.cells || {}, table, item.id),
+  );
+  clearAddressPick();
+}
+
+function mountSelectChromeForList(wrap: HTMLElement, opts: ListOpts): void {
+  if (!listSelectEnabled(opts)) return;
+  mountListSelectChrome(wrap, {
+    primaryTable: opts.primaryTable,
+    onCancel: () => {
+      /* session already cleared */
+    },
+    onDone: (result) => {
+      if (result.purpose === CHECKOUT_ADDRESS_PURPOSE) {
+        applyCheckoutPickResult(result, opts.primaryTable);
+        opts.handlers.onOpenCheckout?.();
+      }
+      if (result.returnSpec && opts.handlers.onSelectLayoutSpec) {
+        opts.handlers.onSelectLayoutSpec(result.returnSpec);
+        return;
+      }
+      if (result.returnPage) {
+        opts.handlers.onSelectPage?.(result.returnPage);
+      }
+    },
+    onDelete: async (items: ListSelectItem[]) => {
+      const table = (opts.primaryTable || "").trim();
+      if (!table || !opts.handlers.onWrite) return;
+      const ids = items
+        .map((i) => i.id)
+        .filter((id): id is string | number => id != null && id !== "");
+      if (!ids.length) return;
+      const nums = ids.map((id) =>
+        typeof id === "number" ? id : Number(id),
+      );
+      const finite = nums.filter((n) => Number.isFinite(n));
+      const bodyIds = finite.length === ids.length ? finite : ids;
+      const body =
+        bodyIds.length === 1
+          ? { [table]: { id: bodyIds[0] }, tag: table }
+          : { [table]: { "id{}": bodyIds }, tag: `${table}[]` };
+      const ok = await opts.handlers.onWrite({
+        method: "delete",
+        table,
+        body,
+      });
+      if (ok === false) return;
+      flashLayoutNote(t("layout.addressDeleted"));
+      for (const item of items) {
+        wrap
+          .querySelectorAll(`[data-row-key="${CSS.escape(item.key)}"]`)
+          .forEach((n) => n.remove());
+      }
+    },
+  });
+}
+
 function listApp(opts: { kind: LayoutKind; spec?: LayoutSpec }): LayoutApp {
   return opts.spec?.app ?? appFromKind(opts.kind);
 }
@@ -573,15 +665,38 @@ function mountAppTabBar(opts: {
   return bar;
 }
 
+/** Pin home tabs + search (+ category chips) so only banner/feed scroll. */
+function pinHomeTopChrome(wrap: HTMLElement, tabBar: HTMLElement | null) {
+  const isHome =
+    wrap.classList.contains("has-home-chrome") ||
+    wrap.classList.contains("layout-page-home");
+  if (!isHome) {
+    if (tabBar) wrap.appendChild(tabBar);
+    return;
+  }
+  const pin = el("div", "layout-top-chrome");
+  if (tabBar) pin.appendChild(tabBar);
+  const search = wrap.querySelector(":scope > .app-search");
+  if (search) pin.appendChild(search);
+  const cats = wrap.querySelector(".home-cats-top");
+  if (cats) pin.appendChild(cats);
+  if (!pin.childNodes.length) return;
+  const select = wrap.querySelector(":scope > .list-select-chrome");
+  if (select?.nextSibling) wrap.insertBefore(pin, select.nextSibling);
+  else wrap.insertBefore(pin, wrap.firstChild);
+}
+
 function finishLayoutList(
   container: HTMLElement,
   wrap: HTMLElement,
   opts: ListOpts,
 ): HTMLElement {
+  mountSelectChromeForList(wrap, opts);
   const app = listApp(opts);
   const page = opts.spec?.page;
+  let tabBar: HTMLElement | null = null;
   if (opts.handlers.onSelectPage) {
-    const bar = mountAppTabBar({
+    tabBar = mountAppTabBar({
       app,
       page,
       nav: opts.nav,
@@ -590,8 +705,8 @@ function finishLayoutList(
       onSelect: opts.handlers.onSelectPage,
       onRemapTab: opts.handlers.onRemapTab,
     });
-    if (bar) wrap.appendChild(bar);
   }
+  pinHomeTopChrome(wrap, tabBar);
   container.appendChild(wrap);
   return wrap;
 }
@@ -607,6 +722,7 @@ function renderMePage(opts: ListOpts, app: LayoutApp): HTMLElement {
     columnMetas: opts.columnMetas,
     apijsonBase: opts.apijsonBase,
     recordId: opts.recordId,
+    selectEnabled: listSelectEnabled(opts),
     handlers: {
       onSelectPage: opts.handlers.onSelectPage,
       onSelectApp: opts.handlers.onSelectApp,
@@ -708,6 +824,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
       recordId: opts.recordId,
       filters: opts.handlers.filters,
       onOpenRow: (key) => opts.handlers.onOpenRow(key),
+      selectEnabled: listSelectEnabled(opts),
       onReplaceFilters: opts.handlers.onReplaceFilters,
       onOpenCategory: opts.handlers.onOpenCategory,
       onComments: opts.handlers.onComments,
@@ -728,6 +845,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         apijsonBase: opts.apijsonBase,
         recordId: opts.recordId,
         onOpenRow: (key) => opts.handlers.onOpenRow(key),
+        selectEnabled: listSelectEnabled(opts),
       }),
     );
     return finishLayoutList(container, wrap, opts);
@@ -751,6 +869,7 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
         apijsonBase: opts.apijsonBase,
         recordId: opts.recordId,
         onOpenRow: (key) => opts.handlers.onOpenRow(key),
+        selectEnabled: listSelectEnabled(opts),
         onSearch: opts.handlers.onSearch,
         onOpenSearch: opts.handlers.onOpenSearch,
         onOpenScan: opts.handlers.onOpenScan,
@@ -859,6 +978,8 @@ export function renderLayoutList(container: HTMLElement, opts: ListOpts): HTMLEl
   else if (opts.kind === "social") feedHost.appendChild(renderSocialFeed(opts));
   else if (isNewsLikeApp(app) || isNewsLikeApp(opts.kind)) {
     feedHost.appendChild(renderNewsPortal(opts));
+  } else if (isBookReaderApp(app) || isBookReaderApp(opts.kind)) {
+    feedHost.appendChild(renderArticleList(opts));
   } else if (isArticleLikeApp(app) || isArticleLikeApp(opts.kind)) {
     feedHost.appendChild(renderArticleList(opts));
   } else feedHost.appendChild(renderMediaList(opts));
@@ -872,7 +993,7 @@ function renderMediaList(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "layout-media-card");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     card.appendChild(
       thumb(pres.coverUrl, opts.apijsonBase, "layout-media-thumb", t("result.noImage")),
     );
@@ -898,7 +1019,7 @@ function renderNewsPortal(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const b = el("button", "news-headline" + (i === 0 ? " is-lead" : ""));
     b.type = "button";
-    b.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(b, opts, row, () => opts.handlers.onOpenRow(row.key));
     b.appendChild(el("div", "layout-title", pres.title));
     if (i === 0 && (pres.headline || pres.body)) {
       b.appendChild(
@@ -913,7 +1034,7 @@ function renderNewsPortal(opts: ListOpts): HTMLElement {
   const leadPres = rowPres(opts, lead);
   const featured = el("button", "news-featured");
   featured.type = "button";
-  featured.onclick = () => opts.handlers.onOpenRow(lead.key);
+  wireListRow(featured, opts, lead, () => opts.handlers.onOpenRow(lead.key));
   const featBody = el("div", "news-featured-body");
   featBody.appendChild(el("div", "layout-kicker", t("layout.hotNews")));
   featBody.appendChild(el("h2", "layout-title", leadPres.title));
@@ -941,7 +1062,7 @@ function renderNewsPortal(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "news-card");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     card.appendChild(
       thumb(pres.coverUrl, opts.apijsonBase, "news-card-img", t("result.noImage")),
     );
@@ -961,7 +1082,7 @@ function renderArticleList(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "jj-list-card");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     const text = el("div", "jj-list-text");
     text.appendChild(el("div", "layout-kicker", kicker(opts.kind)));
     text.appendChild(el("h2", "jj-list-title", pres.title || `#${row.key}`));
@@ -1066,10 +1187,14 @@ function renderSocialFeed(opts: ListOpts): HTMLElement {
     card.setAttribute("role", "button");
     card.tabIndex = 0;
     const open = () => opts.handlers.onOpenRow(row.key);
-    card.onclick = open;
+    wireListRow(card, opts, row, open);
     card.onkeydown = (ev) => {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
+        if (isListSelectActive()) {
+          card.click();
+          return;
+        }
         open();
       }
     };
@@ -1098,7 +1223,7 @@ function renderChatList(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "layout-chat-row");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     const av = thumb(pres.coverUrl, opts.apijsonBase, "layout-avatar", "");
     const personId = pres.authorId;
     if (personId != null) {
@@ -1131,7 +1256,7 @@ function renderYoutubeGrid(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "yt-card");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     const cover = thumb(
       pres.coverUrl,
       opts.apijsonBase,
@@ -1169,7 +1294,7 @@ function renderKugouList(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "kg-feat-card");
     card.type = "button";
-    card.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(card, opts, row, () => opts.handlers.onOpenRow(row.key));
     const cover = thumb(pres.coverUrl, opts.apijsonBase, "kg-feat-img", "");
     cover.appendChild(el("span", "layout-play-badge", "▶"));
     if (pres.playCount != null) {
@@ -1188,7 +1313,7 @@ function renderKugouList(opts: ListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const item = el("button", "kg-track");
     item.type = "button";
-    item.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(item, opts, row, () => opts.handlers.onOpenRow(row.key));
     item.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "layout-track-cover", ""));
     const info = el("div", "layout-track-info");
     info.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -1208,7 +1333,7 @@ function renderProductGrid(opts: ListOpts): HTMLElement {
     const card = el("div", "layout-product-card");
     const open = el("button", "layout-product-open");
     open.type = "button";
-    open.onclick = () => opts.handlers.onOpenRow(row.key);
+    wireListRow(open, opts, row, () => opts.handlers.onOpenRow(row.key));
     open.appendChild(
       thumb(pres.coverUrl, opts.apijsonBase, "layout-product-img", t("result.noImage")),
     );
@@ -1365,7 +1490,14 @@ export function renderLayoutDetailHero(
   }
 
   const app = el("div", `layout-app app-${opts.kind}`);
-  if (isCommentableApp(opts.kind) || isCommentableApp(specApp)) {
+  const musicPlayer = opts.kind === "music" || specApp === "music";
+  const bookReader =
+    isBookReaderApp(specApp) || isBookReaderApp(opts.kind);
+  if (
+    !musicPlayer &&
+    !bookReader &&
+    (isCommentableApp(opts.kind) || isCommentableApp(specApp))
+  ) {
     app.classList.add("has-comment-dock");
   }
   if (opts.kind === "video") renderYoutubeWatch(app, pres, related, opts);
@@ -1378,6 +1510,64 @@ export function renderLayoutDetailHero(
   }
   else if (isNewsLikeApp(specApp) || isNewsLikeApp(opts.kind)) {
     renderNewsArticle(app, pres, related, opts);
+  } else if (bookReader) {
+    const { commentHost, commentEntry, commentCountEl, setCommentsOpen } =
+      renderBookReader(app, pres, {
+        kind: opts.kind,
+        spec: opts.spec,
+        apijsonBase: opts.apijsonBase,
+        comments: opts.comments,
+        columnMetas: opts.columnMetas,
+        columns: opts.columns,
+        primaryTable: opts.primaryTable,
+        recordId: opts.recordId,
+        row: opts.row,
+      });
+    const chrome = makeCommentChrome(commentHost, opts, {
+      recordId: opts.recordId ?? pres.id,
+    });
+    const paintCommentCount = (n: number) => {
+      commentCountEl.textContent = formatCount(n) || "0";
+      commentEntry.setAttribute(
+        "aria-label",
+        `${t("layout.comments")} ${commentCountEl.textContent}`,
+      );
+    };
+    const recordId = opts.recordId ?? pres.id;
+    const commentSpec = resolveCommentQuery(
+      opts.primaryTable ?? null,
+      opts.comments,
+    );
+    if (commentSpec && recordId != null) {
+      void fetchRecordComments({
+        base: opts.apijsonBase,
+        spec: commentSpec,
+        recordId,
+        count: 100,
+      }).then((items) => {
+        paintCommentCount(flattenComments(items).length);
+      });
+    }
+    commentEntry.onclick = () => {
+      setCommentsOpen(true);
+      chrome.section.scrollIntoView({ behavior: "smooth", block: "start" });
+      chrome.focus();
+    };
+    mountSocialActions({
+      pres,
+      cells: opts.row?.cells,
+      table: opts.primaryTable ?? null,
+      recordId: opts.recordId ?? pres.id,
+      apijsonBase: opts.apijsonBase,
+      handlers: opts.handlers,
+      followBtns: [],
+      authorNodes: [],
+      ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
+      commentCountEl,
+      onCommentsLoaded: (items) => {
+        paintCommentCount(flattenComments(items).length);
+      },
+    });
   } else if (isArticleLikeApp(specApp) || isArticleLikeApp(opts.kind)) {
     renderJuejinArticle(app, pres, related, opts);
   } else if (isLocalLikeApp(specApp) || isLocalLikeApp(opts.kind)) {
@@ -2207,9 +2397,19 @@ function renderSpotifyPlayer(
     void downloadOneMedia(url, pres.title || "track", opts.apijsonBase);
   };
   playRow.appendChild(exportBtn);
+  const commentEntry = el("button", "sp-comment-entry app-chip");
+  commentEntry.type = "button";
+  const commentEntryLabel = el("span", "sp-comment-entry-label", t("layout.comments"));
+  const commentCountEl = el("span", "sp-comment-entry-n", "0");
+  commentEntry.append(commentEntryLabel, commentCountEl);
+  commentEntry.title = t("layout.comments");
+  commentEntry.setAttribute("aria-label", t("layout.comments"));
+  playRow.appendChild(commentEntry);
   info.appendChild(playRow);
   hero.appendChild(info);
-  page.appendChild(hero);
+
+  const main = el("div", "sp-main");
+  main.appendChild(hero);
 
   const split = el("div", "sp-split");
   const queue = el("div", "sp-queue");
@@ -2402,7 +2602,8 @@ function renderSpotifyPlayer(
     lyricHint,
   );
   split.append(queue, lyrics);
-  page.appendChild(split);
+  main.appendChild(split);
+  page.appendChild(main);
 
   let lyricsFs = false;
   const setLyricsFs = (on: boolean, skipBrowserFs = false) => {
@@ -2477,10 +2678,57 @@ function renderSpotifyPlayer(
   barMid.append(ctrls, seekRow);
   bar.append(barLeft, barMid, lyricFsBtn, audio);
   page.appendChild(bar);
-  const chrome = makeCommentChrome(page, opts, {
-    insertBefore: bar,
+
+  const commentsPane = el("div", "sp-comments");
+  commentsPane.hidden = true;
+  const commentsHead = el("div", "sp-comments-head");
+  const commentsBack = el("button", "layout-btn sp-comments-back", t("common.back"));
+  commentsBack.type = "button";
+  commentsHead.append(
+    commentsBack,
+    el("h2", "sp-comments-title", t("layout.comments")),
+  );
+  commentsPane.appendChild(commentsHead);
+  const commentHost = el("div", "sp-comments-body");
+  commentsPane.appendChild(commentHost);
+  page.insertBefore(commentsPane, bar);
+
+  const chrome = makeCommentChrome(commentHost, opts, {
     recordId: opts.recordId ?? pres.id,
   });
+  page.classList.add("has-sp-bar");
+
+  const setCommentsOpen = (open: boolean) => {
+    page.classList.toggle("is-comments", open);
+    commentsPane.hidden = !open;
+    if (open) {
+      chrome.section.scrollIntoView({ behavior: "smooth", block: "start" });
+      chrome.focus();
+    }
+  };
+  commentEntry.onclick = () => setCommentsOpen(true);
+  commentsBack.onclick = () => setCommentsOpen(false);
+
+  const paintCommentCount = (n: number) => {
+    commentCountEl.textContent = formatCount(n) || "0";
+    commentEntry.setAttribute(
+      "aria-label",
+      `${t("layout.comments")} ${commentCountEl.textContent}`,
+    );
+  };
+  const recordId = opts.recordId ?? pres.id;
+  const spec = resolveCommentQuery(opts.primaryTable ?? null, opts.comments);
+  if (spec && recordId != null) {
+    void fetchRecordComments({
+      base: opts.apijsonBase,
+      spec,
+      recordId,
+      count: 100,
+    }).then((items) => {
+      paintCommentCount(flattenComments(items).length);
+    });
+  }
+
   app.appendChild(page);
   mountSocialActions({
     pres,
@@ -2494,6 +2742,10 @@ function renderSpotifyPlayer(
     followBtns: [],
     authorNodes: [],
     ...commentActionFields(chrome, () => opts.handlers.onBuyNow?.()),
+    commentCountEl,
+    onCommentsLoaded: (items) => {
+      paintCommentCount(flattenComments(items).length);
+    },
   });
 }
 
@@ -3272,10 +3524,10 @@ function renderOrderList(opts: ListOpts): HTMLElement {
     });
     const card = el("button", "az-order-card");
     card.type = "button";
-    card.onclick = () => {
+    wireListRow(card, opts, row, () => {
       opts.handlers.onSelectPage?.("orderDetail");
       opts.handlers.onOpenRow(row.key);
-    };
+    });
     const top = el("div", "az-order-top");
     top.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
     if (pres.status) top.appendChild(el("div", "az-order-status", pres.status));
@@ -3311,8 +3563,16 @@ function renderAddressList(opts: ListOpts): HTMLElement {
   headBar.appendChild(add);
   page.appendChild(headBar);
 
-  if (isAddressPickMode()) {
-    page.appendChild(el("div", "layout-meta", t("layout.addressPickHint")));
+  if (isAddressPickMode() || isListSelectActive()) {
+    page.appendChild(
+      el(
+        "div",
+        "layout-meta",
+        isAddressPickMode()
+          ? t("layout.addressPickHint")
+          : t("layout.listSelect.pickHint"),
+      ),
+    );
   }
 
   if (!opts.rows.length) {
@@ -3337,17 +3597,10 @@ function renderAddressList(opts: ListOpts): HTMLElement {
     const card = el("div", "az-addr-card");
     const main = el("button", "az-addr-main");
     main.type = "button";
-    main.onclick = () => {
-      if (isAddressPickMode()) {
-        setCheckoutAddress(addr);
-        clearAddressPick();
-        opts.handlers.onOpenCheckout?.();
-        opts.handlers.onSelectPage?.("order");
-        return;
-      }
+    wireListRow(main, opts, row, () => {
       opts.handlers.onSelectPage?.("addressDetail");
       opts.handlers.onOpenRow(row.key);
-    };
+    });
     const top = el("div", "az-addr-head");
     top.appendChild(
       el("div", "layout-title", addr.consignee || pres.title || `#${row.key}`),
@@ -3365,14 +3618,16 @@ function renderAddressList(opts: ListOpts): HTMLElement {
     const tools = el("div", "az-addr-tools");
     const edit = el("button", "layout-btn", t("common.edit"));
     edit.type = "button";
-    edit.onclick = () => {
+    edit.onclick = (ev) => {
+      ev.stopPropagation();
       opts.handlers.onSelectPage?.("addressDetail");
       opts.handlers.onOpenRow(row.key);
     };
     tools.appendChild(edit);
     const del = el("button", "layout-btn layout-btn-danger", t("common.delete"));
     del.type = "button";
-    del.onclick = () => {
+    del.onclick = (ev) => {
+      ev.stopPropagation();
       const id = opts.recordId(row);
       const table = (opts.primaryTable || "Address").trim() || "Address";
       if (id == null || !opts.handlers.onWrite) return;
@@ -3393,7 +3648,8 @@ function renderAddressList(opts: ListOpts): HTMLElement {
     if (isAddressPickMode()) {
       const use = el("button", "az-btn az-btn-buy", t("layout.addressUse"));
       use.type = "button";
-      use.onclick = () => {
+      use.onclick = (ev) => {
+        ev.stopPropagation();
         setCheckoutAddress(addr);
         clearAddressPick();
         opts.handlers.onOpenCheckout?.();

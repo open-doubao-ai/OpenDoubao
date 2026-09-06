@@ -33,6 +33,7 @@ import {
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
 import type { WritePayload } from "./result-view.js";
+import { attachListRow } from "./layout-list-select.js";
 
 type FlatRow = { key: string; cells: Record<string, unknown> };
 
@@ -55,6 +56,7 @@ export type MeOpts = {
   apijsonBase: string;
   recordId: (row: FlatRow) => string | number | null;
   handlers: MeHandlers;
+  selectEnabled?: boolean;
 };
 
 const APP_VERSION = "0.1.0";
@@ -475,6 +477,9 @@ function deleteServerRow(opts: MeOpts, row: FlatRow) {
 function mountWorkCard(
   opts: MeOpts,
   args: {
+    key?: string;
+    id?: string | number | null;
+    cells?: Record<string, unknown>;
     title: string;
     cover: string | null;
     meta?: string;
@@ -486,7 +491,19 @@ function mountWorkCard(
   const card = el("div", "me-work");
   const main = el("button", "me-work-main");
   main.type = "button";
-  main.onclick = () => (args.onOpen ? args.onOpen() : args.onEdit());
+  const open = () => (args.onOpen ? args.onOpen() : args.onEdit());
+  if (args.key) {
+    attachListRow(main, {
+      key: args.key,
+      id: args.id ?? null,
+      label: args.title,
+      cells: args.cells,
+      onOpen: open,
+      enabled: opts.selectEnabled !== false && opts.app !== "data",
+    });
+  } else {
+    main.onclick = () => open();
+  }
   main.appendChild(thumb(args.cover, opts.apijsonBase, "me-fav-img"));
   const copy = el("div", "me-work-copy");
   copy.appendChild(el("div", "layout-title", args.title));
@@ -553,6 +570,9 @@ function renderStudioList(opts: MeOpts): HTMLElement {
     const pres = presentRow(opts, row);
     list.appendChild(
       mountWorkCard(opts, {
+        key: row.key,
+        id: opts.recordId(row),
+        cells: row.cells,
         title: pres.title || `#${row.key}`,
         cover: pres.coverUrl,
         meta: [pres.status, pres.date].filter(Boolean).join(" · "),
@@ -699,7 +719,14 @@ function renderSettingsSection(opts: MeOpts): HTMLElement {
       const pres = presentRow(opts, row);
       const card = el("button", "me-fav-card");
       card.type = "button";
-      card.onclick = () => opts.handlers.onOpenRow?.(row.key);
+      attachListRow(card, {
+        key: row.key,
+        id: opts.recordId(row),
+        label: pres.title || `#${row.key}`,
+        cells: row.cells,
+        onOpen: () => opts.handlers.onOpenRow?.(row.key),
+        enabled: opts.selectEnabled !== false && opts.app !== "data",
+      });
       card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "me-fav-img"));
       card.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
       list.appendChild(card);

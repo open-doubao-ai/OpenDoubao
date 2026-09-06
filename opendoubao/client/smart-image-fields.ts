@@ -503,12 +503,14 @@ function pathOnPrimaryTable(path: string, primaryTable: string | null): boolean 
 /** Moments-style photos: pictureList first, skip avatars, at most 9. */
 export const FEED_PHOTO_MAX = 9;
 
-export function collectRowFeedPhotos(
+/** Comic / album page images: pictureList first, no avatar, uncapped. */
+export function collectRowPageImages(
   cells: Record<string, unknown>,
   primaryTable: string | null,
   columns: string[],
   comments?: ImageFieldComments,
   showByPath?: Record<string, ImageShowMode | undefined> | null,
+  max = Number.POSITIVE_INFINITY,
 ): string[] {
   const paths = [...new Set([...columns, ...Object.keys(cells)])];
   const listPaths = paths
@@ -538,7 +540,7 @@ export function collectRowFeedPhotos(
       if (!key || seen.has(key)) continue;
       seen.add(key);
       out.push(key);
-      if (out.length >= FEED_PHOTO_MAX) return out;
+      if (out.length >= max) return out;
     }
     if (out.length) return out;
   }
@@ -555,6 +557,23 @@ export function collectRowFeedPhotos(
     if (url) return [url];
   }
   return [];
+}
+
+export function collectRowFeedPhotos(
+  cells: Record<string, unknown>,
+  primaryTable: string | null,
+  columns: string[],
+  comments?: ImageFieldComments,
+  showByPath?: Record<string, ImageShowMode | undefined> | null,
+): string[] {
+  return collectRowPageImages(
+    cells,
+    primaryTable,
+    columns,
+    comments,
+    showByPath,
+    FEED_PHOTO_MAX,
+  );
 }
 
 /** Best thumbnail URL from a row (grid cards). */

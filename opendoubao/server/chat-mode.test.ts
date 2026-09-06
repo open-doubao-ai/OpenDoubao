@@ -152,6 +152,21 @@ describe("pageUiPatchFromMessage", () => {
     assert.equal(ui?.navTab?.page, "rank");
   });
 
+  it("adds a cart tab on 电商首页加上购物车 tab", () => {
+    const ui = pageUiPatchFromMessage("电商首页加上 购物车 tab", {
+      ...musicPage,
+      pageId: "commerce_home",
+      title: "Shopping",
+      app: "commerce",
+      page: "home",
+      table: "Product",
+    });
+    assert.equal(ui?.navTabOp, "add");
+    assert.equal(ui?.navTab?.slot, "cart");
+    assert.equal(ui?.navTab?.app, "commerce");
+    assert.equal(ui?.navTab?.page, "cart");
+  });
+
   it("remaps item tap to a player page", () => {
     const ui = pageUiPatchFromMessage("点击跳转到播放页", musicPage);
     assert.equal(ui?.navJump?.slot, "openRow");

@@ -3,6 +3,12 @@
  */
 
 import { t } from "./i18n/index.js";
+import {
+  beginListPick,
+  clearListPick,
+  getListPick,
+  isListPickActive,
+} from "./layout-list-select.js";
 
 export type CheckoutAddress = {
   id?: string | number;
@@ -23,7 +29,7 @@ export type GeoPlace = {
 };
 
 const CHECKOUT_KEY = "a2api.checkoutAddress";
-const PICK_KEY = "a2api.addressPick";
+export const CHECKOUT_ADDRESS_PURPOSE = "checkoutAddress";
 
 export function getCheckoutAddress(): CheckoutAddress | null {
   try {
@@ -56,28 +62,23 @@ export function clearCheckoutAddress(): void {
   }
 }
 
+/** Start single-select pick of a recipient for checkout. */
 export function beginAddressPick(): void {
-  try {
-    sessionStorage.setItem(PICK_KEY, "1");
-  } catch {
-    /* ignore */
-  }
+  beginListPick({
+    purpose: CHECKOUT_ADDRESS_PURPOSE,
+    mode: "single",
+    returnPage: "order",
+  });
 }
 
 export function isAddressPickMode(): boolean {
-  try {
-    return sessionStorage.getItem(PICK_KEY) === "1";
-  } catch {
-    return false;
-  }
+  if (!isListPickActive()) return false;
+  const s = getListPick();
+  return s?.purpose === CHECKOUT_ADDRESS_PURPOSE;
 }
 
 export function clearAddressPick(): void {
-  try {
-    sessionStorage.removeItem(PICK_KEY);
-  } catch {
-    /* ignore */
-  }
+  if (isAddressPickMode()) clearListPick();
 }
 
 export function formatAddressLine(addr: CheckoutAddress): string {

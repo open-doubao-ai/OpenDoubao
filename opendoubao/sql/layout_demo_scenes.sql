@@ -424,22 +424,32 @@ INSERT INTO `Course` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`conte
 ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `cover`=VALUES(`cover`), `categoryId`=VALUES(`categoryId`);
 
 INSERT INTO `Book` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`content`,`publisher`,`viewCount`,`date`) VALUES
-(1701, 82001, 1411, '海边的清晨', '苏晚', '/media/covers/24.svg', '一部关于离家与归来的长篇小说。', '春山文艺', 2100, '2026-08-02 10:00:00'),
-(1702, 82002, 1412, '小团队增长手册', '何川', '/media/covers/20.svg', '把增长拆成可执行的周计划。', '远帆出版', 1560, '2026-08-03 10:00:00'),
-(1703, 82001, 1413, '长安夜市考', '裴衡', '/media/covers/1019.svg', '从夜市看一座城的生活史。', '古籍新社', 870, '2026-08-04 10:00:00'),
-(1704, 82002, 1414, '给所有人的电路', '韩石', '/media/covers/0.svg', '用生活例子讲清基础电路。', '工科读本', 640, '2026-08-05 10:00:00'),
-(1705, 82001, 1415, '家庭收纳 100 问', '米儿', '/media/covers/1078.svg', '小户型也能腾出一间房。', '生活家', 1320, '2026-08-06 10:00:00'),
-(1706, 82002, 1416, '月亮邮局', '小橙', '/media/covers/1015.svg', '写给睡前的十二封信。', '童心社', 980, '2026-08-07 10:00:00')
-ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `cover`=VALUES(`cover`), `categoryId`=VALUES(`categoryId`);
+(1701, 82001, 1411, '海边的清晨', '苏晚', '/media/covers/24.svg', '火车进站时，海风正从月台尽头灌进来。林夏提着一只旧皮箱，鞋底还沾着城里的灰。她本打算只回来三天，把母亲留下的钥匙交出去就走；可当她推开那扇被盐雾咬白的木门，客厅里仍摆着她十八岁离开时的相册。潮声一下一下敲着窗，像有人在提醒：有些告别，其实只是把故事换了个开头。', '春山文艺', 2100, '2026-08-02 10:00:00'),
+(1702, 82002, 1412, '小团队增长手册', '何川', '/media/covers/20.svg', '别一上来就谈爆款。把下周要验证的假设写在一张纸上：谁会点、为什么点、点完做什么。周一只改一个入口文案，周三看留存，周五复盘哪些指标动了、哪些只是噪音。增长不是口号，是把反馈循环缩短到七天以内，让每个人都知道自己在验证什么。', '远帆出版', 1560, '2026-08-03 10:00:00'),
+(1703, 82001, 1413, '长安夜市考', '裴衡', '/media/covers/1019.svg', '夜市不是白天的延长，是另一套城市语法。摊主按锣声收摊，行人按灯火聚散。一碗汤饼、一串糖葫芦，背后是漕运、行会与宵禁的缝隙。读懂夜市，就读懂了这座城如何在规则之外养活普通人。灯光散尽时，石板路上的油渍，比碑文更诚实。', '古籍新社', 870, '2026-08-04 10:00:00'),
+(1704, 82002, 1414, '给所有人的电路', '韩石', '/media/covers/0.svg', '先别管公式。你房间的开关、手机的充电线、电梯的按钮，都在问同一件事：电流从哪来、到哪去、中间遇见什么阻碍。把回路想成一条单行道，电池是加油站，电阻是减速带。弄清方向，再谈电压与功率，电路就不再是黑板上的符号，而是你每天都在用的常识。', '工科读本', 640, '2026-08-05 10:00:00'),
+(1705, 82001, 1415, '家庭收纳 100 问', '米儿', '/media/covers/1078.svg', '收纳的第一步不是买盒子，是承认家里有多少「以后可能用到」。先清空一个抽屉，把东西分成留下、捐赠、扔掉三堆，再决定容器尺寸。小户型最怕垂直空间浪费：门后、床下、冰箱侧面都能成为临时货架。每周十分钟复位，比年底大扫除更有效。', '生活家', 1320, '2026-08-06 10:00:00'),
+(1706, 82002, 1416, '月亮邮局', '小橙', '/media/covers/1015.svg', '月亮邮局只在云很薄的晚上开门。小朋友把写好的信放进银盒子，邮差是一只会飞的纸鸟。有人问爸爸为什么出差那么久，有人问走丢的猫还会不会回家。纸鸟不保证回信，但保证把心事送到够高的地方，让它们先被风听一听，再慢慢变轻。', '童心社', 980, '2026-08-07 10:00:00'),
+(1707, 82001, 1411, '雨巷里的书店', '顾澄', '/media/covers/28.svg', '店门窄得只能侧身进。老板把新书放在窗边，旧书码在楼梯下，雨声一响，客人就会多起来。我常坐在角落读没有名字的诗集，直到灯管开始嗡嗡响。有一天，一本夹着车票的书被放回原位——目的地是我故乡的站名。我抬头，老板只笑着说：书会自己找到该读它的人。', '巷口书坊', 1540, '2026-08-08 10:00:00'),
+(1708, 82002, 1412, '远程协作的十二周', '林舟', '/media/covers/201.svg', '远程最怕的不是时差，是默认对方「应该知道」。第十二周我们定了三条：决策写在文档里、会议只讨论分歧、异步默认二十四小时内回复。工具可以换，习惯不能散。当你能在日历里看见彼此的专注块，协作才会从互相打扰，变成互相让路。', '远帆出版', 1180, '2026-08-09 10:00:00'),
+(1709, 82001, 1413, '运河纤夫日记', '沈桥', '/media/covers/1036.svg', '纤绳勒进肩窝的那天，河面起了白雾。号子从船头传到岸上，像把整条河的重量分担给每个人。夜里我们烤红薯，听老纤夫讲闸口的规矩：涨水让路，落水抢档。日记写到第三本，我才明白，所谓顺流，不过是一群人把脚步踩在同一处泥里。', '河工笔记', 760, '2026-08-10 10:00:00'),
+(1710, 82002, 1414, '厨房里的化学', '叶青', '/media/covers/292.svg', '煎蛋时蛋白变白，是蛋白质受热改变了形状；面包发起来，是酵母把糖变成了气体。盐能抽走水分，糖能锁住水分，醋能让颜色更亮。你不必背元素周期表，也能在灶台边完成一场小型实验。理解原理之后，失败的菜也会变成可复现的数据。', '工科读本', 890, '2026-08-11 10:00:00'),
+(1711, 82001, 1415, '阳台种菜手记', '阿苗', '/media/covers/42.svg', '第一盆是香菜，两周就抽薹；第二盆是小白菜，被鸟偷走两棵。后来我学会了浅盆深土、早晚各看一眼叶子背面。收获那天，凉拌一盘，苦味里带着太阳的味道。种菜教我的不是自给自足，是接受生长有自己的节奏，而你只能提供水、光和耐心。', '生活家', 1120, '2026-08-12 10:00:00')
+ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `author`=VALUES(`author`), `cover`=VALUES(`cover`), `content`=VALUES(`content`), `publisher`=VALUES(`publisher`), `viewCount`=VALUES(`viewCount`), `categoryId`=VALUES(`categoryId`), `date`=VALUES(`date`);
 
-INSERT INTO `Comic` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`content`,`chapterCount`,`viewCount`,`date`) VALUES
-(1801, 82001, 1421, '少年剑客行', '墨白', '/media/covers/96.svg', '一把断剑，一座江湖。', 86, 4200, '2026-08-02 11:00:00'),
-(1802, 82002, 1422, '便利店恋爱日志', '浅浅', '/media/covers/64.svg', '夜班遇见的那个人。', 42, 3100, '2026-08-03 11:00:00'),
-(1803, 82001, 1423, '星海旅团', '南风', '/media/covers/1016.svg', '跨星系寻找失落的故乡。', 60, 2800, '2026-08-04 11:00:00'),
-(1804, 82002, 1424, '合租的猫', '土豆', '/media/covers/106.svg', '四个人和一只不讲理的猫。', 28, 1900, '2026-08-05 11:00:00'),
-(1805, 82001, 1425, '机甲晨星', '铁木', '/media/covers/160.svg', '废墟上的第一台自制机甲。', 55, 2600, '2026-08-06 11:00:00'),
-(1806, 82002, 1426, '雾城谜案', '冷杉', '/media/covers/60.svg', '每场雨都会带走一条线索。', 33, 1700, '2026-08-07 11:00:00')
-ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `cover`=VALUES(`cover`), `categoryId`=VALUES(`categoryId`);
+INSERT INTO `Comic` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`pictureList`,`content`,`chapterCount`,`viewCount`,`date`) VALUES
+(1801, 82001, 1421, '少年剑客行', '墨白', '/media/covers/96.svg', '["/media/covers/96.svg","/media/covers/60.svg","/media/covers/54.svg","/media/covers/73.svg","/media/covers/88.svg"]', '断剑出鞘的第一夜，山门起了风。少年循着剑鸣下山，江湖比话本更吵，也比话本更疼。', 86, 4200, '2026-08-02 11:00:00'),
+(1802, 82002, 1422, '便利店恋爱日志', '浅浅', '/media/covers/64.svg', '["/media/covers/64.svg","/media/covers/65.svg","/media/covers/66.svg","/media/covers/48.svg"]', '夜班的门铃声总像暗号。她记住他买关东煮不加芥末，他记住她倒班的那天会下雨。', 42, 3100, '2026-08-03 11:00:00'),
+(1803, 82001, 1423, '星海旅团', '南风', '/media/covers/1016.svg', '["/media/covers/1016.svg","/media/covers/1015.svg","/media/covers/1018.svg","/media/covers/1019.svg","/media/covers/1036.svg","/media/covers/1043.svg"]', '星图缺了一角。旅团穿过尘埃带，只为确认故乡的光是否还在原坐标闪烁。', 60, 2800, '2026-08-04 11:00:00'),
+(1804, 82002, 1424, '合租的猫', '土豆', '/media/covers/106.svg', '["/media/covers/106.svg","/media/covers/1060.svg","/media/covers/1067.svg","/media/covers/1068.svg","/media/covers/1078.svg","/media/covers/1080.svg","/media/covers/1081.svg"]', '四个人合租，第五个室友是猫。它不交房租，却决定谁能坐沙发。', 28, 1900, '2026-08-05 11:00:00'),
+(1805, 82001, 1425, '机甲晨星', '铁木', '/media/covers/160.svg', '["/media/covers/160.svg","/media/covers/133.svg","/media/covers/146.svg","/media/covers/119.svg","/media/covers/122.svg"]', '废墟里拼出第一台机甲的黎明，城市仍停电。他们把晨星焊进胸口，当作启动开关。', 55, 2600, '2026-08-06 11:00:00'),
+(1806, 82002, 1426, '雾城谜案', '冷杉', '/media/covers/60.svg', '["/media/covers/60.svg","/media/covers/58.svg","/media/covers/54.svg","/media/covers/45.svg","/media/covers/40.svg","/media/covers/39.svg"]', '每场雨都会冲掉脚印。侦探学会在水洼倒影里找证人，雾越浓，真相越近。', 33, 1700, '2026-08-07 11:00:00'),
+(1807, 82001, 1421, '青瓦剑社', '墨白', '/media/covers/3.svg', '["/media/covers/3.svg","/media/covers/7.svg","/media/covers/2.svg","/media/covers/1.svg","/media/covers/0.svg","/media/covers/14.svg","/media/covers/21.svg","/media/covers/24.svg"]', '剑社只收过午夜来敲门的人。青瓦上的露水未干，比武却已经开始。', 71, 2400, '2026-08-08 11:00:00'),
+(1808, 82002, 1422, '地铁末班车', '浅浅', '/media/covers/111.svg', '["/media/covers/111.svg","/media/covers/101.svg","/media/covers/103.svg"]', '末班车只有两节车厢。她总坐靠门的位置，他总在下一站上车，像约好了似的。', 36, 2050, '2026-08-09 11:00:00'),
+(1809, 82001, 1423, '龙骨荒原', '南风', '/media/covers/29.svg', '["/media/covers/29.svg","/media/covers/28.svg","/media/covers/30.svg","/media/covers/42.svg","/media/covers/20.svg"]', '荒原露出龙骨的那天，旅人决定把地图画反向：跟着影子走，才能找到水源。', 48, 1980, '2026-08-10 11:00:00'),
+(1810, 82002, 1424, '加班咖啡灵', '土豆', '/media/covers/431.svg', '["/media/covers/431.svg","/media/covers/453.svg","/media/covers/488.svg","/media/covers/338.svg","/media/covers/366.svg","/media/covers/250.svg"]', '咖啡机里住着一只只在加班时出现的灵。它加的不是糖，是明天还能撑住的勇气。', 22, 1650, '2026-08-11 11:00:00'),
+(1811, 82001, 1425, '轨道上的心', '铁木', '/media/covers/180.svg', '["/media/covers/180.svg","/media/covers/177.svg","/media/covers/164.svg","/media/covers/203.svg"]', '机甲驾驶员的心跳必须与轨道共振。第一次出仓时，她听见整座城市在耳边换挡。', 40, 2220, '2026-08-12 11:00:00')
+ON DUPLICATE KEY UPDATE `title`=VALUES(`title`), `author`=VALUES(`author`), `cover`=VALUES(`cover`), `pictureList`=VALUES(`pictureList`), `content`=VALUES(`content`), `chapterCount`=VALUES(`chapterCount`), `viewCount`=VALUES(`viewCount`), `categoryId`=VALUES(`categoryId`), `date`=VALUES(`date`);
 
 INSERT INTO `Local` (`id`,`userId`,`categoryId`,`title`,`author`,`cover`,`content`,`address`,`price`,`viewCount`,`date`) VALUES
 (1901, 82001, 1431, '两小时深度保洁', '洁雅家政', '/media/covers/201.svg', '厨房卫生间重点，自带工具。', '城西·桂花路', 168.00, 320, '2026-08-02 12:00:00'),

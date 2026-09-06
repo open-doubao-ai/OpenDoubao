@@ -32,6 +32,7 @@ import {
 } from "./layout-list-chrome.js";
 import type { SchemaComments } from "./schema-types.js";
 import type { ColumnMeta } from "./field-meta.js";
+import { attachListRow } from "./layout-list-select.js";
 
 type FlatRow = { key: string; cells: Record<string, unknown> };
 
@@ -46,6 +47,7 @@ export type ExploreOpts = {
   apijsonBase: string;
   recordId: (row: FlatRow) => string | number | null;
   onOpenRow: (key: string) => void;
+  selectEnabled?: boolean;
   onSearch?: (q: string) => void;
   onOpenSearch?: (q: string) => void;
   onOpenScan?: () => void;
@@ -60,6 +62,22 @@ export type ExploreOpts = {
 };
 
 type Packed = { row: FlatRow; pres: RowPresentation; id: string | number | null };
+
+function wireExploreRow(
+  node: HTMLElement,
+  opts: ExploreOpts,
+  item: Packed,
+  onOpen: () => void,
+): void {
+  attachListRow(node, {
+    key: item.row.key,
+    id: item.id,
+    label: item.pres.title || `#${item.row.key}`,
+    cells: item.row.cells,
+    onOpen,
+    enabled: opts.selectEnabled !== false && opts.app !== "data",
+  });
+}
 
 const HIST_KEY = (app: LayoutApp) => `a2api.searchHist:${app}`;
 
@@ -613,7 +631,7 @@ function renderHistoryPage(opts: ExploreOpts): HTMLElement {
   for (const item of items) {
     const row = el("button", "ex-hist-row");
     row.type = "button";
-    row.onclick = () => opts.onOpenRow(item.row.key);
+    wireExploreRow(row, opts, item, () => opts.onOpenRow(item.row.key));
     row.appendChild(thumb(item.pres.coverUrl, opts.apijsonBase, "ex-hist-img"));
     const mid = el("div", "ex-hist-mid");
     mid.appendChild(el("div", "layout-title", item.pres.title || `#${item.row.key}`));
@@ -648,7 +666,7 @@ function renderRankList(
   items.forEach((item, i) => {
     const row = el("button", "ex-rank-row");
     row.type = "button";
-    row.onclick = () => opts.onOpenRow(item.row.key);
+    wireExploreRow(row, opts, item, () => opts.onOpenRow(item.row.key));
     const n = el("span", "ex-rank-n" + (i < 3 ? " is-top" : ""), String(i + 1));
     row.appendChild(n);
     if (!compact) {
@@ -698,10 +716,10 @@ function paintCategoryGrid(
   for (const item of packed) {
     const card = el("button", "ex-cat-card");
     card.type = "button";
-    card.onclick = () => {
+    wireExploreRow(card, opts, item, () => {
       if (item.id != null && opts.onOpenCategory) opts.onOpenCategory(item.id);
       else opts.onOpenRow(item.row.key);
-    };
+    });
     card.appendChild(thumb(item.pres.coverUrl, opts.apijsonBase, "ex-cat-img"));
     card.appendChild(el("div", "ex-cat-name", item.pres.title || `#${item.row.key}`));
     grid.appendChild(card);
@@ -767,7 +785,7 @@ function renderRecommendPage(opts: ExploreOpts): HTMLElement {
 function resultCard(item: Packed, opts: ExploreOpts, slim = false): HTMLElement {
   const card = el("button", slim ? "ex-card is-slim" : "ex-card");
   card.type = "button";
-  card.onclick = () => opts.onOpenRow(item.row.key);
+  wireExploreRow(card, opts, item, () => opts.onOpenRow(item.row.key));
   card.appendChild(thumb(item.pres.coverUrl, opts.apijsonBase, "ex-card-img"));
   card.appendChild(el("div", "layout-title", item.pres.title || `#${item.row.key}`));
   if (opts.app === "commerce") {

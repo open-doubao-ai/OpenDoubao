@@ -57,6 +57,7 @@ import {
   sanitizeLayoutNav,
   layoutNavIsCustom,
   setNavTab,
+  addNavTab,
   setNavJump,
   resolveNavSelect,
   resolveNavJump,
@@ -203,6 +204,7 @@ import {
   latestVersion,
   parseLayoutSurfaceId,
   surfaceIdForLayout,
+  surfaceIdForTable,
   getSavedPageThumb,
   listSavedPages,
   normalizePageIdentity,
@@ -513,7 +515,12 @@ function resetNavForApp(app: LayoutApp) {
 }
 
 function adoptNavForGeneratedApp(app: LayoutApp) {
-  if (!layoutNavIsCustom(state.layoutNav) || state.layoutNav.host === "data") {
+  const host = canonicalLayoutApp(app);
+  if (
+    !layoutNavIsCustom(state.layoutNav) ||
+    state.layoutNav.host === "data" ||
+    state.layoutNav.host !== host
+  ) {
     saveSessionNav(defaultLayoutNav(app));
   }
 }
@@ -3958,7 +3965,7 @@ async function executeWriteDirect(payload: WritePayload): Promise<boolean> {
           "assistant",
           `${verb} ${payload.table} succeeded.${repairNote}`,
         );
-        if (!payload.stayOnPage) await returnToListAndRefresh();
+        if (!payload.stayOnPage) await returnToListAndRefresh(payload.table);
         return true;
       }
 
@@ -4060,8 +4067,145 @@ async function executeWriteDirect(payload: WritePayload): Promise<boolean> {
   }
 }
 
-async function returnToListAndRefresh() {
+/** Whether a saved page is a list whose primary table matches `table`. */
+function pageIsListForTable(
+  pageId: string | null | undefined,
+  table: string,
+): boolean {
+  const id = (pageId || "").trim();
+  const t = table.trim();
+  if (!id || !t) return false;
+  const expected = surfaceIdForTable(t, "list");
+  if (id === expected || id.toLowerCase() === expected.toLowerCase()) {
+    return true;
+  }
+  if (/_list$/i.test(id)) {
+    const bare = id.replace(/_list$/i, "");
+    const slug = expected.replace(/_list$/i, "");
+    if (bare.toLowerCase() === slug.toLowerCase()) return true;
+  }
+  const page = getSavedPage(id);
+  const snap = page?.versions.length
+    ? page.versions.reduce((a, b) => (a.version >= b.version ? a : b))
+    : null;
+  if (!snap) return false;
+  const kind =
+    snap.pageKind || (snap.viewMode === "detail" ? "detail" : "list");
+  if (kind !== "list") return false;
+  if (!bodyLooksLikeListQuery(snap.bindMeta?.bodyTemplate ?? {})) return false;
+  return inferPrimaryTable([], snap.bindMeta.bodyTemplate) === t;
+}
+
+/**
+ * After create / edit / delete: return to the matching object list (refresh),
+ * preferring the page we came from when it is that list.
+ */
+async function returnToListAndRefresh(table?: string | null) {
   state.awaitingWrite = false;
+  const target =
+    (table || "").trim() ||
+    state.detailSlots[0]?.table ||
+    currentPrimaryTable() ||
+    "";
+  setDetailChrome(null);
+
+  const settleObjectList = async () => {
+    if (!target) {
+      if (state.hasBind && state.pageKind === "list") await bound("refresh");
+      return;
+    }
+    const addr = inferAddressTable(state.comments);
+    if (addr === target) {
+      const app =
+        state.layoutSpec.app && state.layoutSpec.app !== "data"
+          ? state.layoutSpec.app
+          : "commerce";
+      if (state.layoutSpec.page !== "address" || state.layoutSpec.app !== app) {
+        applyLayoutSpec(
+          { app, page: "address" },
+          { manual: true, persist: true, rerender: false },
+        );
+      }
+    }
+    if (state.hasBind && state.pageKind === "list") {
+      await bound("refresh");
+      return;
+    }
+    if (state.lastResponse != null && state.pageKind === "list") {
+      renderRows(state.lastResponse);
+    }
+  };
+
+  // Still on that object's list (layout form / in-list delete)
+  if (
+    target &&
+    state.pageKind === "list" &&
+    state.viewMode === "list" &&
+    currentPrimaryTable() === target
+  ) {
+    await settleObjectList();
+    return;
+  }
+
+  // Came from the matching list via drill / Add
+  if (
+    target &&
+    state.listPageRef &&
+    pageIsListForTable(state.listPageRef.pageId, target)
+  ) {
+    await returnToListPage();
+    await settleObjectList();
+    return;
+  }
+
+  // Walk Back stack for the matching list
+  if (target) {
+    for (let i = pageNavStack.length - 1; i >= 0; i--) {
+      const ref = pageNavStack[i]!;
+      if (ref.pageId === state.activePageId) continue;
+      if (!pageIsListForTable(ref.pageId, target)) continue;
+      if (!getSavedPage(ref.pageId)) continue;
+      pageNavStack = pageNavStack.slice(0, i);
+      state.listPageRef = null;
+      pageNavGoingBack = true;
+      try {
+        await switchToSavedPage(ref.pageId, ref.version, {
+          skipPersist: true,
+        });
+      } finally {
+        pageNavGoingBack = false;
+      }
+      await settleObjectList();
+      return;
+    }
+  }
+
+  // No prior list in history — open / create the object's list and load it
+  if (target) {
+    const addr = inferAddressTable(state.comments);
+    if (addr && addr === target) {
+      const app =
+        state.layoutSpec.app && state.layoutSpec.app !== "data"
+          ? state.layoutSpec.app
+          : "commerce";
+      const existing = findSavedPageByLayout(app, "address");
+      if (existing) {
+        pageNavGoingBack = true;
+        try {
+          await switchToSavedPage(existing.id, undefined, {
+            skipPersist: true,
+          });
+        } finally {
+          pageNavGoingBack = false;
+        }
+        await settleObjectList();
+        return;
+      }
+    }
+    await openBoundTableList({ table: target });
+    return;
+  }
+
   await goBackPage();
 }
 
@@ -4712,11 +4856,19 @@ function applyChatPagePatch(patch?: ChatPagePatch | null): boolean {
     isLayoutApp(patch.navTab.app) &&
     isLayoutPage(patch.navTab.page)
   ) {
-    remapNavTab(patch.navTab.slot, {
+    const spec = {
       app: patch.navTab.app,
       page: patch.navTab.page,
-    });
-    changed = true;
+    } as const;
+    if (patch.navTabOp === "add") {
+      commitLayoutNav(addNavTab(state.layoutNav, patch.navTab.slot, spec));
+      if (state.lastResponse != null) renderRows(state.lastResponse);
+      else renderFilters(state.filters);
+      changed = true;
+    } else {
+      remapNavTab(patch.navTab.slot, spec);
+      changed = true;
+    }
   }
   if (
     patch.navJump &&
@@ -4797,6 +4949,15 @@ function applyChatPagePatch(patch?: ChatPagePatch | null): boolean {
 
 function describeChatPatch(patch: ChatPagePatch): string {
   if (patch.navTab) {
+    if (patch.navTabOp === "add") {
+      return t("chat.patchAddNavTab", {
+        slot: layoutTabLabel(patch.navTab.slot as LayoutPage),
+        target: layoutSpecLabel({
+          app: patch.navTab.app as LayoutApp,
+          page: patch.navTab.page as LayoutPage,
+        }),
+      });
+    }
     return t("chat.patchNavTab", {
       slot: layoutTabLabel(patch.navTab.slot as LayoutPage),
       target: layoutSpecLabel({

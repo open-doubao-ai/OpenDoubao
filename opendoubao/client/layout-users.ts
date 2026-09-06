@@ -15,10 +15,12 @@ import {
 } from "./layout-category.js";
 import { collectRowImageUrls } from "./smart-image-fields.js";
 import type { LayoutDetailHandlers } from "./layout-views.js";
+import { attachListRow } from "./layout-list-select.js";
 import {
   formatCount,
   formatPrice,
   isArticleLikeApp,
+  isBookReaderApp,
   isLocalLikeApp,
   isNewsLikeApp,
   mediaSrc,
@@ -41,7 +43,25 @@ export type UserListOpts = {
   apijsonBase: string;
   recordId: (row: FlatRow) => string | number | null;
   onOpenRow: (key: string) => void;
+  /** When false, skip long-press / pick select (data app). Default true. */
+  selectEnabled?: boolean;
 };
+
+function wireUserRow(
+  node: HTMLElement,
+  opts: UserListOpts,
+  row: FlatRow,
+): void {
+  const pres = rowPres(opts, row);
+  attachListRow(node, {
+    key: row.key,
+    id: opts.recordId(row),
+    label: pres.title || `#${row.key}`,
+    cells: row.cells,
+    onOpen: () => opts.onOpenRow(row.key),
+    enabled: opts.selectEnabled !== false && opts.app !== "data",
+  });
+}
 
 export type UserProfileOpts = {
   app: LayoutApp;
@@ -123,7 +143,7 @@ function roleLabel(app: LayoutApp): string {
     case "chat":
       return t("layout.users.addressBook");
     default:
-      if (isNewsLikeApp(app) || isArticleLikeApp(app)) {
+      if (isNewsLikeApp(app) || isArticleLikeApp(app) || isBookReaderApp(app)) {
         return t("layout.users.authors");
       }
       if (isLocalLikeApp(app)) return t("layout.users.hosts");
@@ -141,7 +161,10 @@ function statLine(pres: RowPresentation, app: LayoutApp): string {
   if (app === "video" && pres.playCount != null) {
     return `${formatCount(pres.playCount)} ${t("layout.users.subscribers")}`;
   }
-  if ((isArticleLikeApp(app) || isNewsLikeApp(app)) && pres.playCount != null) {
+  if (
+    (isArticleLikeApp(app) || isNewsLikeApp(app) || isBookReaderApp(app)) &&
+    pres.playCount != null
+  ) {
     return `${formatCount(pres.playCount)} ${t("layout.reads")}`;
   }
   const bits = [
@@ -158,7 +181,7 @@ export function renderUserList(opts: UserListOpts): HTMLElement {
   if (app === "music") return renderSpArtists(opts);
   if (app === "commerce") return renderAzSellers(opts);
   if (isNewsLikeApp(app)) return renderNewsAuthors(opts);
-  if (isArticleLikeApp(app)) return renderJjAuthors(opts);
+  if (isArticleLikeApp(app) || isBookReaderApp(app)) return renderJjAuthors(opts);
   if (app === "social") return renderWxContacts(opts);
   if (app === "chat") return renderChatContacts(opts);
   if (isLocalLikeApp(app)) return renderCampHosts(opts);
@@ -171,7 +194,7 @@ function renderYtChannels(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-yt-card");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-yt-av", ""));
     const mid = el("div", "up-yt-mid");
     mid.appendChild(el("div", "up-yt-name", pres.title || `#${row.key}`));
@@ -191,7 +214,7 @@ function renderSpArtists(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-sp-row");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(el("span", "up-sp-num", String(i + 1)));
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-sp-av", ""));
     const mid = el("div", "up-sp-mid");
@@ -211,7 +234,7 @@ function renderAzSellers(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-az-card");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     const banner = thumb(pres.coverUrl, opts.apijsonBase, "up-az-banner", "");
     card.appendChild(banner);
     const body = el("div", "up-az-body");
@@ -234,7 +257,7 @@ function renderNewsAuthors(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-news-row");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-news-av", ""));
     const mid = el("div", "up-news-mid");
     mid.appendChild(el("div", "layout-kicker", roleLabel(opts.app)));
@@ -254,7 +277,7 @@ function renderJjAuthors(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-jj-card");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-jj-av", ""));
     const mid = el("div", "up-jj-mid");
     mid.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -278,7 +301,7 @@ function renderWxContacts(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-wx-row");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-wx-av", ""));
     const mid = el("div", "up-wx-mid");
     mid.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -297,7 +320,7 @@ function renderChatContacts(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-chat-row");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-chat-av", ""));
     const mid = el("div", "up-chat-mid");
     mid.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -321,7 +344,7 @@ function renderCampHosts(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-camp-card");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-camp-av", ""));
     card.appendChild(el("div", "layout-kicker", t("layout.users.hosts")));
     card.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -337,7 +360,7 @@ function renderDataDirectory(opts: UserListOpts): HTMLElement {
     const pres = rowPres(opts, row);
     const card = el("button", "up-data-row");
     card.type = "button";
-    card.onclick = () => opts.onOpenRow(row.key);
+    wireUserRow(card, opts, row);
     card.appendChild(thumb(pres.coverUrl, opts.apijsonBase, "up-data-av", ""));
     const mid = el("div", "up-data-mid");
     mid.appendChild(el("div", "layout-title", pres.title || `#${row.key}`));
@@ -366,7 +389,8 @@ export function renderUserProfile(host: HTMLElement, opts: UserProfileOpts): voi
       break;
     default:
       if (isNewsLikeApp(opts.app)) renderNewsAuthor(app, opts);
-      else if (isArticleLikeApp(opts.app)) renderJjAuthor(app, opts);
+      else if (isArticleLikeApp(opts.app) || isBookReaderApp(opts.app))
+        renderJjAuthor(app, opts);
       else if (isLocalLikeApp(opts.app)) renderCampHost(app, opts);
       else renderDataProfile(app, opts);
   }

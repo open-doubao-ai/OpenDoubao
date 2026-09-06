@@ -18,6 +18,8 @@ export type ChatPagePatch = {
   hideColumns?: string[];
   showColumns?: string[];
   columnOrder?: string[];
+  /** set = remap existing tab target; add = insert tab on the bar (stay on page). */
+  navTabOp?: "set" | "add";
   navTab?: { slot: string; app: string; page: string };
   navJump?: { slot: string; app: string; page: string };
 };
@@ -28,6 +30,20 @@ function destPhrase(text: string): string | null {
   );
   const raw = (m?.[1] || "").replace(/[。.!！]+$/, "").trim();
   return raw || null;
+}
+
+/** “加上购物车 tab” — tab being added, not 首页 as context. */
+function matchAddTabSlot(text: string): string | null {
+  if (!/(?:加上|加个|添加|新增|加\s*一?\s*个)/.test(text)) return null;
+  if (/购物车/.test(text)) return "cart";
+  if (/订单/.test(text)) return "orders";
+  if (/分类|类目/.test(text)) return "category";
+  if (/排行|热榜/.test(text)) return "rank";
+  if (/历史/.test(text)) return "history";
+  if (/搜索/.test(text)) return "search";
+  if (/我的/.test(text)) return "user";
+  if (/推荐/.test(text)) return "recommend";
+  return null;
 }
 
 function matchTabSlot(text: string): string | null {
@@ -60,14 +76,33 @@ function navPatchFromMessage(
   if (/布局|隐藏.+列/.test(text) && !/tab|跳转|点进去|首页/.test(text)) {
     return null;
   }
+  const fallback = (ctx?.app || "data") as LayoutApp;
+  const addSlot = matchAddTabSlot(text);
+  if (addSlot) {
+    const spec = specFromUserPhrase(text, fallback);
+    const app =
+      addSlot === "cart" || addSlot === "orders"
+        ? spec.app === "data"
+          ? "commerce"
+          : spec.app
+        : spec.app;
+    return {
+      navTabOp: "add",
+      navTab: { slot: addSlot, app, page: addSlot },
+    };
+  }
   const jump = matchJumpSlot(text);
   const tab = matchTabSlot(text);
   if (!jump && !tab) return null;
   const dest = destPhrase(text) || text;
-  const fallback = (ctx?.app || "data") as LayoutApp;
   const spec = specFromUserPhrase(dest, fallback);
   if (jump) return { navJump: { slot: jump, app: spec.app, page: spec.page } };
-  if (tab) return { navTab: { slot: tab, app: spec.app, page: spec.page } };
+  if (tab) {
+    return {
+      navTabOp: "set",
+      navTab: { slot: tab, app: spec.app, page: spec.page },
+    };
+  }
   return null;
 }
 

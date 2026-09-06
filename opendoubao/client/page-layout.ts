@@ -186,7 +186,7 @@ export function isNewsLikeApp(
   return app === "news" || app === "info" || app === "sports";
 }
 
-/** Long-form reading. */
+/** Long-form reading (article stream — not book/comic spreads). */
 export function isArticleLikeApp(
   app: LayoutApp | LayoutKind | null | undefined,
 ): boolean {
@@ -194,10 +194,15 @@ export function isArticleLikeApp(
     app === "blog" ||
     app === "article" ||
     app === "education" ||
-    app === "books" ||
-    app === "comics" ||
     app === "office"
   );
+}
+
+/** Novel / comic detail = book-like reader (landscape spread, portrait single). */
+export function isBookReaderApp(
+  app: LayoutApp | LayoutKind | null | undefined,
+): boolean {
+  return app === "books" || app === "comics";
 }
 
 /** Cover + body cards (local services, campaigns). */
@@ -222,7 +227,12 @@ export function isLocalLikeApp(
 export function isCatalogApp(
   app: LayoutApp | LayoutKind | null | undefined,
 ): boolean {
-  return isNewsLikeApp(app) || isArticleLikeApp(app) || isLocalLikeApp(app);
+  return (
+    isNewsLikeApp(app) ||
+    isArticleLikeApp(app) ||
+    isBookReaderApp(app) ||
+    isLocalLikeApp(app)
+  );
 }
 
 /** toC record pages that can show a comment list + composer dock. */
@@ -1057,10 +1067,27 @@ export function addNavTab(
     return spec ? setNavTab(nav, slot, spec) : cloneLayoutNav(nav);
   }
   const next = cloneLayoutNav(nav);
-  next.tabs.push({
+  const tab: LayoutNavTab = {
     slot,
     spec: spec ?? { app: nav.host, page: slot },
-  });
+  };
+  const order = APP_TABS_BY_APP[canonicalLayoutApp(nav.host)];
+  const ideal = order.indexOf(slot);
+  if (ideal >= 0) {
+    let insertAt = next.tabs.length;
+    for (let i = 0; i < next.tabs.length; i++) {
+      const oi = order.indexOf(next.tabs[i]!.slot);
+      if (oi < 0 || oi > ideal) {
+        insertAt = i;
+        break;
+      }
+    }
+    next.tabs.splice(insertAt, 0, tab);
+  } else {
+    const beforeUser = next.tabs.findIndex((t) => t.slot === "user");
+    if (beforeUser >= 0) next.tabs.splice(beforeUser, 0, tab);
+    else next.tabs.push(tab);
+  }
   return next;
 }
 

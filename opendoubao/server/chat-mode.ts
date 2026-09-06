@@ -57,6 +57,8 @@ export type PageUiPatch = {
   hideColumns?: string[];
   showColumns?: string[];
   columnOrder?: string[];
+  /** set = remap tab target; add = insert tab on the bar. */
+  navTabOp?: "set" | "add";
   navTab?: { slot: string; app: string; page: string };
   navJump?: { slot: string; app: string; page: string };
 };
@@ -605,6 +607,20 @@ function destPhrase(text: string): string | null {
   return raw || null;
 }
 
+/** “加上购物车 tab” — tab being added, not 首页 as context. */
+function matchAddNavTabSlot(text: string): string | null {
+  if (!/(?:加上|加个|添加|新增|加\s*一?\s*个)/.test(text)) return null;
+  if (/购物车/.test(text)) return "cart";
+  if (/订单/.test(text)) return "orders";
+  if (/分类|类目/.test(text)) return "category";
+  if (/排行|热榜/.test(text)) return "rank";
+  if (/历史/.test(text)) return "history";
+  if (/搜索/.test(text)) return "search";
+  if (/我的/.test(text)) return "user";
+  if (/推荐/.test(text)) return "recommend";
+  return null;
+}
+
 function matchNavTabSlot(text: string): string | null {
   if (!/改|换|用|成/.test(text)) return null;
   if (/首页|主页|\bhome\b/i.test(text)) return "home";
@@ -669,13 +685,33 @@ function navUiPatchFromMessage(
   if (/布局|隐藏.+列/.test(text) && !/tab|跳转|点进去|首页/.test(text)) {
     return null;
   }
+  const fallback = ctx?.app || ctx?.targetApp || "data";
+  const addSlot = matchAddNavTabSlot(text);
+  if (addSlot) {
+    const spec = specFromNavPhrase(text, fallback);
+    const app =
+      addSlot === "cart" || addSlot === "orders"
+        ? spec.app === "data"
+          ? "commerce"
+          : spec.app
+        : spec.app;
+    return {
+      navTabOp: "add",
+      navTab: { slot: addSlot, app, page: addSlot },
+    };
+  }
   const jump = matchNavJumpSlot(text);
   const tab = matchNavTabSlot(text);
   if (!jump && !tab) return null;
   const dest = destPhrase(text) || text;
-  const spec = specFromNavPhrase(dest, ctx?.app || ctx?.targetApp || "data");
+  const spec = specFromNavPhrase(dest, fallback);
   if (jump) return { navJump: { slot: jump, app: spec.app, page: spec.page } };
-  if (tab) return { navTab: { slot: tab, app: spec.app, page: spec.page } };
+  if (tab) {
+    return {
+      navTabOp: "set",
+      navTab: { slot: tab, app: spec.app, page: spec.page },
+    };
+  }
   return null;
 }
 
@@ -749,6 +785,9 @@ export function pageUiPatchFromMessage(
 
 function patchMessage(ui: PageUiPatch): string {
   if (ui.navTab) {
+    if (ui.navTabOp === "add") {
+      return `Added the ${ui.navTab.slot} tab (${ui.navTab.app}/${ui.navTab.page}).`;
+    }
     return `Updated the ${ui.navTab.slot} tab to ${ui.navTab.app}/${ui.navTab.page}.`;
   }
   if (ui.navJump) {
