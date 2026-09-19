@@ -9,6 +9,8 @@ Agent-to-API 协议、引擎与 Demo：生成任务 UI，之后改筛选/排序/
 
 不走 SQL 执行路径，**写操作或敏感读操作**自动申请权限，管理员审批通过后才能调通。
 
+<img width="540" height="295" src="https://github.com/user-attachments/assets/121a03fa-5742-4c40-82f0-2ea779baafba" />
+
 ![](https://github.com/user-attachments/assets/b69eb03f-39ff-4db6-b152-01d005c760fd)
 ![](https://github.com/user-attachments/assets/4dfed773-3a9e-4bd1-bd02-1d67f792506f)
 ![](https://github.com/user-attachments/assets/b0faa007-e4b6-447e-93a5-54ff5a512d3f)
